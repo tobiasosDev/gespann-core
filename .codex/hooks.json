@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v gespann >/dev/null 2>&1 && gespann hook codex session-start || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v gespann >/dev/null 2>&1 && gespann hook codex post-tool || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v gespann >/dev/null 2>&1 && gespann hook codex stop || true",
+            "timeout": 900
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v gespann >/dev/null 2>&1 && gespann hook codex session-end || true",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

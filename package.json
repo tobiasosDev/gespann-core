@@ -1,0 +1,22 @@
+{
+  "name": "gespann",
+  "version": "0.2.0",
+  "description": "Quality loop for coding agents: observe Claude Code and Codex sessions, approve versioned rules, measure their effect.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": { "gespann": "dist/bin.js" },
+  "files": ["dist", "action.yml", "README.md", "LICENSE"],
+  "engines": { "node": ">=22.18" },
+  "repository": { "type": "git", "url": "git+https://github.com/tobiasosDev/gespann-core.git" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test 'test/**/*.test.ts'",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

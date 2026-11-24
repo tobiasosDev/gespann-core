@@ -1,0 +1,15 @@
+{
+  "id": "typecheck",
+  "version": 1,
+  "title": "Types check before a change is reported as done",
+  "why": "Type errors found in CI cost a round trip.",
+  "paths": [
+    "**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"
+  ],
+  "check": {
+    "command": "npm run typecheck",
+    "match": "\\b(?:bun|npm|pnpm|yarn|npx|bunx)\\b[^\\n;&|]*\\btypecheck\\b(?![-:])|\\b(?:tsc)\\b(?![-])"
+  },
+  "level": "observe",
+  "ci": "report"
+}
