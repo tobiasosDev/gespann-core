@@ -1,11 +1,11 @@
 {
   "name": "gespann",
-  "version": "0.2.0",
-  "description": "Quality loop for coding agents: observe Claude Code and Codex sessions, approve versioned rules, measure their effect.",
+  "version": "0.3.0",
+  "description": "Acceptance testing for coding agents: an independent agent tests each PR in a production-near environment and reports a verdict back to Claude Code and Codex.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": { "gespann": "dist/bin.js" },
-  "files": ["dist", "action.yml", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "LICENSE"],
   "engines": { "node": ">=22.18" },
   "repository": { "type": "git", "url": "git+https://github.com/tobiasosDev/gespann-core.git" },
   "scripts": {

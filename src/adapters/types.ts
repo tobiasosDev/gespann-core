@@ -1,34 +1,13 @@
-import type { Agent } from "../journal.ts";
-
-export interface ToolCall {
-  id?: string;
-  name: string;
-  kind: "edit" | "shell" | "other";
-  files?: string[];
-  command?: string;
-  /** null when the agent's hook payload does not carry the exit code. */
-  exit: number | null;
-}
+export type Agent = "claude" | "codex";
 
 export interface HookInput {
   agent: Agent;
-  event: "start" | "tool" | "stop" | "end" | "other";
+  event: "stop" | "other";
   session: string;
   cwd: string;
   transcript?: string;
-  source?: string;
-  model?: string;
+  /** True when this stop follows a continuation a stop hook asked for. */
   stopHookActive?: boolean;
-  tool?: ToolCall;
-}
-
-/** What an adapter can observe. A gap here turns a status into "unknown" instead of a finding. */
-export interface Capabilities {
-  /** Edits are always observed through git; this says whether tool calls also name the files. */
-  editPaths: boolean;
-  /** "hook": exit code in the hook payload; "transcript": read back from the agent transcript at stop. */
-  shellExit: "hook" | "transcript";
-  stopCanContinue: boolean;
 }
 
 export interface HookSpec {
@@ -39,12 +18,11 @@ export interface HookSpec {
 
 export interface Adapter {
   agent: Agent;
-  capabilities: Capabilities;
   parse(raw: Record<string, unknown>, eventArg: string): HookInput;
-  /** Exit code for a tool call id from the agent transcript, if the agent records one. */
-  exitFromTranscript?(transcript: string, ids: string[]): Map<string, number>;
   configPath: string;
   hooks: HookSpec[];
+  /** Commands earlier versions installed. `init` and `uninstall` remove them. */
+  legacy: string[];
 }
 
 export function hookCommand(agent: Agent, event: string): string {
@@ -53,4 +31,15 @@ export function hookCommand(agent: Agent, event: string): string {
 
 export function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
+}
+
+export function parseStop(agent: Agent, raw: Record<string, unknown>, eventArg: string): HookInput {
+  return {
+    agent,
+    event: eventArg === "stop" ? "stop" : "other",
+    session: str(raw.session_id) ?? "unknown",
+    cwd: str(raw.cwd) ?? process.cwd(),
+    transcript: str(raw.transcript_path),
+    stopHookActive: raw.stop_hook_active === true,
+  };
 }

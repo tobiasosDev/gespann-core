@@ -19,5 +19,3 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: test "$(node dist/bin.js --version)" = "$(node -p "require('./package.json').version")"
-      - name: gespann on itself
-        uses: ./

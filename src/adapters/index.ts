@@ -1,7 +1,6 @@
-import type { Agent } from "../journal.ts";
 import { claude } from "./claude.ts";
 import { codex } from "./codex.ts";
-import type { Adapter } from "./types.ts";
+import type { Adapter, Agent } from "./types.ts";
 
 export const adapters: Record<Agent, Adapter> = { claude, codex };
 

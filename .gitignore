@@ -1,6 +1,3 @@
 node_modules/
 dist/
 *.tgz
-# gespann: generated from .gespann/
-.claude/skills/gespann-*/
-.agents/skills/gespann-*/
