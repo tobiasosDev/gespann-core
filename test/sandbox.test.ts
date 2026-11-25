@@ -422,7 +422,7 @@ test("parallel: two PR runs of one project run at once in two sandboxes; the new
   }
   const sb = new Pool();
   sb.files.set("/srv/first/gespann/project/verify.yml", "version: 1");
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "closed", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);
@@ -574,7 +574,7 @@ test("parallel: two PR runs that both find no recipe anywhere prepare the enviro
     }
   }
   const sb = new Pool();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "closed", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);
