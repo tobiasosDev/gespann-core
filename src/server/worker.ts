@@ -5,7 +5,7 @@ import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verif
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
 import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/similar.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
-import { applyGate, gated, gateLine, gateState, type GateState, runComment, upsertComment, withPrLock } from "./gate.ts";
+import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run } from "./db.ts";
 import { withCodex } from "./codex.ts";
@@ -572,6 +572,17 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
       const run = job.run_id ? d.db.run_(job.run_id) : undefined;
       if (!run) throw new Error("run gone");
       if (run.status === "cancelled") return d.db.endJob(job.id, "cancelled");
+      // A PR merged or closed while its run waited (also before gespann heard of it) is not tested.
+      // When GitHub does not answer, the run goes ahead as before.
+      const pr = await d.github().pull(p.installation_id, p.repo, run.pr).catch(() => null);
+      if (pr && pr.state !== "open") {
+        // Only this run: an answer that is already stale must not cancel a run queued after a reopen.
+        await withPrLock(p, run.pr, () => skipClosedRuns(d, p, pr, run.id));
+        log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
+        return d.db.endJob(job.id, "cancelled");
+      }
+      // Closed or superseded while GitHub answered; verifyRun marks the run running before its first await.
+      if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
       await verifyRun(d, job, p, run, log);
     }
     d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");

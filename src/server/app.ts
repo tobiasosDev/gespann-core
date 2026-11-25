@@ -11,7 +11,7 @@ import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
 import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
-import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, withPrLock } from "./gate.ts";
+import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 
@@ -474,6 +474,17 @@ async function onPullRequest(d: AppDeps, payload: Record<string, unknown>): Prom
   const event = payload.pull_request as PullRequest;
   const repo = payload.repository as { id: number };
   const sender = payload.sender as Sender | undefined;
+  if (action === "closed" && event) {
+    // Merged or closed: what still waits in the queue for this PR is skipped, not tested.
+    const p = d.db.projectByRepoId(repo.id);
+    // A late event for a PR reopened since must not cancel its new run: act on the PR as it is now.
+    if (p)
+      await withPrLock(p, event.number, async () => {
+        const pr = await d.github().pull(p.installation_id, p.repo, event.number);
+        if (pr.state !== "open") await skipClosedRuns(d, p, pr);
+      });
+    return;
+  }
   if (!ACTIONS.has(action) || !event || event.state !== "open") return;
   if (event.head.repo?.full_name !== event.base.repo.full_name) return;
   const p = d.db.projectByRepoId(repo.id);

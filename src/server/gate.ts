@@ -37,6 +37,23 @@ export function gateState(db: Db, p: Project, pr: Pick<PullRequest, "number" | "
   return run.status === "done" && run.outcome === "SKIP" ? "skipped" : "failed";
 }
 
+/**
+ * A merged or closed PR needs no test: its queued runs are cancelled and their checks skipped, so the
+ * queue moves on to PRs that are still open.
+ */
+export async function skipClosedRuns(d: Pick<GateDeps, "db" | "github">, p: Project, pr: Pick<PullRequest, "number" | "merged">, only?: number): Promise<Run[]> {
+  const what = pr.merged ? "merged" : "closed";
+  const runs = d.db.cancelQueuedRuns(p.id, pr.number, `the PR was ${what} before its test started`, only);
+  for (const r of runs) {
+    if (!r.check_run_id) continue;
+    await d
+      .github()
+      .updateCheck(p.installation_id, p.repo, r.check_run_id, { status: "completed", conclusion: "skipped", title: `Skipped: the PR was ${what}`, summary: `The PR was ${what} before gespann started its test.` })
+      .catch((err: Error) => console.error(JSON.stringify({ level: "error", at: "skip-check", message: err.message })));
+  }
+  return runs;
+}
+
 const locks = new Map<string, Promise<unknown>>();
 
 /**

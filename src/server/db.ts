@@ -426,11 +426,11 @@ export class Db {
     );
   }
 
-  /** A newer push supersedes the queued runs of the same PR. */
-  cancelQueuedRuns(projectId: number, pr: number): Run[] {
-    const runs = this.all<Run>("select * from runs where project_id = ? and pr = ? and status = 'queued'", projectId, pr);
+  /** Cancels the PR's queued runs: a newer push supersedes them, or the PR was merged or closed. */
+  cancelQueuedRuns(projectId: number, pr: number, reason = "superseded by a newer push", only?: number): Run[] {
+    const runs = this.all<Run>("select * from runs where project_id = ? and pr = ? and status = 'queued'", projectId, pr).filter((r) => only === undefined || r.id === only);
     for (const r of runs) {
-      this.run("update runs set status = 'cancelled', finished = ?, error = 'superseded by a newer push' where id = ?", now(), r.id);
+      this.run("update runs set status = 'cancelled', finished = ?, error = ? where id = ?", now(), reason, r.id);
       this.run("update jobs set status = 'cancelled', finished = ? where run_id = ? and status = 'queued'", now(), r.id);
     }
     return runs;
