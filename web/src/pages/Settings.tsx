@@ -2,6 +2,7 @@ import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { ago, api, type Settings, type Tokens, useResource } from "../api.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
+import { Sandboxes } from "./Sandboxes.tsx";
 
 /** Personal tokens for the read-only MCP endpoint, and how to give one to Claude Code or Codex. */
 function AgentAccess() {
@@ -163,6 +164,7 @@ export function SettingsPage() {
           )}
         </div>
       </Card>
+      <Sandboxes />
       <AgentAccess />
     </>
   );

@@ -174,6 +174,26 @@ export interface Hold {
 
 export const now = () => new Date().toISOString();
 
+/** A job of the user's projects that holds a sandbox right now. */
+export interface RunningBox {
+  job_id: number;
+  kind: JobKind;
+  project_id: number;
+  repo: string;
+  pr: number | null;
+  sandbox_id: string | null;
+  started: string;
+}
+
+/** Sandbox time of a user's projects: seconds per UTC day of the month, the month, and all time. */
+export interface BoxTime {
+  month: string;
+  days: { day: string; seconds: number }[];
+  monthSeconds: number;
+  totalSeconds: number;
+  jobs: number;
+}
+
 export class Db {
   readonly sql: DatabaseSync;
 
@@ -190,6 +210,7 @@ export class Db {
       ["codex_auth", "text"],
       ["codex_account", "text"],
       ["repos_synced", "text"],
+      ["max_jobs", "integer"],
     ] as const) {
       if (!cols.has(name)) this.sql.exec(`alter table users add column ${name} ${def}`);
     }
@@ -348,15 +369,69 @@ export class Db {
 
   /**
    * The oldest queued job that may start now. Jobs run side by side, also of one project and one owner,
-   * each in its own sandbox; only a setup runs alone in its project, and no job overtakes a queued setup.
+   * each in its own sandbox; only a setup runs alone in its project, no job overtakes a queued setup,
+   * and an owner never has more jobs running than the limit they set in Settings.
    */
   nextJob(): Job | undefined {
     return this.one<Job>(
-      `select j.* from jobs j where j.status = 'queued'
+      `select j.* from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
+         and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
        order by j.id limit 1`,
     );
+  }
+
+  /** How many jobs of the user's projects may run at once; null leaves it to the sandbox host. */
+  maxJobs(userId: number): number | null {
+    return this.one<{ max_jobs: number | null }>("select max_jobs from users where id = ?", userId)?.max_jobs ?? null;
+  }
+
+  setMaxJobs(userId: number, max: number | null): void {
+    this.run("update users set max_jobs = ? where id = ?", max, userId);
+  }
+
+  /** The user's jobs that hold a sandbox now, oldest first. */
+  runningBoxes(userId: number): RunningBox[] {
+    return this.all<RunningBox>(
+      `select j.id as job_id, j.kind, j.project_id, p.repo, r.pr, (select s.sandbox_id from slots s where s.job_id = j.id order by s.id limit 1) as sandbox_id, j.started
+         from jobs j join projects p on p.id = j.project_id left join runs r on r.id = j.run_id
+        where p.owner_id = ? and j.status = 'running' and j.started is not null order by j.started, j.id`,
+      userId,
+    );
+  }
+
+  /** Jobs of the user's projects that wait for a free sandbox. */
+  queuedJobs(userId: number): number {
+    return this.one<{ n: number }>("select count(*) as n from jobs j join projects p on p.id = j.project_id where p.owner_id = ? and j.status = 'queued'", userId)?.n ?? 0;
+  }
+
+  /**
+   * How long the user's projects held sandboxes: from a job's start to its end, a running job up to
+   * `at`. A job counts on the UTC day and month it started. The basis for billing by sandbox time.
+   */
+  boxTime(userId: number, at = new Date()): BoxTime {
+    const month = at.toISOString().slice(0, 7);
+    const end = at.toISOString();
+    const secs = `max(0, (julianday(min(coalesce(j.finished, ?), ?)) - julianday(j.started)) * 86400)`;
+    const rows = this.all<{ day: string; seconds: number; jobs: number }>(
+      `select substr(j.started, 1, 10) as day, sum(${secs}) as seconds, count(*) as jobs
+         from jobs j join projects p on p.id = j.project_id
+        where p.owner_id = ? and j.started is not null and substr(j.started, 1, 7) = ? group by day order by day`,
+      end,
+      end,
+      userId,
+      month,
+    );
+    const total = this.one<{ seconds: number | null }>(`select sum(${secs}) as seconds from jobs j join projects p on p.id = j.project_id where p.owner_id = ? and j.started is not null`, end, end, userId);
+    const [y, m] = month.split("-").map(Number) as [number, number];
+    const length = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const byDay = new Map(rows.map((r) => [r.day, r.seconds]));
+    const days = Array.from({ length }, (_, i) => {
+      const day = `${month}-${String(i + 1).padStart(2, "0")}`;
+      return { day, seconds: Math.round(byDay.get(day) ?? 0) };
+    });
+    return { month, days, monthSeconds: days.reduce((a, d) => a + d.seconds, 0), totalSeconds: Math.round(total?.seconds ?? 0), jobs: rows.reduce((a, r) => a + r.jobs, 0) };
   }
 
   /**
