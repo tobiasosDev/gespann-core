@@ -8,7 +8,7 @@ Hosted at [app.gespann.app](https://app.gespann.app): sign in with GitHub, conne
 - Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), so there is no model bill from gespann.
 - Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
 - Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.
-- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only, with a token from Settings ([docs/self-host.md](docs/self-host.md#agent-access-mcp)).
+- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only, after a one-time OAuth sign-in in the browser or with a token from Settings ([docs/self-host.md](docs/self-host.md#agent-access-mcp)).
 - How pilots count results: [docs/measure.md](docs/measure.md).
 
 Everything is open source under Apache-2.0.

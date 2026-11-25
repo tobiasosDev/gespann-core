@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ago, api, type Settings, type Tokens, useResource } from "../api.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
 
-/** Personal tokens for the read-only MCP endpoint, and how to give one to Claude Code or Codex. */
+/** Agent sign-ins and personal tokens for the read-only MCP endpoint, and how to connect Claude Code or Codex. */
 function AgentAccess() {
   const { data, error, reload } = useResource<Tokens>("/tokens");
   const [name, setName] = useState("");
@@ -25,41 +25,18 @@ function AgentAccess() {
     }
   };
   const token = fresh ?? "<token>";
-  const claude = `claude mcp add --transport http gespann ${data.mcpUrl} --header "Authorization: Bearer ${token}"`;
-  const codex = `export GESPANN_TOKEN=${token}\n\n# ~/.codex/config.toml\n[mcp_servers.gespann]\nurl = "${data.mcpUrl}"\nbearer_token_env_var = "GESPANN_TOKEN"`;
+  const claude = `claude mcp add --transport http gespann ${data.mcpUrl}\n\n# then in Claude Code: /mcp → gespann → Authenticate`;
+  const codex = `codex mcp add gespann --url ${data.mcpUrl}\ncodex mcp login gespann`;
+  const claudeToken = `claude mcp add --transport http gespann ${data.mcpUrl} --header "Authorization: Bearer ${token}"`;
+  const codexToken = `export GESPANN_TOKEN=${token}\n\n# ~/.codex/config.toml\n[mcp_servers.gespann]\nurl = "${data.mcpUrl}"\nbearer_token_env_var = "GESPANN_TOKEN"`;
   return (
     <Card className="mt-6">
       <CardHeader
         title="Agent access"
-        description="Lets Claude Code or Codex read your runs over MCP: status, issues, the review text, screenshots and recordings. Read-only: a token cannot start, cancel or approve anything, and sees only the projects you see."
+        description="Lets Claude Code or Codex read your runs over MCP: status, issues, the review text, screenshots and recordings. Read-only: an agent cannot start, cancel or approve anything, and sees only the projects you see."
       />
       <div className="space-y-3 px-4 py-4">
-        <form
-          className="flex flex-wrap gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void act(async () => {
-              const r = await api<{ token: string }>("/tokens", { name });
-              setFresh(r.token);
-              setName("");
-            });
-          }}
-        >
-          <Input className="max-w-64" placeholder="Name, e.g. laptop" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
-          <Button type="submit" disabled={busy}>
-            Create token
-          </Button>
-          {failed && <span className="self-center text-[13px] text-bad">{failed}</span>}
-        </form>
-        {fresh && (
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-2">
-            <span className="w-full text-[12px] text-info">Copy it now; it is shown only once.</span>
-            <Mono className="break-all">{fresh}</Mono>
-            <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(fresh)}>
-              <Copy className="size-3.5" /> Copy
-            </Button>
-          </div>
-        )}
+        <p className="text-[13px] text-muted-foreground">Add gespann to your agent. It opens this site in your browser; you allow it once and are connected, no token to copy.</p>
         <div className="space-y-1">
           <span className="text-[12px] text-muted-foreground">Claude Code</span>
           <Log text={claude} />
@@ -71,8 +48,10 @@ function AgentAccess() {
             {data.tokens.map((t) => (
               <li key={t.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
                 <span className="font-medium">{t.name}</span>
-                <Mono className="text-muted-foreground">gsp_…{t.hint}</Mono>
-                <span className="text-muted-foreground">created {ago(t.created)} · {t.last_used ? `used ${ago(t.last_used)}` : "never used"}</span>
+                {t.client ? <Badge tone="info">signed in</Badge> : <Mono className="text-muted-foreground">gsp_…{t.hint}</Mono>}
+                <span className="text-muted-foreground">
+                  {t.client ? "connected" : "created"} {ago(t.created)} · {t.last_used ? `used ${ago(t.last_used)}` : "never used"}
+                </span>
                 <Button
                   size="sm"
                   variant="danger"
@@ -86,6 +65,43 @@ function AgentAccess() {
             ))}
           </ul>
         )}
+        {failed && <p className="text-[13px] text-bad">{failed}</p>}
+        <details className="group rounded-md border border-border" open={!!fresh}>
+          <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted-foreground select-none">Use a token instead (CI, scripts, agents without OAuth)</summary>
+          <div className="space-y-3 border-t border-border px-3 py-3">
+            <form
+              className="flex flex-wrap gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(async () => {
+                  const r = await api<{ token: string }>("/tokens", { name });
+                  setFresh(r.token);
+                  setName("");
+                });
+              }}
+            >
+              <Input className="max-w-64" placeholder="Name, e.g. CI" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+              <Button type="submit" disabled={busy}>
+                Create token
+              </Button>
+            </form>
+            {fresh && (
+              <div className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-2">
+                <span className="w-full text-[12px] text-info">Copy it now; it is shown only once.</span>
+                <Mono className="break-all">{fresh}</Mono>
+                <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(fresh)}>
+                  <Copy className="size-3.5" /> Copy
+                </Button>
+              </div>
+            )}
+            <div className="space-y-1">
+              <span className="text-[12px] text-muted-foreground">Claude Code</span>
+              <Log text={claudeToken} />
+              <span className="text-[12px] text-muted-foreground">Codex</span>
+              <Log text={codexToken} />
+            </div>
+          </div>
+        </details>
       </div>
     </Card>
   );
