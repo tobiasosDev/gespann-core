@@ -50,7 +50,10 @@ class FakeGithub {
     this.calls.push("check");
     return 1;
   }
-  async updateCheck() {}
+  checks: { id: number; conclusion?: string; title?: string }[] = [];
+  async updateCheck(_i: number, _r: string, id: number, f: { conclusion?: string; title?: string }) {
+    this.checks.push({ id, conclusion: f.conclusion, title: f.title });
+  }
   async setDraft(_i: number, _id: string, draft: boolean) {
     this.calls.push(draft ? "draft" : "ready");
     this.current = { ...this.current, draft };
@@ -198,6 +201,25 @@ test("merge gate: PRs without the label and the author's own drafts are left alo
   await send("pull_request", { action: "opened", pull_request: pr(), sender: person });
   await send("pull_request", { action: "opened", pull_request: pr({ draft: true, labels: [{ name: "gespann" }] }), sender: person });
   assert.deepEqual(gh.calls, [], "no matching paths, no label: nothing; a draft by its author: not tested, not touched");
+});
+
+test("a PR merged or closed while its run waits: the queued run is cancelled and its check skipped", async () => {
+  const { db, gh, send, project } = setup();
+  gh.current = pr({ labels: [{ name: "gespann" }] });
+  await send("pull_request", { action: "labeled", label: { name: "gespann" }, pull_request: gh.current, sender: person });
+  const run = db.runForHead(project().id, 7, gh.current.head.sha)!;
+  assert.equal(run.status, "queued");
+  // A late "closed" for a PR reopened since leaves its run alone.
+  await send("pull_request", { action: "closed", pull_request: { ...gh.current, state: "closed" }, sender: person });
+  assert.equal(db.run_(run.id)?.status, "queued");
+  gh.current = { ...gh.current, state: "closed", merged: true };
+  await send("pull_request", { action: "closed", pull_request: gh.current, sender: person });
+  const after = db.run_(run.id)!;
+  assert.equal(after.status, "cancelled");
+  assert.equal(after.error, "the PR was merged before its test started");
+  assert.equal(db.jobOfRun(run.id)?.status, "cancelled", "the worker never picks it up");
+  assert.deepEqual(gh.checks, [{ id: 1, conclusion: "skipped", title: "Skipped: the PR was merged" }]);
+  assert.equal(db.nextJob(), undefined);
 });
 
 test("files answer byte ranges, which Safari on iOS needs to play a video", async () => {

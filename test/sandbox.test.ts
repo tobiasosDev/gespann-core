@@ -213,7 +213,7 @@ test("worker: a PR run in a sandbox without the recipe (replaced, even after a s
   const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
   db.updateProject(p, { sandbox_id: "sandbox-old", setup: "ready", recipe: "version: 1" });
   const sb = new FakeSandboxes();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "closed", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
   // A suggestion made the new sandbox first; the PR run after it still finds no recipe there.
   sb.files.set("/srv/fresh/gespann/suggested-checks.md", "Sign in works.");
   await processJob({ db, sandboxes: sb, github: () => github, config }, db.job(db.enqueue(p, "suggest"))!);
@@ -344,4 +344,52 @@ test("worker: the provider's job script runs after the install, and every recipe
   const install = sb.commands.find((c) => c.includes("gespann-installed")) ?? "";
   assert.match(install, /: > \/srv\/fresh\/gespann\/env\.sh\n\(\necho prepared \/srv\/fresh\n\)$/, "env.sh is emptied, then the script runs");
   assert.match(sb.commands.find((c) => c.includes("codex exec")) ?? "", /^\. \/srv\/fresh\/gespann\/env\.sh 2>\/dev\/null; cd \/srv\/fresh\/repo && codex exec/);
+});
+
+test("worker: a run whose PR was merged or closed while it waited is skipped, without a sandbox", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe: "version: 1" });
+  const sb = new FakeSandboxes();
+  const checks: unknown[] = [];
+  const github = {
+    pull: async () => ({ number: 4, state: "closed", merged: false, head: { sha: "h" }, labels: [] }),
+    updateCheck: async (_i: number, _r: string, id: number, f: { conclusion?: string }) => void checks.push([id, f.conclusion]),
+  } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
+  db.updateRun(run, { check_run_id: 11 });
+  // Another queued run of the same PR (e.g. queued after a reopen) is left to the webhook.
+  const other = db.createRun({ project_id: p, pr: 4, title: "t", head: "h2", base: "b", base_ref: "main", token: "1".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.equal(db.job(job.id)?.status, "cancelled", db.job(job.id)?.error ?? "");
+  assert.equal(db.run_(run)?.status, "cancelled");
+  assert.equal(db.run_(run)?.error, "the PR was closed before its test started");
+  assert.deepEqual(checks, [[11, "skipped"]]);
+  assert.equal(db.run_(other)?.status, "queued");
+  assert.deepEqual(sb.commands, [], "no sandbox work for a closed PR");
+  assert.match(db.job(job.id)?.log ?? "", /skipped: the PR was closed/);
+});
+
+test("worker: a run cancelled while GitHub answers does not start", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe: "version: 1" });
+  const sb = new FakeSandboxes();
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
+  const github = {
+    // The close webhook cancels the run while this (older) answer is on its way.
+    pull: async () => (db.cancelQueuedRuns(p, 4, "the PR was closed before its test started"), { number: 4, state: "open", head: { sha: "h" }, labels: [] }),
+  } as unknown as Github;
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.equal(db.job(job.id)?.status, "cancelled", db.job(job.id)?.error ?? "");
+  assert.equal(db.run_(run)?.status, "cancelled");
+  assert.deepEqual(sb.commands, []);
 });
