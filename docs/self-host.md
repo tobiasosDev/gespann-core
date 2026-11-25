@@ -20,6 +20,7 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `SESSION_SECRET` | at least 32 characters; also encrypts the stored Codex sign-ins, so keep it stable |
 | `SANDBOX_PROVIDER` | `docker`, `ssh` or `module:<path>` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
 | `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
+| `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
 | `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
 | `DATA_DIR` | default `/data` in the image |

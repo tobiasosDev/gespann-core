@@ -17,6 +17,8 @@ export interface Config {
   gespannRef: string;
   /** Guards /setup (GitHub App creation). */
   adminToken: string;
+  /** `ALLOWED_USERS`: GitHub logins (lowercase) that may sign in; empty lets every GitHub user in. */
+  allowedUsers: string[];
   production: boolean;
   /** Overrides for the GitHub App; otherwise they come from the settings table (manifest flow). */
   github: Partial<GithubApp>;
@@ -67,6 +69,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (sandboxProvider === "docker" && !docker.image) throw new Error("SANDBOX_PROVIDER=docker needs SANDBOX_IMAGE");
   if (sandboxProvider === "docker" && !SAFE_PATH.test(docker.home)) throw new Error("SANDBOX_HOME has to be an absolute path of letters, digits, . _ - and /");
   if (sandboxProvider === "ssh" && !ssh.host) throw new Error("SANDBOX_PROVIDER=ssh needs SSH_HOST");
+  const allowedUsers = (env.ALLOWED_USERS ?? "").split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
+  if (env.ALLOWED_USERS !== undefined && !allowedUsers.length) throw new Error("ALLOWED_USERS is set but names no GitHub login; remove it to let everyone sign in");
   const max = (env.MAX_PARALLEL_JOBS ?? "").trim();
   if (max && !/^[1-9]\d{0,2}$/.test(max)) throw new Error(`MAX_PARALLEL_JOBS ${max} is not a whole number from 1 to 999`);
   return {
@@ -81,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxParallel: max ? Number(max) : null,
     gespannRef: env.GESPANN_REF ?? "main",
     adminToken: env.ADMIN_TOKEN ?? "",
+    allowedUsers,
     production,
     github,
   };

@@ -99,10 +99,13 @@ export function createApp(d: AppDeps): Hono<Env> {
   const { config, db } = d;
   const app = new Hono<Env>();
   const secure = config.baseUrl.startsWith("https://");
+  // ALLOWED_USERS closes the instance to everyone else, including users who signed in before.
+  const allowed = (login: string) => !config.allowedUsers.length || config.allowedUsers.includes(login.toLowerCase());
 
   app.use("*", async (c, next) => {
     const sid = getCookie(c, "gs") ?? null;
-    const user = sid ? (db.sessionUser(sid) ?? null) : null;
+    const found = sid ? db.sessionUser(sid) : undefined;
+    const user = found && allowed(found.login) ? found : null;
     c.set("user", user);
     c.set("session", user ? sid : null);
     await next();
@@ -137,7 +140,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     let viewer: Viewer | null = null;
     if (raw && config.adminToken && raw.length === config.adminToken.length && timingSafeEqual(Buffer.from(raw), Buffer.from(config.adminToken))) viewer = { operator: true };
     else {
-      const user = raw ? db.tokenUser(raw) : undefined;
+      const found = raw ? db.tokenUser(raw) : undefined;
+      const user = found && allowed(found.login) ? found : undefined;
       // Repository access is what GitHub reported at the last sign-in. Like a web session, a token
       // relies on it for at most 7 days, so someone removed from a repository loses it there too.
       if (user && Date.parse(user.repos_synced ?? "") > Date.now() - SESSION_DAYS * 86_400_000) viewer = { userId: user.id };
@@ -386,6 +390,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const gh = d.github();
     const token = await gh.exchangeCode(c.req.query("code") ?? "", `${config.baseUrl}/auth/github/callback`);
     const u = await gh.user(token);
+    if (!allowed(u.login)) return c.redirect("/?closed=1");
     const user = db.upsertUser({ github_id: u.id, login: u.login, name: u.name, avatar: u.avatar_url });
     const repos = [];
     for (const i of await gh.userInstallations(token)) {
