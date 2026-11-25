@@ -1,6 +1,7 @@
 import { Check, ChevronRight, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { ago, api, duration, type ProjectDetail, useResource } from "../api.ts";
+import { ShotList } from "../components/Shots.tsx";
 import { Button, Card, CardHeader, Empty, Input, Log, Mono, Textarea } from "../components/ui.tsx";
 import { JobStatus, Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
 
@@ -212,7 +213,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               {p.proof && (
                 <details>
                   <summary className="cursor-pointer text-[13px] text-muted-foreground">Screenshot after setup</summary>
-                  <img src={`/api/projects/${p.id}/setup-proof.png`} alt="The app on the copy after setup" className="mt-2 max-w-xl rounded-md border border-border" />
+                  <ShotList shots={[{ src: `/api/projects/${p.id}/setup-proof.png`, caption: "The app on the copy after setup" }]} className="mt-2 max-w-xl" />
                 </details>
               )}
               {p.notes && (

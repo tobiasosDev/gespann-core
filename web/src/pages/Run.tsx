@@ -1,6 +1,7 @@
 import { Check, ExternalLink, Minus, RotateCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ago, api, duration, type RunDetail, useResource } from "../api.ts";
+import { ShotList } from "../components/Shots.tsx";
 import { Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Link, navigate, RunStatus } from "../nav.tsx";
 
@@ -24,7 +25,10 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
   const images = r.files.filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
   const video = r.files.find((f) => /\.(mp4|webm)$/i.test(f));
   const live = r.status === "queued" || r.status === "running";
-  const caption = (f: string) => v?.checks.find((c) => c.proof?.includes(f))?.expect ?? f;
+  const shots = images.map((f) => {
+    const check = v?.checks.find((c) => c.proof?.includes(f));
+    return { src: src(f), caption: check?.expect ?? f, result: check?.result };
+  });
 
   return (
     <>
@@ -117,15 +121,8 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
 
       {images.length > 0 && (
         <Card className="mb-6">
-          <CardHeader title="Screenshots" />
-          <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-            {images.map((f) => (
-              <a key={f} href={src(f)} target="_blank" rel="noreferrer" className="group">
-                <img src={src(f)} alt={caption(f)} loading="lazy" className="rounded-md border border-border group-hover:border-info/60" />
-                <div className="mt-1 truncate text-[12px] text-muted-foreground">{caption(f)}</div>
-              </a>
-            ))}
-          </div>
+          <CardHeader title="Screenshots" description={`${shots.length} from the tester. Select one to see it full screen.`} />
+          <ShotList shots={shots} className="p-4" />
         </Card>
       )}
 

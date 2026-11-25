@@ -68,3 +68,28 @@ body {
   outline: 2px solid var(--info);
   outline-offset: 2px;
 }
+
+/* Full-screen screenshot viewer: one short fade in, nothing when motion is reduced. */
+.shot-viewer[open] {
+  animation: shot-viewer-in 140ms ease-out;
+}
+.shot-viewer-img {
+  animation: shot-viewer-img-in 180ms ease-out;
+}
+@keyframes shot-viewer-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes shot-viewer-img-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shot-viewer[open],
+  .shot-viewer-img {
+    animation: none;
+  }
+}
