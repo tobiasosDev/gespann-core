@@ -65,7 +65,7 @@ async function ensureSandbox(d: Deps, p: Project, job: Job, log: (s: string) => 
   try {
     await installGespann(d, b, log);
   } catch (err) {
-    await stopIfIdle(d, p, b);
+    await stopSandbox(d, b);
     throw err;
   }
   return b;
@@ -106,7 +106,9 @@ async function syncRecipe(d: Deps, p: Project, b: Box, log: (s: string) => void)
   while (!saved() && bootstrapping.has(p.id)) await bootstrapping.get(p.id);
   if (!saved()) {
     const made = (async () => {
-      for (const s of [b.slot, ...d.db.slots(p.id).filter((s) => s.id !== b.slot.id)]) {
+      // Not from a sandbox another job is using: its recipe may be a setup's unchecked draft.
+      const busy = (s: Slot) => s.job_id !== null && ["queued", "running"].includes(d.db.job(s.job_id)?.status ?? "");
+      for (const s of [b.slot, ...d.db.slots(p.id).filter((s) => s.id !== b.slot.id && !busy(s))]) {
         const other = s.id === b.slot.id ? b : box(d.sandboxes, s);
         if (!(await d.sandboxes.exists(other.id).catch(() => false)) || !(await has(other).catch(() => false))) continue;
         await saveBundle(d, p, other);
@@ -200,10 +202,27 @@ async function ensureRepo(d: Deps, b: Box, p: Project): Promise<void> {
   if (present.exitCode !== 0) await git(d, b, p, `clone --quiet https://github.com/${p.repo}.git ${b.repo}`, 600);
 }
 
-/** Stops the sandbox after its job unless another job of the project waits. */
-async function stopIfIdle(d: Deps, p: Project, b: Box): Promise<void> {
-  if (!d.db.queuedJobs(p.id)) await d.sandboxes.stop(b.id).catch(() => undefined);
+/** Stops the sandbox after its job; the next job that takes it starts it again. */
+async function stopSandbox(d: Deps, b: Box): Promise<void> {
+  await d.sandboxes.stop(b.id).catch(() => undefined);
 }
+
+/** Runs `fn` for one key at a time in this process; later callers wait for the earlier ones. */
+async function oneAtATime<T>(locks: Map<number, Promise<unknown>>, key: number, fn: () => Promise<T>): Promise<T> {
+  const before = locks.get(key) ?? Promise.resolve();
+  const mine = before.catch(() => undefined).then(fn);
+  const tail = mine.catch(() => undefined);
+  locks.set(key, tail);
+  try {
+    return await mine;
+  } finally {
+    if (locks.get(key) === tail) locks.delete(key);
+  }
+}
+
+/** Projects whose environment a run prepares again, and projects whose copy a run fixes. */
+const recovering = new Map<number, Promise<unknown>>();
+const repairing = new Map<number, Promise<unknown>>();
 
 function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: string, model: string | null): string {
   const m = model ? ` -m ${q(model)}` : "";
@@ -228,7 +247,7 @@ async function suggest(d: Deps, job: Job, p: Project, log: (s: string) => void):
     d.db.updateProject(p.id, { suggestion: text.slice(0, 8000) });
     log("suggestion ready");
   } finally {
-    await stopIfIdle(d, p, b);
+    await stopSandbox(d, b);
   }
 }
 
@@ -282,7 +301,7 @@ async function setup(d: Deps, job: Job, p: Project, log: (s: string) => void, ag
     else if (b) await d.sandboxes.exec(b.id, `rm -f ${b.recipe}`, 30).catch(() => undefined);
     throw err;
   } finally {
-    if (b) await stopIfIdle(d, p, b);
+    if (b) await stopSandbox(d, b);
   }
 }
 
@@ -344,14 +363,18 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   // A new sandbox, or one with an older recipe, takes over the project's current one; a replaced
   // sandbox of a project without a saved recipe needs the setup again.
   const hasRecipe = await syncRecipe(d, p, b, log).catch(async (err: Error) => {
-    await stopIfIdle(d, p, b);
+    await stopSandbox(d, b);
     throw err;
   });
   if (!hasRecipe) {
-    log("the sandbox has no recipe yet: preparing the environment again before the test");
-    const current = d.db.project(p.id) ?? p;
-    await setup(d, job, current, log, true);
-    b = await ensureSandbox(d, d.db.project(p.id) ?? current, job, log);
+    // One run at a time prepares it; runs waiting meanwhile take over the recipe it saved.
+    await oneAtATime(recovering, p.id, async () => {
+      if (await syncRecipe(d, p, b, log)) return;
+      log("the sandbox has no recipe yet: preparing the environment again before the test");
+      const current = d.db.project(p.id) ?? p;
+      await setup(d, job, current, log, true);
+      b = await ensureSandbox(d, d.db.project(p.id) ?? current, job, log);
+    });
   }
   const cancelled = () => d.db.job(job.id)?.status === "cancelled";
   let prText: string | null = null;
@@ -380,7 +403,12 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     if (gaps.length && a.clean && !cancelled()) {
       for (const g of gaps) log(`blocked by the copy, not the change: ${g.expect} → ${g.fix}`);
       await progress("Fixing the test environment", "The copy lacked something the test needs. Codex adds it, then the test runs again.");
-      if ((await repair(d, job, p, run, b, gaps, log)) && !cancelled()) {
+      // One fix at a time per project, each on the recipe the fix before it saved, so none is lost.
+      const fixed = await oneAtATime(repairing, p.id, async () => {
+        await syncRecipe(d, p, b, log);
+        return repair(d, job, p, run, b, gaps, log);
+      });
+      if (fixed && !cancelled()) {
         await progress("Testing the change again", "The copy was fixed; the agent tests this PR again.");
         // gespann run ids are 12 hex characters: the second attempt takes the next 12 of the token.
         const again = run.token.slice(12, 24);
@@ -403,7 +431,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   if (judged) judged = withAliases(judged, alias);
   const error = d.db.run_(run.id)?.error ?? null;
   d.db.updateRun(run.id, { status: error && !judged?.verdict ? "failed" : "done", outcome, verdict: judged ? JSON.stringify(judged) : null, files: JSON.stringify(files), finished: new Date().toISOString() });
-  await stopIfIdle(d, p, b);
+  await stopSandbox(d, b);
   await report(d, p, { ...run, outcome, error }, judged, files, log);
 }
 
@@ -614,8 +642,11 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
         })
         .catch((err: Error) => log(`could not complete the GitHub check: ${err.message}`));
     }
-    // A comment when there is something to read: a verdict, or a held PR that needs a person.
-    if ((outcome !== "SKIP" && judged?.verdict) || state === "failed" || state === "skipped") {
+    // A comment when there is something to read: a verdict, or a held PR that needs a person. Runs of
+    // one PR run side by side; one of an older push that ends last must not replace the newer result.
+    const current = !pull || pull.head.sha === run.head;
+    if (!current) log("the PR has a newer push: its comment stays with the newer run");
+    else if ((outcome !== "SKIP" && judged?.verdict) || state === "failed" || state === "skipped") {
       const commentId = await upsertComment(gate, p, run.pr, body).catch((err: Error) => {
         log(`could not comment on the PR: ${err.message}`);
         return null;

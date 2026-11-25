@@ -417,13 +417,6 @@ export class Db {
     return this.all<Job>("select * from jobs where project_id = ? order by id desc limit ?", projectId, limit);
   }
 
-  pendingJobs(projectId: number): number {
-    return this.one<{ n: number }>("select count(*) n from jobs where project_id = ? and status in ('queued', 'running')", projectId)?.n ?? 0;
-  }
-
-  queuedJobs(projectId: number): number {
-    return this.one<{ n: number }>("select count(*) n from jobs where project_id = ? and status = 'queued'", projectId)?.n ?? 0;
-  }
 
   startJob(id: number): void {
     this.run("update jobs set status = 'running', started = coalesce(started, ?), heartbeat = ? where id = ?", now(), now(), id);

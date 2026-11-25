@@ -83,6 +83,14 @@ export function refreshedAt(auth: string): number {
   }
 }
 
+function account(auth: string): string {
+  try {
+    return (JSON.parse(auth) as { tokens?: { account_id?: string } }).tokens?.account_id ?? "";
+  } catch {
+    return "";
+  }
+}
+
 /** Codex may refresh this sign-in during a session that starts now. */
 export function refreshDue(auth: string, now = Date.now()): boolean {
   return now - refreshedAt(auth) > REFRESH_AFTER_MS - DUE_MARGIN_MS;
@@ -98,7 +106,10 @@ const refreshing = new Map<number, Promise<void>>();
 function keep(db: Db, config: Config, ownerId: number, auth: string): boolean {
   if (!auth.trim().startsWith("{")) return false;
   const sealed = db.codexAuth(ownerId);
-  const stored = sealed ? open(config.sessionSecret, sealed) : "";
+  // Disconnected meanwhile, or connected to another account: the job's sign-in is not theirs anymore.
+  if (!sealed) return false;
+  const stored = open(config.sessionSecret, sealed);
+  if (account(auth) && account(stored) && account(auth) !== account(stored)) return false;
   if (auth === stored || refreshedAt(auth) < refreshedAt(stored)) return false;
   db.setCodex(ownerId, { codex_auth: seal(config.sessionSecret, auth) });
   return true;
