@@ -710,12 +710,13 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
       await verifyRun(d, job, p, run, log);
     }
-    d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
+    // Stopped and freed while the job still counts as running, so no other job takes a sandbox mid-stop.
     await releaseSlots(d, job);
+    d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
-    d.db.endJob(job.id, "failed", (err as Error).message.slice(0, 4000));
     await releaseSlots(d, job);
+    d.db.endJob(job.id, "failed", (err as Error).message.slice(0, 4000));
     if (job.kind === "setup" && d.db.project(p.id)?.setup === "queued") d.db.updateProject(p.id, { setup: "failed", setup_error: (err as Error).message.slice(0, 4000) });
     if (job.kind === "run" && job.run_id) {
       const run = d.db.run_(job.run_id);
