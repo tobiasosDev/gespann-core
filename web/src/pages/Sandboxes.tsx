@@ -123,7 +123,7 @@ function Days({ days }: { days: Boxes["time"]["days"] }) {
 }
 
 export function Sandboxes() {
-  const { data, error, reload } = useResource<Boxes>("/boxes", (d) => d.running.length > 0 || d.queued > 0, 3000);
+  const { data, error, reload } = useResource<Boxes>("/boxes", () => true, 5000);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState(() => Date.now());
@@ -181,7 +181,7 @@ export function Sandboxes() {
                   <Plus className="size-3.5" />
                 </Button>
               </div>
-              <span className="text-[12px] text-muted-foreground">{limit === host ? "As many as the sandbox host has room for." : `The sandbox host has room for ${host}.`}</span>
+              <span className="text-[12px] text-muted-foreground">The sandbox host has room for {host}.</span>
               {queued > 0 && (
                 <span className="text-[12px] text-foreground">
                   {queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox.

@@ -228,11 +228,10 @@ export function createApp(d: AppDeps): Hono<Env> {
   });
 
   app.post("/api/boxes/limit", async (c) => {
-    const { limit } = await c.req.json<{ limit?: number | null }>();
+    const { limit } = await c.req.json<{ limit?: unknown }>();
     const host = d.parallel ?? null;
-    if (limit !== null && (!Number.isInteger(limit) || (limit as number) < 1 || (limit as number) > (host ?? 999))) throw new HttpError(400, `limit: a whole number from 1 to ${host ?? 999}`);
-    // At the host's maximum the user sets no limit of their own, so a bigger host gives them more.
-    db.setMaxJobs(me(c).id, limit === null || limit === host ? null : (limit as number));
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > (host ?? 999)) throw new HttpError(400, `limit: a whole number from 1 to ${host ?? 999}`);
+    db.setMaxJobs(me(c).id, limit);
     return c.json({ ok: true });
   });
 
