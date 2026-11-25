@@ -202,6 +202,12 @@ async function ensureRepo(d: Deps, b: Box, p: Project): Promise<void> {
   if (present.exitCode !== 0) await git(d, b, p, `clone --quiet https://github.com/${p.repo}.git ${b.repo}`, 600);
 }
 
+/** Frees the job's sandboxes, stopped first, also when the job failed halfway. */
+async function releaseSlots(d: Deps, job: Job): Promise<void> {
+  for (const s of d.db.slots(job.project_id).filter((s) => s.job_id === job.id)) await d.sandboxes.stop(s.sandbox_id).catch(() => undefined);
+  d.db.releaseSlots(job.id);
+}
+
 /** Stops the sandbox after its job; the next job that takes it starts it again. */
 async function stopSandbox(d: Deps, b: Box): Promise<void> {
   await d.sandboxes.stop(b.id).catch(() => undefined);
@@ -405,7 +411,12 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
       await progress("Fixing the test environment", "The copy lacked something the test needs. Codex adds it, then the test runs again.");
       // One fix at a time per project, each on the recipe the fix before it saved, so none is lost.
       const fixed = await oneAtATime(repairing, p.id, async () => {
-        await syncRecipe(d, p, b, log);
+        try {
+          await syncRecipe(d, p, b, log);
+        } catch (err) {
+          log(`✗ could not take over the project's current recipe before the fix: ${(err as Error).message}. The result of the first test stands.`);
+          return false;
+        }
         return repair(d, job, p, run, b, gaps, log);
       });
       if (fixed && !cancelled()) {
@@ -644,8 +655,8 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     }
     // A comment when there is something to read: a verdict, or a held PR that needs a person. Runs of
     // one PR run side by side; one of an older push that ends last must not replace the newer result.
-    const current = !pull || pull.head.sha === run.head;
-    if (!current) log("the PR has a newer push: its comment stays with the newer run");
+    const current = pull?.head.sha === run.head;
+    if (!current) log(pull ? "the PR has a newer push: its comment stays with the newer run" : "could not read the PR: its comment stays as it is");
     else if ((outcome !== "SKIP" && judged?.verdict) || state === "failed" || state === "skipped") {
       const commentId = await upsertComment(gate, p, run.pr, body).catch((err: Error) => {
         log(`could not comment on the PR: ${err.message}`);
@@ -700,11 +711,11 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
       await verifyRun(d, job, p, run, log);
     }
     d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
-    d.db.releaseSlots(job.id);
+    await releaseSlots(d, job);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     d.db.endJob(job.id, "failed", (err as Error).message.slice(0, 4000));
-    d.db.releaseSlots(job.id);
+    await releaseSlots(d, job);
     if (job.kind === "setup" && d.db.project(p.id)?.setup === "queued") d.db.updateProject(p.id, { setup: "failed", setup_error: (err as Error).message.slice(0, 4000) });
     if (job.kind === "run" && job.run_id) {
       const run = d.db.run_(job.run_id);
