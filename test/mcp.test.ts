@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +87,7 @@ test("MCP: a token is needed; a revoked or wrong token is refused; the admin tok
   // A foreign web page in the user's browser cannot use the endpoint.
   assert.equal((await rpc("adm-token", "ping", undefined, { Origin: "https://evil.example" })).status, 403);
   assert.equal((await server.request("/mcp")).status, 405);
-  assert.equal((await server.request("/.well-known/oauth-protected-resource")).status, 404, "no web app page for OAuth discovery");
+  assert.equal((await server.request("/.well-known/openid-configuration")).status, 404, "no web app page for other discovery documents");
 });
 
 test("MCP: handshake and tool list; every tool is read-only", async () => {
@@ -187,4 +188,123 @@ test("API: tokens are created, listed without the secret, and revoked only by th
   assert.equal(db.tokens(tobi.id).length, 1, "another user cannot revoke it");
   await server.request(`/api/tokens/${created.id}/revoke`, { method: "POST", headers: as("t".repeat(64)), body: "{}" });
   assert.equal(db.tokens(tobi.id).length, 0);
+});
+
+test("MCP OAuth: an agent discovers the sign-in, registers, gets the user's consent and reads runs; refresh rotates", async () => {
+  const { db, server, tobi, rpc, call } = setup();
+  const base = "http://localhost:3000";
+  // 1. The 401 points at the protected-resource metadata, which names gespann as authorization server.
+  const denied = await server.request("/mcp", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(denied.status, 401);
+  assert.match(denied.headers.get("www-authenticate") ?? "", /resource_metadata="http:\/\/localhost:3000\/\.well-known\/oauth-protected-resource\/mcp"/);
+  const prm = (await (await server.request("/.well-known/oauth-protected-resource/mcp")).json()) as { resource: string; authorization_servers: string[] };
+  assert.deepEqual(prm, { ...prm, resource: `${base}/mcp`, authorization_servers: [base] });
+  const asm = (await (await server.request("/.well-known/oauth-authorization-server")).json()) as Record<string, string & string[]>;
+  assert.equal(asm.issuer, base);
+  assert.deepEqual(asm.code_challenge_methods_supported, ["S256"]);
+
+  // 2. Dynamic client registration: loopback http is fine, plain http elsewhere is not.
+  const reg = async (body: unknown) => server.request("/oauth/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal((await reg({ redirect_uris: ["http://evil.example/cb"] })).status, 400);
+  const registered = await reg({ client_name: "Claude Code (gespann)", redirect_uris: ["http://localhost:61234/callback"], token_endpoint_auth_method: "none" });
+  assert.equal(registered.status, 201);
+  const client = (await registered.json()) as { client_id: string };
+  const forged = client.client_id.replace(/\.[^.]+$/, ".AAAAAAAAAAAAAAAAAAAAAA");
+
+  const verifier = "v".repeat(50);
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const redirect = "http://localhost:50000/callback"; // loopback: any port
+  const q = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: redirect, code_challenge: challenge, code_challenge_method: "S256", state: "st8", resource: `${base}/mcp`, scope: "read" });
+
+  // 3. Not signed in: off to GitHub, and back here afterwards.
+  const anon = await server.request(`/oauth/authorize?${q}`);
+  assert.equal(anon.status, 302);
+  assert.equal(anon.headers.get("location"), "/auth/github");
+  assert.match(anon.headers.get("set-cookie") ?? "", /gs_next=%2Foauth%2Fauthorize%3F/);
+  // A forged client id or an unregistered return address is shown, never redirected to.
+  assert.equal((await server.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), client_id: forged })}`)).status, 400);
+  assert.equal((await server.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), redirect_uri: "https://evil.example/cb" })}`)).status, 400);
+  assert.equal((await server.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), redirect_uri: "https://localhost:50000/callback" })}`)).status, 400, "loopback: only the port may differ");
+  // Other request errors are shown too: anyone can register a client, so no error redirects.
+  assert.equal((await server.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), code_challenge: "" })}`)).status, 400);
+
+  // 4. Signed in: the consent page names the agent; its policy lets the form return to the agent.
+  db.createSession("sid-tobi", tobi.id);
+  const cookie = { Cookie: "gs=sid-tobi" };
+  const consent = await server.request(`/oauth/authorize?${q}`, { headers: cookie });
+  assert.equal(consent.status, 200);
+  assert.match(consent.headers.get("content-security-policy") ?? "", /form-action 'self' http:\/\/localhost:50000;/);
+  const pageHtml = await consent.text();
+  assert.match(pageHtml, /Allow <b>Claude Code \(gespann\)<\/b> to read your gespann runs\?/);
+  const csrf = /name="csrf" value="([^"]+)"/.exec(pageHtml)?.[1] ?? "";
+  const post = (fields: Record<string, string>) => server.request("/oauth/authorize", { method: "POST", headers: { ...cookie, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...Object.fromEntries(q), ...fields }).toString() });
+  assert.equal((await post({ csrf: "wrong", decision: "allow" })).status, 400, "a cross-site form cannot approve");
+  const no = await post({ csrf, decision: "deny" });
+  assert.equal(no.status, 200, "cancel stays on gespann");
+  assert.match(await no.text(), /href="http:\/\/localhost:50000\/callback\?state=st8&amp;iss=[^"]*&amp;error=access_denied"/);
+  const yes = new URL((await post({ csrf, decision: "allow" })).headers.get("location") ?? "");
+  assert.equal(`${yes.origin}${yes.pathname}`, redirect);
+  assert.equal(yes.searchParams.get("state"), "st8");
+  assert.equal(yes.searchParams.get("iss"), base);
+  const code = yes.searchParams.get("code") ?? "";
+
+  // 5. Code for tokens: PKCE is checked, a code works once.
+  const token = async (fields: Record<string, string>) => {
+    const res = await server.request("/oauth/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: client.client_id, resource: `${base}/mcp`, ...fields }).toString() });
+    return { status: res.status, body: (await res.json()) as { access_token: string; refresh_token: string; expires_in: number; error?: string } };
+  };
+  assert.equal((await token({ grant_type: "authorization_code", code, redirect_uri: redirect, code_verifier: "w".repeat(50) })).body.error, "invalid_grant");
+  // The wrong verifier burnt the code: the client has to start over, as with a stolen code.
+  const again = await post({ csrf, decision: "allow" });
+  const code2 = new URL(again.headers.get("location") ?? "").searchParams.get("code") ?? "";
+  const code3 = new URL((await post({ csrf, decision: "allow" })).headers.get("location") ?? "").searchParams.get("code") ?? "";
+  assert.equal((await token({ grant_type: "authorization_code", code: code3, redirect_uri: redirect })).body.error, "invalid_grant", "no verifier, no token");
+  const t1 = await token({ grant_type: "authorization_code", code: code2, redirect_uri: redirect, code_verifier: verifier });
+  assert.equal(t1.status, 200);
+  assert.equal(t1.body.expires_in, 3600);
+  assert.equal((await token({ grant_type: "authorization_code", code: code2, redirect_uri: redirect, code_verifier: verifier })).body.error, "invalid_grant", "a code works once");
+
+  // 6. The access token reads only the user's projects; the sign-in shows up under Agent access.
+  const projects = await call(t1.body.access_token, "list_projects");
+  assert.deepEqual(projects.structuredContent.projects.map((p: { repo: string }) => p.repo), ["acme/shop"]);
+  const listed = db.tokens(tobi.id);
+  assert.deepEqual(listed.map((t) => [t.name, t.client]), [["Claude Code (gespann)", client.client_id]]);
+
+  // 7. Refresh rotates both tokens; the old ones stop working.
+  const t2 = await token({ grant_type: "refresh_token", refresh_token: t1.body.refresh_token });
+  assert.equal(t2.status, 200);
+  assert.equal((await rpc(t1.body.access_token, "ping")).status, 401);
+  assert.equal((await rpc(t2.body.access_token, "ping")).status, 200);
+  // An expired access token is refused, which makes the agent refresh.
+  db.sql.prepare("update api_tokens set expires = ? where client is not null").run(new Date(Date.now() - 1000).toISOString());
+  assert.equal((await rpc(t2.body.access_token, "ping")).status, 401);
+  // A stale repository list makes the refresh fail, so the agent sends the user through GitHub again.
+  db.sql.prepare("update users set repos_synced = ? where id = ?").run(new Date(Date.now() - 8 * 86_400_000).toISOString(), tobi.id);
+  assert.match((await token({ grant_type: "refresh_token", refresh_token: t2.body.refresh_token })).body.error ?? "", /invalid_grant/);
+  // Revoking under Settings ends the sign-in.
+  db.setRepos(tobi.id, db.repos(tobi.id));
+  const t3 = await token({ grant_type: "refresh_token", refresh_token: t2.body.refresh_token });
+  assert.equal(t3.status, 200);
+  db.deleteToken(tobi.id, listed[0]!.id);
+  assert.equal((await rpc(t3.body.access_token, "ping")).status, 401);
+  assert.equal((await token({ grant_type: "refresh_token", refresh_token: t3.body.refresh_token })).body.error, "invalid_grant");
+
+  // A made-up refresh token for someone's sign-in changes nothing.
+  const s0 = await token({ grant_type: "authorization_code", code: new URL((await post({ csrf, decision: "allow" })).headers.get("location") ?? "").searchParams.get("code") ?? "", redirect_uri: redirect, code_verifier: verifier });
+  const forgedRefresh = s0.body.refresh_token.replace(/_[0-9a-f]{32}_/, `_${"0".repeat(32)}_`);
+  assert.equal((await token({ grant_type: "refresh_token", refresh_token: forgedRefresh })).body.error, "invalid_grant");
+  assert.equal((await rpc(s0.body.access_token, "ping")).status, 200, "the sign-in survives");
+  assert.equal((await token({ grant_type: "refresh_token", refresh_token: s0.body.refresh_token })).status, 200);
+  // An out-of-range port is refused, not a server error.
+  assert.equal((await server.request(`/oauth/authorize?${new URLSearchParams({ ...Object.fromEntries(q), redirect_uri: "http://localhost:99999/callback" })}`, { headers: cookie })).status, 400);
+
+  // A spent refresh token, even from two renewals ago, ends the sign-in for whoever holds the newest one.
+  const again2 = await post({ csrf, decision: "allow" });
+  const c4 = new URL(again2.headers.get("location") ?? "").searchParams.get("code") ?? "";
+  const s1 = await token({ grant_type: "authorization_code", code: c4, redirect_uri: redirect, code_verifier: verifier });
+  const s2 = await token({ grant_type: "refresh_token", refresh_token: (await token({ grant_type: "refresh_token", refresh_token: s1.body.refresh_token })).body.refresh_token });
+  assert.equal(s2.status, 200, "renewed twice");
+  assert.equal((await token({ grant_type: "refresh_token", refresh_token: s1.body.refresh_token })).body.error, "invalid_grant");
+  assert.equal((await rpc(s2.body.access_token, "ping")).status, 401, "the successor is revoked");
+  assert.equal((await token({ grant_type: "refresh_token", refresh_token: s2.body.refresh_token })).body.error, "invalid_grant");
 });

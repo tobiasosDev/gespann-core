@@ -180,7 +180,7 @@ The project sandbox stops after every job, and the Codex sign-in is only inside 
 
 ## Agent access (MCP)
 
-Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON responses, no sessions). Each user creates a token under **Settings → Agent access**; a token sees the projects its user sees, and `ADMIN_TOKEN` sees all of them. Only the token's hash is stored. Which repositories a user can access is what GitHub reported at their last sign-in; like a web session, a token relies on that for 7 days, then asks the user to sign in again. Every tool is read-only:
+Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON responses, no sessions). An agent signs in with OAuth: it opens gespann in the browser, the user signs in with GitHub and allows it once. Agents without OAuth (CI, scripts) send a personal token from **Settings → Agent access** instead. Either way the agent sees the projects its user sees; `ADMIN_TOKEN` sees all of them. Only hashes of tokens are stored, and every sign-in and token can be revoked under **Settings → Agent access**. Which repositories a user can access is what GitHub reported at their last sign-in; access relies on that for 7 days, then the user signs in again (an OAuth agent sends them through the browser on its own). Every tool is read-only:
 
 | Tool | Returns |
 |---|---|
@@ -192,10 +192,13 @@ Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON resp
 | `get_run_log` | the end of the job log |
 
 ```bash
-claude mcp add --transport http gespann https://gespann.example.com/mcp --header "Authorization: Bearer gsp_..."
+claude mcp add --transport http gespann https://gespann.example.com/mcp   # then /mcp → gespann → Authenticate
+codex mcp add gespann --url https://gespann.example.com/mcp && codex mcp login gespann
 ```
 
-Codex: `[mcp_servers.gespann]` with `url = "https://gespann.example.com/mcp"` and `bearer_token_env_var = "GESPANN_TOKEN"` in `~/.codex/config.toml`.
+With a token: `--header "Authorization: Bearer gsp_..."` for Claude Code; for Codex `bearer_token_env_var = "GESPANN_TOKEN"` under `[mcp_servers.gespann]` in `~/.codex/config.toml`.
+
+The OAuth side follows the MCP authorization spec: `401` with `resource_metadata`, protected-resource metadata (RFC 9728) and authorization-server metadata (RFC 8414) under `/.well-known/`, dynamic client registration (RFC 7591) at `/oauth/register`, and the authorization-code flow with PKCE S256 for public clients at `/oauth/authorize` and `/oauth/token`. A client id carries the client's name and redirect URIs, signed with `SESSION_SECRET`, so registration stores nothing; changing `SESSION_SECRET` makes agents register again. Access tokens last an hour; refresh tokens rotate on every use and lapse after 30 days without one. Authorization codes live in memory for 5 minutes, so a restart in the middle of a sign-in means clicking Authenticate again.
 
 ## Merge gate
 

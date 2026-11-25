@@ -149,7 +149,10 @@ create table if not exists api_tokens (
   hash text not null unique, hint text not null, created text not null, last_used text);
 `;
 
-/** A personal token for the read-only MCP endpoint. Only its hash is stored. */
+/**
+ * Access to the read-only MCP endpoint: a personal token, or an agent's OAuth sign-in (`client` set),
+ * whose access token expires and is renewed with a refresh token. Only hashes are stored.
+ */
 export interface ApiToken {
   id: number;
   name: string;
@@ -157,9 +160,21 @@ export interface ApiToken {
   hint: string;
   created: string;
   last_used: string | null;
+  /** The OAuth client id, or null for a personal token. */
+  client: string | null;
 }
 
+/** An OAuth access token lives this long; the agent renews it with its refresh token. */
+export const ACCESS_SECONDS = 3600;
+/** A refresh token stays valid this long after the last renewal. */
+const REFRESH_DAYS = 30;
+
 const tokenHash = (raw: string) => createHash("sha256").update(raw).digest("hex");
+/**
+ * `gsr_<sign-in id>_<sign-in secret>_<random>`: the secret stays the same across renewals, so a spent
+ * token is told apart from a made-up one.
+ */
+const refreshToken = (id: number, family: string) => `gsr_${id}_${family}_${randomBytes(24).toString("hex")}`;
 
 /** The merge gate's memory per PR: whether gespann made it a draft, and who released which head. */
 export interface Hold {
@@ -201,6 +216,16 @@ export class Db {
       this.sql.exec("alter table projects add column gate integer not null default 0");
       this.sql.exec("update projects set gate = 1");
     }
+    const tcols = new Set((this.sql.prepare("pragma table_info(api_tokens)").all() as { name: string }[]).map((c) => c.name));
+    for (const [name, def] of [
+      ["client", "text"],
+      ["refresh_hash", "text"],
+      ["expires", "text"],
+      ["family", "text"],
+    ] as const) {
+      if (!tcols.has(name)) this.sql.exec(`alter table api_tokens add column ${name} ${def}`);
+    }
+    this.sql.exec("create unique index if not exists api_tokens_refresh on api_tokens(refresh_hash)");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");
     const jcols = new Set((this.sql.prepare("pragma table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
@@ -559,7 +584,65 @@ export class Db {
   }
 
   tokens(userId: number): ApiToken[] {
-    return this.all<ApiToken>("select id, name, hint, created, last_used from api_tokens where user_id = ? order by id desc", userId);
+    return this.all<ApiToken>("select id, name, hint, created, last_used, client from api_tokens where user_id = ? order by id desc", userId);
+  }
+
+  /** How many personal tokens a user has (OAuth sign-ins do not count). */
+  personalTokens(userId: number): number {
+    return this.one<{ n: number }>("select count(*) as n from api_tokens where user_id = ? and client is null", userId)?.n ?? 0;
+  }
+
+  /** Starts an agent's OAuth sign-in: an access token and a refresh token, returned once. */
+  createOAuthToken(userId: number, client: string, name: string): { access: string; refresh: string } {
+    // Sign-ins nobody renewed for a month cannot be renewed any more: drop them.
+    this.run("delete from api_tokens where user_id = ? and client is not null and expires < ?", userId, new Date(Date.now() - REFRESH_DAYS * 86_400_000).toISOString());
+    const access = `gsp_${randomBytes(24).toString("hex")}`;
+    const id = this.run(
+      "insert into api_tokens (user_id, name, hash, hint, created, client, expires) values (?, ?, ?, ?, ?, ?, ?)",
+      userId,
+      name,
+      tokenHash(access),
+      access.slice(-4),
+      now(),
+      client,
+      new Date(Date.now() + ACCESS_SECONDS * 1000).toISOString(),
+    );
+    const family = randomBytes(16).toString("hex");
+    const refresh = refreshToken(id, family);
+    this.run("update api_tokens set refresh_hash = ?, family = ? where id = ?", tokenHash(refresh), tokenHash(family), id);
+    return { access, refresh };
+  }
+
+  /**
+   * Renews an OAuth sign-in: both tokens are replaced, the old refresh token stops working. When
+   * `allowed` rejects the user, nothing changes and the result says so. A refresh token that was
+   * already used ends the sign-in: either the agent or a thief holds a copy (RFC 9700 4.14.2).
+   */
+  refreshOAuthToken(refresh: string, client: string, allowed: (u: User) => boolean): { access: string; refresh: string } | "unknown" | "denied" {
+    // A refresh token names its sign-in, so an old one is recognised however many renewals ago it was spent.
+    const [, id, family] = /^gsr_(\d+)_([0-9a-f]{32})_[0-9a-f]{48}$/.exec(refresh) ?? [];
+    const row = id ? this.one<{ id: number; user_id: number; expires: string; refresh_hash: string; family: string }>("select id, user_id, expires, refresh_hash, family from api_tokens where id = ? and client = ?", Number(id), client) : undefined;
+    if (!row || row.family !== tokenHash(family!)) return "unknown";
+    if (row.refresh_hash !== tokenHash(refresh)) {
+      this.run("delete from api_tokens where id = ?", row.id);
+      return "unknown";
+    }
+    if (Date.parse(row.expires) < Date.now() - REFRESH_DAYS * 86_400_000) {
+      this.run("delete from api_tokens where id = ?", row.id);
+      return "unknown";
+    }
+    if (!allowed(this.one<User>("select * from users where id = ?", row.user_id) as User)) return "denied";
+    const access = `gsp_${randomBytes(24).toString("hex")}`;
+    const next = refreshToken(row.id, family!);
+    this.run(
+      "update api_tokens set hash = ?, hint = ?, refresh_hash = ?, expires = ? where id = ?",
+      tokenHash(access),
+      access.slice(-4),
+      tokenHash(next),
+      new Date(Date.now() + ACCESS_SECONDS * 1000).toISOString(),
+      row.id,
+    );
+    return { access, refresh: next };
   }
 
   deleteToken(userId: number, id: number): void {
@@ -570,7 +653,7 @@ export class Db {
   tokenUser(raw: string): User | undefined {
     if (!raw.startsWith("gsp_")) return undefined;
     const hash = tokenHash(raw);
-    const user = this.one<User>("select u.* from api_tokens t join users u on u.id = t.user_id where t.hash = ?", hash);
+    const user = this.one<User>("select u.* from api_tokens t join users u on u.id = t.user_id where t.hash = ? and (t.expires is null or t.expires > ?)", hash, now());
     if (user) this.run("update api_tokens set last_used = ? where hash = ?", now(), hash);
     return user;
   }

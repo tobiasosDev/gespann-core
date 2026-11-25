@@ -14,6 +14,7 @@ import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
+import { afterSignIn, mountOAuth } from "./oauth.ts";
 
 /** The built React app: dist/web, next to dist/server when built, or ../../dist/web from src. */
 const WEB = [new URL("../web/", import.meta.url), new URL("../../dist/web/", import.meta.url)].map((u) => fileURLToPath(u)).find((p) => existsSync(join(p, "index.html")));
@@ -36,7 +37,7 @@ const TYPES: Record<string, string> = {
 const CSP =
   "default-src 'self'; img-src 'self' data: https://avatars.githubusercontent.com; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self' https://github.com; base-uri 'none'";
 
-type Env = { Variables: { user: User | null; session: string | null } };
+export type Env = { Variables: { user: User | null; session: string | null } };
 
 export interface AppDeps {
   config: Config;
@@ -78,8 +79,9 @@ export function sendFile(c: Context, path: string, cache: string): Response {
 /** Web sessions last this long; MCP tokens trust a user's repository list for as long. */
 const SESSION_DAYS = 7;
 
-function mcpDenied(c: Context, message: string): Response {
-  c.header("WWW-Authenticate", 'Bearer realm="gespann", error="invalid_token"');
+/** A 401 that points agents at the OAuth sign-in (MCP authorization, RFC 9728). */
+function mcpDenied(c: Context, baseUrl: string, message: string, tokenSent: boolean): Response {
+  c.header("WWW-Authenticate", `Bearer realm="gespann", resource_metadata="${baseUrl}/.well-known/oauth-protected-resource/mcp"${tokenSent ? ', error="invalid_token"' : ""}`);
   return c.json({ jsonrpc: "2.0", id: null, error: { code: -32001, message } }, 401);
 }
 
@@ -102,7 +104,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     c.set("user", user);
     c.set("session", user ? sid : null);
     await next();
-    c.header("Content-Security-Policy", CSP);
+    // Pages that set their own policy (the OAuth consent page) keep it.
+    if (!c.res.headers.has("Content-Security-Policy")) c.header("Content-Security-Policy", CSP);
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "same-origin");
   });
@@ -123,8 +126,8 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.get("/healthz", (c) => c.json({ ok: true }));
 
-  // Read-only MCP endpoint for coding agents (Streamable HTTP, stateless). A personal token from
-  // Settings sees the projects its user sees; the ADMIN_TOKEN sees every project.
+  // Read-only MCP endpoint for coding agents (Streamable HTTP, stateless). An agent's OAuth sign-in or
+  // a personal token from Settings sees the projects its user sees; the ADMIN_TOKEN sees every project.
   app.post("/mcp", async (c) => {
     const origin = c.req.header("origin");
     if (origin && origin !== new URL(config.baseUrl).origin) return c.json({ error: "origin not allowed" }, 403);
@@ -136,9 +139,9 @@ export function createApp(d: AppDeps): Hono<Env> {
       // Repository access is what GitHub reported at the last sign-in. Like a web session, a token
       // relies on it for at most 7 days, so someone removed from a repository loses it there too.
       if (user && Date.parse(user.repos_synced ?? "") > Date.now() - SESSION_DAYS * 86_400_000) viewer = { userId: user.id };
-      else if (user) return mcpDenied(c, `sign in to gespann again (${config.baseUrl}): repository access is re-checked with GitHub every ${SESSION_DAYS} days`);
+      else if (user) return mcpDenied(c, config.baseUrl, `sign in to gespann again (${config.baseUrl}): repository access is re-checked with GitHub every ${SESSION_DAYS} days`, true);
     }
-    if (!viewer) return mcpDenied(c, "a gespann token is needed: Settings → Agent access");
+    if (!viewer) return mcpDenied(c, config.baseUrl, "sign in with OAuth (your agent opens the browser) or send a token from Settings → Agent access", !!raw);
     let body: unknown;
     try {
       body = await c.req.json();
@@ -153,7 +156,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     c.header("Allow", "POST");
     return c.json({ error: "POST JSON-RPC messages to this endpoint" }, 405);
   });
-  // No OAuth: agents send the token as a header. Answer discovery with 404, not the web app.
+  mountOAuth(app, { config, db, sessionDays: SESSION_DAYS });
+  // Other discovery documents: 404, not the web app.
   app.get("/.well-known/*", (c) => c.json({ error: "not found" }, 404));
 
   // Operator API for the instance owner (Bearer ADMIN_TOKEN): start and inspect runs without a browser session.
@@ -222,7 +226,7 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.post("/api/tokens", async (c) => {
     const { name } = await c.req.json<{ name?: string }>();
     const label = String(name ?? "").trim().slice(0, 60) || "agent";
-    if (db.tokens(me(c).id).length >= 20) throw new HttpError(409, "at most 20 tokens; revoke one first");
+    if (db.personalTokens(me(c).id) >= 20) throw new HttpError(409, "at most 20 tokens; revoke one first");
     return c.json(db.createToken(me(c).id, label));
   });
 
@@ -373,7 +377,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const sid = randomBytes(32).toString("hex");
     db.createSession(sid, user.id, SESSION_DAYS);
     setCookie(c, "gs", sid, { httpOnly: true, secure, sameSite: "Lax", path: "/", maxAge: 7 * 86400 });
-    return c.redirect(db.projects(user.id).length ? "/projects" : "/projects/new");
+    return c.redirect(afterSignIn(c) ?? (db.projects(user.id).length ? "/projects" : "/projects/new"));
   });
 
   // GitHub App creation for this instance (manifest flow), guarded by ADMIN_TOKEN.

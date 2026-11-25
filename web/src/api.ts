@@ -35,6 +35,8 @@ export interface ApiToken {
   hint: string;
   created: string;
   last_used: string | null;
+  /** Set for an agent's OAuth sign-in; null for a personal token. */
+  client: string | null;
 }
 
 export interface Tokens {
