@@ -1,7 +1,7 @@
-import { BookOpen, Check, FolderGit2, History, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
+import { BookOpen, Check, ChevronRight, FolderGit2, History, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Me, type ProjectRow } from "../api.ts";
-import { Link, Logo } from "../nav.tsx";
+import { Link, Logo, usePath } from "../nav.tsx";
 import { cn } from "./ui.tsx";
 
 type Dot = "ok" | "info" | "bad" | "warn" | "muted";
@@ -22,13 +22,17 @@ function StatusDot({ tone, label }: { tone: Dot; label: string }) {
 
 const DOT_LABEL: Record<Dot, string> = { ok: "active", info: "preparing", bad: "setup failed", warn: "paused", muted: "setup not done" };
 
-/** One row in the sidebar. The active row carries the blue bar from the logo on its left edge. */
-function Item({ to, active, icon, children, trailing, external, indent }: { to: string; active?: boolean; icon?: ReactNode; children: ReactNode; trailing?: ReactNode; external?: boolean; indent?: boolean }) {
-  const cls = cn(
-    "relative flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] transition-colors",
-    indent && "ml-3.5 pl-3",
+function rowClass(active?: boolean, indent?: boolean) {
+  return cn(
+    "relative flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-[13px] transition-colors",
+    indent && "ml-3.5 w-[calc(100%-0.875rem)] pl-3",
     active ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
   );
+}
+
+/** One row in the sidebar. The active row carries the blue bar from the logo on its left edge. */
+function Item({ to, active, icon, children, trailing, external, indent }: { to: string; active?: boolean; icon?: ReactNode; children: ReactNode; trailing?: ReactNode; external?: boolean; indent?: boolean }) {
+  const cls = rowClass(active, indent);
   const inner = (
     <>
       {active && <span className={cn("absolute top-1.5 bottom-1.5 w-[3px] rounded-full bg-info", indent ? "-left-[1px]" : "-left-2.5")} aria-hidden="true" />}
@@ -60,6 +64,19 @@ export type Section = { kind: "projects" } | { kind: "new" } | { kind: "settings
 
 export function Sidebar({ me, section, projects }: { me: Me; section: Section; projects: ProjectRow[] | null }) {
   const current = section.kind === "project" ? section.id : null;
+  // A project row only folds its pages in and out; it never navigates, so the mobile drawer stays open.
+  // The project of the open page is unfolded on every arrival, also on another page of the same project.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(() => new Set(current === null ? [] : [current]));
+  const path = usePath();
+  useEffect(() => {
+    if (current !== null) setUnfolded((s) => (s.has(current) ? s : new Set(s).add(current)));
+  }, [path, current]);
+  const toggle = (id: number) =>
+    setUnfolded((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const nav = (
     <nav className="flex h-full flex-col gap-5 px-3 py-4" aria-label="Main">
       <Link to="/projects" className="flex items-center gap-2 px-2 font-semibold tracking-tight">
@@ -83,15 +100,25 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
         )}
         <ul className="space-y-0.5">
           {projects?.map((p) => {
-            const open = p.id === current;
+            const here = p.id === current;
+            const open = unfolded.has(p.id);
             const [owner, name] = p.repo.split("/");
-            const tab = section.kind === "project" && open ? section.tab : null;
+            const tab = section.kind === "project" && here ? section.tab : null;
             return (
               <li key={p.id}>
-                <Item to={`/projects/${p.id}`} active={open && tab === null} icon={<FolderGit2 className="size-4" />} trailing={<StatusDot tone={projectDot(p)} label={DOT_LABEL[projectDot(p)]} />}>
-                  <span className="text-muted-foreground">{owner}/</span>
-                  <span className={open ? "text-foreground" : undefined}>{name}</span>
-                </Item>
+                <button type="button" className={cn(rowClass(), "cursor-pointer")} aria-expanded={open} onClick={() => toggle(p.id)}>
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    <FolderGit2 className="size-4" />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="text-muted-foreground">{owner}/</span>
+                    <span className={here ? "text-foreground" : undefined}>{name}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <StatusDot tone={projectDot(p)} label={DOT_LABEL[projectDot(p)]} />
+                    <ChevronRight className={cn("size-3.5 opacity-60 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
+                  </span>
+                </button>
                 {open && (
                   <div className="relative mt-0.5 mb-1.5 space-y-0.5 before:absolute before:top-0 before:bottom-0 before:left-[1.125rem] before:w-px before:bg-border">
                     <Item indent to={`/projects/${p.id}/runs`} active={tab === "runs"} icon={<History className="size-3.5" />}>
@@ -138,13 +165,13 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
 
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 border-r border-border bg-card md:block">{nav}</aside>
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 border-r border-border bg-card md:block">{nav}</aside>
       <MobileBar section={section}>{nav}</MobileBar>
     </>
   );
 }
 
-/** Below md the sidebar becomes a drawer behind a menu button. It closes on every navigation. */
+/** Below md the sidebar becomes a drawer behind a menu button. It closes on every navigation, not when a project folds open. */
 function MobileBar({ section, children }: { section: Section; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const key = JSON.stringify(section);
@@ -168,8 +195,9 @@ function MobileBar({ section, children }: { section: Section; children: ReactNod
       {open && (
         <div className="fixed inset-0 z-30">
           <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close navigation" onClick={() => setOpen(false)} />
-          {/* Every link closes the drawer, also one to the page already open. */}
-          <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r border-border bg-card shadow-xl" onClickCapture={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}>
+          {/* Every link closes the drawer, also one to the page already open. This runs after the link's own
+              handler (bubble, not capture): unmounting first would drop that handler and reload the whole page. */}
+          <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r border-border bg-card shadow-xl" onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}>
             <button className="absolute top-3.5 right-3 cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent" aria-label="Close navigation" onClick={() => setOpen(false)}>
               <X className="size-4" />
             </button>

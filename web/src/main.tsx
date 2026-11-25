@@ -15,7 +15,7 @@ function Shell({ me, section, projects, children }: { me: Me; section: Section; 
   return (
     <div className="min-h-screen">
       <Sidebar me={me} section={section} projects={projects} />
-      <main className="px-4 py-6 md:ml-60 md:px-8">
+      <main className="px-4 py-6 md:ml-72 md:px-8">
         <div className="mx-auto max-w-5xl">{children}</div>
       </main>
     </div>
