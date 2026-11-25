@@ -4,7 +4,7 @@ Acceptance testing for pull requests. For every PR, gespann starts a production-
 
 Hosted at [app.gespann.app](https://app.gespann.app): sign in with GitHub, connect your ChatGPT plan once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Run it yourself: [docs/self-host.md](docs/self-host.md).
 
-- Sandboxes: per project, kept between jobs; PRs are tested side by side, as many at once as the sandbox host has room for (`MAX_PARALLEL_JOBS` overrides it). Docker (local or on a CI server), any Linux machine over SSH, or a provider module of your own, chosen by environment variables ([docs/self-host.md](docs/self-host.md#sandboxes)).
+- Sandboxes: per project, kept between jobs; PRs are tested side by side, as many at once as the sandbox host has room for (`MAX_PARALLEL_JOBS` overrides it); each user can run fewer at once and sees their running sandboxes and sandbox time per month in Settings. Docker (local or on a CI server), any Linux machine over SSH, or a provider module of your own, chosen by environment variables ([docs/self-host.md](docs/self-host.md#sandboxes)).
 - Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), so there is no model bill from gespann.
 - Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
 - Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.

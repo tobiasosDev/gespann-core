@@ -29,6 +29,28 @@ export interface Settings {
   codex: { state: CodexState; account: string | null; login: { url: string | null; code: string | null; lines: string } | null };
 }
 
+export interface RunningBox {
+  job_id: number;
+  kind: "login" | "setup" | "run" | "suggest";
+  project_id: number;
+  repo: string;
+  pr: number | null;
+  sandbox_id: string | null;
+  started: string;
+}
+
+export interface Boxes {
+  /** Jobs the sandbox host runs at once for everyone; null when the instance has no sandboxes. */
+  host: number | null;
+  /** Jobs of your projects that may run at once. */
+  limit: number | null;
+  /** Your own limit; null when you take what the host allows. */
+  own: number | null;
+  running: RunningBox[];
+  queued: number;
+  time: { month: string; days: { day: string; seconds: number }[]; monthSeconds: number; totalSeconds: number; jobs: number };
+}
+
 export interface ApiToken {
   id: number;
   name: string;
@@ -157,6 +179,15 @@ export function ago(iso: string | null): string {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
+}
+
+/** Sandbox time for people: "45 s", "12 min", "3 h 05 min". */
+export function hours(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
 export function duration(a: string | null, b: string | null): string {

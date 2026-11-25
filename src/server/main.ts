@@ -23,9 +23,15 @@ export async function serve(): Promise<void> {
     return cached.gh;
   };
   const sandboxes = await createSandboxes(config);
-  const app = createApp({ config, db, github, githubReady: () => !!githubApp(config, db), ...(sandboxes ? { startCodexLogin: (userId: number) => startLogin(db, sandboxes, config, userId) } : {}) });
-  if (sandboxes) {
-    const parallel = await parallelJobs(config.maxParallel, sandboxes);
+  const parallel = sandboxes ? await parallelJobs(config.maxParallel, sandboxes) : null;
+  const app = createApp({
+    config,
+    db,
+    github,
+    githubReady: () => !!githubApp(config, db),
+    ...(sandboxes && parallel ? { startCodexLogin: (userId: number) => startLogin(db, sandboxes, config, userId), parallel: parallel.jobs } : {}),
+  });
+  if (sandboxes && parallel) {
     startWorker({ db, sandboxes, github, config }, parallel.jobs);
     console.log(JSON.stringify({ level: "info", message: `sandboxes: ${sandboxes.kind}` }));
     console.log(JSON.stringify({ level: "info", message: `parallel jobs: ${parallel.jobs} (${parallel.why})` }));
