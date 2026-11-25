@@ -132,7 +132,7 @@ function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: 
       </div>
 
       <div
-        className={cn("relative min-h-0 flex-1", actual ? "overflow-auto" : "overflow-hidden")}
+        className={cn("relative min-h-0 flex-1", actual ? "overflow-auto" : "overflow-hidden [touch-action:pinch-zoom]")}
         onClick={(e) => {
           if (e.target === e.currentTarget) ref.current?.close();
         }}
