@@ -1,0 +1,371 @@
+import { Check, ChevronRight, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ago, api, duration, type ProjectDetail, useResource } from "../api.ts";
+import { Button, Card, CardHeader, Empty, Input, Log, Mono, Textarea } from "../components/ui.tsx";
+import { JobStatus, Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
+
+type StepState = "done" | "running" | "failed" | "todo";
+
+function StepIcon({ state }: { state: StepState }) {
+  if (state === "done") return <Check className="size-4 text-ok" />;
+  if (state === "running") return <Loader2 className="size-4 animate-spin text-info motion-reduce:animate-none" />;
+  if (state === "failed") return <X className="size-4 text-bad" />;
+  return <Circle className="size-4 text-muted-foreground" />;
+}
+
+function Step({ n, title, state, summary, action, children }: { n: number; title: string; state: StepState; summary: ReactNode; action?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="border-b border-border last:border-0">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <StepIcon state={state} />
+        <span className="w-4 font-mono text-[12px] text-muted-foreground">{n}</span>
+        <span className="w-44 font-medium">{title}</span>
+        <span className="min-w-0 flex-1 text-[13px] text-muted-foreground">{summary}</span>
+        {action}
+      </div>
+      {children && <div className="px-4 pb-4 pl-[3.75rem]">{children}</div>}
+    </div>
+  );
+}
+
+export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setup"; onChange?: () => void }) {
+  const { data: p, error, reload } = useResource<ProjectDetail>(
+    `/projects/${id}`,
+    (d) => d.jobs.some((j) => j.status === "queued" || j.status === "running"),
+  );
+  const [criteria, setCriteria] = useState("");
+  const [model, setModel] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [pr, setPr] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (p && !editing) {
+      setCriteria(p.criteria);
+      setModel(p.model ?? "");
+    }
+  }, [p, editing]);
+
+  if (error) return <p className="text-bad">{error}</p>;
+  if (!p) return <p className="text-muted-foreground">Loading…</p>;
+
+  const post = async (path: string, body: unknown = {}) => {
+    setBusy(true);
+    try {
+      return await api<{ runId?: number }>(`/projects/${p.id}${path}`, body);
+    } finally {
+      setBusy(false);
+      await reload();
+      onChange?.();
+    }
+  };
+  const setupJob = p.jobs.find((j) => j.kind === "setup");
+  const suggestJob = p.jobs.find((j) => j.kind === "suggest");
+  const suggesting = suggestJob?.status === "queued" || suggestJob?.status === "running";
+  const codex: StepState = p.codex === "connected" ? "done" : p.codex === "pending" ? "running" : "todo";
+  const crit: StepState = "done";
+  const setup: StepState = p.setup === "ready" ? "done" : p.setup === "running" || p.setup === "queued" ? "running" : p.setup === "failed" ? "failed" : "todo";
+  const start: StepState = p.active ? "done" : "todo";
+
+  return (
+    <>
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold">{p.repo}</h1>
+        <ProjectStatus p={p} />
+        <a className="text-muted-foreground hover:text-foreground" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
+          <ExternalLink className="size-4" />
+        </a>
+        <span className="ml-auto flex items-center gap-3 font-mono text-[12px] text-muted-foreground">
+          <span>branch {p.default_branch}</span>
+          {p.sandbox_id && <span>sandbox {p.sandbox_id}</span>}
+        </span>
+      </div>
+
+      {tab === "setup" ? (
+        <>
+      <Card className="mb-6">
+        <CardHeader title="Setup" description="Once per repository. After that every pull request is tested automatically." />
+
+        <Step
+          n={1}
+          title="Codex"
+          state={codex}
+          summary={
+            codex === "done"
+              ? `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}.`
+              : p.own
+                ? "Connect your ChatGPT plan once in Settings. It is used for all your projects."
+                : "The project owner has not connected Codex yet."
+          }
+          action={
+            p.own && (
+              <Button size="sm" variant={codex === "done" ? "ghost" : "default"} onClick={() => navigate("/settings")}>
+                {codex === "done" ? "Settings" : "Connect in Settings"}
+              </Button>
+            )
+          }
+        />
+
+        <Step
+          n={2}
+          title="What to check"
+          state={crit}
+          summary={
+            suggesting
+              ? suggestJob?.status === "queued"
+                ? "Suggestion queued: Codex starts when the sandbox is free."
+                : "Codex reads the repository and proposes checks…"
+              : p.criteria.trim()
+                ? `${p.criteria.trim().split("\n").length} check(s)${p.model ? ` · model ${p.model}` : ""}`
+                : "Default checks. Let Codex suggest concrete ones for this repo, or write your own."
+          }
+          action={
+            !editing && (
+              <div className="flex gap-2">
+                <Button size="sm" disabled={busy || suggesting || codex !== "done"} onClick={() => post("/suggest")} title={codex !== "done" ? "Connect Codex in Settings first" : undefined}>
+                  {suggesting ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Sparkles className="size-3.5" />} Suggest checks
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              </div>
+            )
+          }
+        >
+          {p.suggestion && !editing && (
+            <div className="mb-3 rounded-md border border-info/40 bg-info/5 p-3">
+              <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-info">
+                <Sparkles className="size-3.5" /> Suggested by Codex
+              </div>
+              <Log text={p.suggestion} className="max-h-52" />
+              <div className="mt-2 flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setCriteria(p.suggestion ?? "");
+                    setEditing(true);
+                  }}
+                >
+                  Review and use
+                </Button>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => post("/suggestion/dismiss")}>
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          )}
+          {suggestJob?.status === "failed" && !p.suggestion && !editing && <Log text={suggestJob.error ?? "The suggestion failed."} className="mb-3 border-bad/40 text-bad" />}
+          {editing ? (
+            <form
+              className="space-y-3"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await post("/criteria", { criteria, model });
+                setEditing(false);
+              }}
+            >
+              <Textarea value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder={p.default_checks} />
+              <div className="flex items-center gap-2">
+                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (empty = Codex default)" className="max-w-64 font-mono" />
+                <Button type="submit" size="sm" disabled={busy}>
+                  Save
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <Log text={p.criteria.trim() || p.default_checks} className="max-h-40" />
+          )}
+        </Step>
+
+        <Step
+          n={3}
+          title="Environment"
+          state={setup}
+          summary={
+            setup === "done"
+              ? "Recipe ready: the copy starts and stops cleanly."
+              : setup === "running"
+                ? "Codex writes the scripts and builds the copy. The first build can take an hour."
+                : setup === "failed"
+                  ? "The copy did not come up."
+                  : "Codex writes scripts that start a production-near copy: prod build, DB with a test user, fakes for payment, mail, AI."
+          }
+          action={
+            setup !== "running" && (
+              <Button size="sm" variant={setup === "done" ? "outline" : "default"} disabled={busy || codex !== "done"} onClick={() => post("/setup")}>
+                {setup === "todo" ? "Prepare" : "Prepare again"}
+              </Button>
+            )
+          }
+        >
+          {(setup !== "todo" || setupJob) && (
+            <div className="space-y-2">
+              {p.setup_error && <Log text={p.setup_error} className="border-bad/40 text-bad" />}
+              {setupJob?.log && (
+                <details open={setup === "running"}>
+                  <summary className="cursor-pointer text-[13px] text-muted-foreground">Setup log</summary>
+                  <Log text={setupJob.log} className="mt-2" />
+                </details>
+              )}
+              {p.proof && (
+                <details>
+                  <summary className="cursor-pointer text-[13px] text-muted-foreground">Screenshot after setup</summary>
+                  <img src={`/api/projects/${p.id}/setup-proof.png`} alt="The app on the copy after setup" className="mt-2 max-w-xl rounded-md border border-border" />
+                </details>
+              )}
+              {p.notes && (
+                <details>
+                  <summary className="cursor-pointer text-[13px] text-muted-foreground">NOTES.md</summary>
+                  <Log text={p.notes} className="mt-2" />
+                </details>
+              )}
+              {p.recipe && (
+                <details>
+                  <summary className="cursor-pointer text-[13px] text-muted-foreground">verify.yml</summary>
+                  <Log text={p.recipe} className="mt-2" />
+                </details>
+              )}
+            </div>
+          )}
+        </Step>
+
+        <Step
+          n={4}
+          title="Test pull requests"
+          state={start}
+          summary={p.active ? "On: every matching PR gets the check gespann/verify and a comment." : "Off."}
+          action={
+            <Button size="sm" variant={p.active ? "outline" : "default"} disabled={busy || setup !== "done"} onClick={() => post("/active", { active: !p.active })}>
+              {p.active ? "Pause" : "Start"}
+            </Button>
+          }
+        />
+
+        <Step
+          n={5}
+          title="Merge gate"
+          state={p.gate ? "done" : "todo"}
+          summary={p.gate ? "On: PRs with the label gespann cannot be merged until they pass." : "Off: results are reported, merging stays free."}
+          action={
+            <Button size="sm" variant={p.gate ? "outline" : "default"} disabled={busy} onClick={() => post("/gate", { gate: !p.gate })}>
+              {p.gate ? "Turn off" : "Turn on"}
+            </Button>
+          }
+        >
+          <p className="mt-2 text-[13px] text-muted-foreground">
+            A PR with the label <Mono>gespann</Mono> stays a draft, which GitHub cannot merge, until its current commit passes. To merge anyway, comment <Mono>/gespann approve</Mono>, click Ready for review, or remove the label. Turning the gate off releases every PR it holds.
+          </p>
+        </Step>
+      </Card>
+
+      {p.jobs.some((j) => j.kind !== "run") && (
+        <details className="mt-6">
+          <summary className="cursor-pointer text-[13px] text-muted-foreground">Jobs</summary>
+          <Card className="mt-2">
+            {p.jobs
+              .filter((j) => j.kind !== "run")
+              .map((j) => (
+                <div key={j.id} className="flex items-center gap-3 border-b border-border px-4 py-2 text-[13px] last:border-0">
+                  <Mono className="w-10 text-muted-foreground">#{j.id}</Mono>
+                  <span className="w-14">{j.kind}</span>
+                  <JobStatus job={j} />
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{j.error ?? ""}</span>
+                  <span className="text-muted-foreground">{ago(j.created)}</span>
+                </div>
+              ))}
+          </Card>
+        </details>
+      )}
+        </>
+      ) : (
+        <>
+          {setup !== "done" ? (
+            <Card className="mb-6 border-info/40">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <Wrench className="size-4 text-info" />
+                <span className="min-w-0 flex-1 text-[13px]">Pull requests can be tested once the setup is done. It runs once per repository.</span>
+                <Button size="sm" onClick={() => navigate(`/projects/${p.id}/setup`)}>
+                  Go to setup
+                </Button>
+              </div>
+            </Card>
+          ) : (
+            !p.active && (
+              <Card className="mb-6 border-warn/40">
+                <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                  <span className="min-w-0 flex-1 text-[13px]">New pull requests are not tested automatically while testing is paused.</span>
+                  <Button size="sm" disabled={busy} onClick={() => post("/active", { active: true })}>
+                    Start testing
+                  </Button>
+                </div>
+              </Card>
+            )
+          )}
+      <Card>
+        <CardHeader
+          title="Runs"
+          action={
+            <form
+              className="flex items-center gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const r = await post("/runs", { pr: Number(pr) });
+                if (r.runId) navigate(`/runs/${r.runId}`);
+              }}
+            >
+              <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" className="w-20 font-mono" disabled={setup !== "done"} />
+              <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
+                <Play className="size-3.5" /> Test PR
+              </Button>
+            </form>
+          }
+        />
+        {p.runs.length === 0 ? (
+          <Empty>No runs yet.</Empty>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead className="text-left text-[12px] text-muted-foreground">
+                <tr className="border-b border-border">
+                  <th className="px-4 py-2 font-medium">Status</th>
+                  <th className="px-4 py-2 font-medium">Pull request</th>
+                  <th className="px-4 py-2 font-medium">Commit</th>
+                  <th className="px-4 py-2 font-medium">Duration</th>
+                  <th className="px-4 py-2 font-medium">Started</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {p.runs.map((r) => (
+                  <tr key={r.id} className="cursor-pointer border-b border-border last:border-0 hover:bg-accent" onClick={() => navigate(`/runs/${r.id}`)}>
+                    <td className="px-4 py-2.5">
+                      <RunStatus run={r} />
+                    </td>
+                    <td className="max-w-md truncate px-4 py-2.5">
+                      <Mono className="text-muted-foreground">#{r.pr}</Mono> {r.title}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Mono>{r.head.slice(0, 7)}</Mono>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-[12px] text-muted-foreground">{duration(r.started, r.finished)}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{ago(r.started ?? r.created)}</td>
+                    <td className="px-4 py-2.5 text-right">
+                      <Link to={`/runs/${r.id}`} className="text-muted-foreground">
+                        <ChevronRight className="inline size-4" />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+        </>
+      )}
+    </>
+  );
+}

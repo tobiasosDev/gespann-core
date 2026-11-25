@@ -1,9 +1,16 @@
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { adapterFor, adapters } from "./adapters/index.ts";
 import type { Agent } from "./adapters/types.ts";
 import { runHook } from "./hook.ts";
 import { hooksInstalled, installHooks, uninstallHooks } from "./install.ts";
-import { repoRoot } from "./util.ts";
+import { gitOk, repoRoot } from "./util.ts";
+import { renderPlan, triggered } from "./verify/plan.ts";
+import { loadRecipe, RECIPE_PATH } from "./verify/recipe.ts";
+import { finish, prepare, type RunContext, screenshot } from "./verify/run.ts";
 
 const VERSION = "0.3.0";
 
@@ -64,11 +71,73 @@ async function cmdInit(root: string, args: Args) {
   if (agents.includes("codex")) say("Codex runs new project hooks only after you trust them: open Codex in this repo and run /hooks once.");
 }
 
+function cmdRecipe(root: string, args: Args) {
+  const file = typeof args.flags.file === "string" ? args.flags.file : join(root, RECIPE_PATH);
+  const recipe = loadRecipe(file);
+  if (args._[1] !== "trigger") return say(renderPlan(recipe));
+  const list = (k: string) => (typeof args.flags[k] === "string" ? (args.flags[k] as string).split(",").filter(Boolean) : []);
+  const changed = readFileSync(0, "utf8").split("\n").map((l) => l.trim()).filter(Boolean);
+  const t = triggered(recipe.trigger, { base: need(typeof args.flags.base === "string" ? args.flags.base : undefined, "--base"), labels: list("labels"), changed });
+  say(`${t.run ? "run" : "skip"}: ${t.reason}`);
+  if (!t.run) process.exitCode = 1;
+}
+
+function str(args: Args, k: string): string | undefined {
+  const v = args.flags[k];
+  return typeof v === "string" ? v : undefined;
+}
+
+/** Run dirs live outside the checkout: ~/gespann/runs/<run>/{work,out}. `last` points at the newest. */
+function runContext(root: string, args: Args, fresh: boolean): RunContext {
+  const runs = join(homedir(), "gespann", "runs");
+  const lastFile = join(runs, "last");
+  const run = str(args, "run") ?? (fresh ? randomBytes(6).toString("hex") : existsSync(lastFile) ? readFileSync(lastFile, "utf8").trim() : "");
+  if (!/^[0-9a-f]{12}$/.test(run)) throw new Error("missing --run (12 hex characters), and no earlier prepare to continue");
+  const dir = str(args, "dir") ?? join(runs, run);
+  const rev = (r: string | undefined) => (r && /^[0-9a-f]{40}$/.test(r) ? r : (gitOk(root, ["rev-parse", r ?? "HEAD"])?.trim() ?? r ?? ""));
+  const recipeFile = resolve(str(args, "recipe") ?? join(root, RECIPE_PATH));
+  if (fresh) {
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(lastFile, `${run}\n`);
+  }
+  return { root, recipeFile, pr: str(args, "pr") ?? "0", head: rev(str(args, "head")), base: rev(str(args, "base")), run, work: join(dir, "work"), out: join(dir, "out") };
+}
+
+async function cmdVerify(root: string, args: Args) {
+  const sub = args._[1];
+  if (sub === "prepare") {
+    const ctx = runContext(root, args, true);
+    const p = await prepare(ctx, loadRecipe(ctx.recipeFile));
+    say(JSON.stringify({ ...p, run: ctx.run, work: ctx.work, out: ctx.out }));
+    if (!p.ok) process.exitCode = 1;
+    return;
+  }
+  if (sub === "finish") {
+    const ctx = runContext(root, args, false);
+    const wait = Number(str(args, "wait") ?? 600);
+    const f = await finish(ctx, loadRecipe(ctx.recipeFile), wait * 1000);
+    say(JSON.stringify({ outcome: f.outcome, problems: f.judged.problems, alongside: f.alongside, teardownErrors: f.teardownErrors, run: ctx.run }));
+    if (f.outcome === "FAIL") process.exitCode = 1;
+    return;
+  }
+  throw new Error("usage: gespann verify prepare|finish [--recipe f] [--pr n --head sha --base sha] [--run id]");
+}
+
 const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude Code, Codex)
 
   init [--yes] [--agents claude,codex]   install the stop hook
   uninstall [--agents claude,codex]      remove gespann's hooks, keep all others
   status                                 which hooks are installed
+
+  recipe [--file f]                      validate .gespann/verify.yml and print the run plan
+  recipe trigger --base b [--labels a,b] [--file f] < changed-files
+                                         exit 0 when the PR runs, 1 when it does not
+
+  verify prepare [--recipe f] [--pr n --head sha --base sha]
+                                         bring the copy up; prints {"ok","url","run","work","out"}
+  verify finish [--run id] [--wait s]    wait for alongside checks, judge verdict.json, tear down
+  shot <file.png>                        save a screenshot of the desktop (for the tester)
+  serve                                  run the gespann web service (see docs/self-host.md)
 
 Agents call: gespann hook <claude|codex> stop`;
 
@@ -78,6 +147,11 @@ export async function main(argv: string[]): Promise<void> {
   if (args.flags.version || cmd === "version") return say(VERSION);
   if (!cmd || cmd === "help" || args.flags.help) return say(HELP);
   if (cmd === "hook") return runHook(need(args._[1], "agent"), need(args._[2], "event"));
+  if (cmd === "shot") {
+    if (!screenshot(need(args._[1], "file"))) throw new Error("no screenshot tool worked (import, scrot, ffmpeg, xwd)");
+    return say(resolve(args._[1] as string));
+  }
+  if (cmd === "serve") return (await import("./server/main.ts")).serve();
   const root = repoRoot(process.cwd());
   switch (cmd) {
     case "init":
@@ -88,6 +162,10 @@ export async function main(argv: string[]): Promise<void> {
     case "status":
       for (const a of Object.keys(adapters) as Agent[]) say(`hooks ${a}: ${hooksInstalled(root, a) ? "installed" : "not installed"}`);
       return;
+    case "recipe":
+      return cmdRecipe(root, args);
+    case "verify":
+      return cmdVerify(root, args);
     default:
       throw new Error(`unknown command ${cmd}; see gespann help`);
   }

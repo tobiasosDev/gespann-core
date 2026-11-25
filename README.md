@@ -1,12 +1,19 @@
 # gespann
 
-Acceptance testing for coding agents. When Claude Code or Codex opens a pull request, an independent agent starts the change in a production-near environment, clicks through it like a tester and writes a verdict per check, with screenshots as proof. The verdict lands on the PR as a GitHub check and goes back to the coding agent, which fixes what failed before a human looks at it.
+Acceptance testing for pull requests. For every PR, gespann starts a production-near copy of your app in a cloud sandbox, an agent on your own Codex plan clicks through the change like a tester, and the verdict with screenshots lands on the PR as the check `gespann/verify`.
 
-Status: in development. The runner (`gespann verify`), the recipe format, the verdict and the back channel are being built in this repository. What works today is the stop hook that will carry the verdict back to the agent.
+Hosted at [app.gespann.app](https://app.gespann.app): sign in with GitHub, connect your ChatGPT plan once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Run it yourself: [docs/self-host.md](docs/self-host.md).
+
+- Sandboxes: one per project, kept between jobs. Docker (local or on a CI server), any Linux machine over SSH, or a provider module of your own, chosen by environment variables ([docs/self-host.md](docs/self-host.md#sandboxes)).
+- Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), so there is no model bill from gespann.
+- Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
+- Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.
+- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only, with a token from Settings ([docs/self-host.md](docs/self-host.md#agent-access-mcp)).
+- How pilots count results: [docs/measure.md](docs/measure.md).
 
 Everything is open source under Apache-2.0.
 
-## Install
+## CLI
 
 ```bash
 npm install -g github:tobiasosDev/gespann-core
@@ -18,6 +25,7 @@ gespann init          # installs the stop hook for Claude Code and Codex
 
 ```bash
 gespann status        # which hooks are installed
+gespann recipe        # validate .gespann/verify.yml and print the run plan
 gespann uninstall     # remove gespann's hooks, keep all others
 ```
 
@@ -33,8 +41,9 @@ Up to `v0.2.0` gespann was a rule loop (observe sessions, propose and approve ve
 
 ```bash
 npm install
-npm run check    # typecheck + tests (node --test, Node ≥ 22.18)
-npm run build
+npm run check    # typecheck (server + web) and tests (node --test, Node ≥ 22.18)
+npm run build    # server to dist/, React app to dist/web
+DATA_DIR=.data node src/bin.ts serve   # http://localhost:3000
 ```
 
 ## License

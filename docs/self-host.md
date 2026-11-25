@@ -1,0 +1,193 @@
+# Run gespann yourself
+
+gespann is one Node process: web app, GitHub webhook and job worker. It keeps its data in SQLite under `DATA_DIR`. PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs on each user's own ChatGPT plan through Codex, so the instance pays no model costs.
+
+## Run
+
+```bash
+docker build -t gespann .
+docker run -p 3000:3000 -v gespann-data:/data \
+  -e BASE_URL=https://gespann.example.com \
+  -e SESSION_SECRET=$(openssl rand -hex 32) \
+  -e SANDBOX_PROVIDER=ssh -e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)" \
+  -e ADMIN_TOKEN=$(openssl rand -hex 16) \
+  gespann
+```
+
+| Variable | |
+|---|---|
+| `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
+| `SESSION_SECRET` | at least 32 characters; also encrypts the stored Codex sign-ins, so keep it stable |
+| `SANDBOX_PROVIDER` | `docker`, `ssh` or `module:<path>` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
+| `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
+| `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
+| `DATA_DIR` | default `/data` in the image |
+
+Restarting or redeploying the server never loses a job. A job whose server stops (a deploy, a crash) goes back into the queue about a minute later and starts again from the beginning. Before that, gespann stops the commands it left running in the sandbox and takes a copy that was still up down. While the old server keeps running during a rolling deploy, the job stays with it. A job lost in three restarts fails instead of starting again.
+
+## Sandboxes
+
+Every project gets one sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
+
+| Provider | A sandbox is | Good for |
+|---|---|---|
+| `docker` | a container from your image, on the local engine or a remote one (`DOCKER_HOST`) | a CI server that runs Docker; isolation per project |
+| `ssh` | a directory on a Linux machine you already run, used as `HOME` | a CI server without Docker, or one that already has your toolchain |
+| `module:<path>` | whatever your module makes | a sandbox service of your own ([Your own provider](#your-own-provider)) |
+
+Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. A video recording of the run needs a provider that records ([Your own provider](#your-own-provider)); Docker and SSH do not.
+
+### Docker
+
+```bash
+-e SANDBOX_PROVIDER=docker \
+-e SANDBOX_IMAGE=ghcr.io/acme/gespann-sandbox:1 \
+-e SANDBOX_COMMAND="sleep infinity" \
+-e SANDBOX_DOCKER_ARGS="--cpus 4 --memory 8g" \
+-e DOCKER_HOST=ssh://ci@ci.example.com
+```
+
+| Variable | |
+|---|---|
+| `SANDBOX_IMAGE` | image for every sandbox (required) |
+| `SANDBOX_COMMAND` | what the container runs; it has to keep running. Leave it out for images that start their own desktop; plain images need `sleep infinity` |
+| `SANDBOX_DOCKER_ARGS` | extra `docker run` arguments, quoted like a shell. Recipes that start Docker themselves need Docker inside the sandbox: `--privileged` with an image that runs its own engine, or the engine's socket mounted. The socket gives PR code control over every container on that engine, gespann's own included, so mount it only from an engine that runs nothing else |
+| `SANDBOX_USER` | user inside the container; default the image's |
+| `SANDBOX_HOME` | the sandbox's home directory (default `/home/user`); letters, digits, `. _ - /` only |
+| `DOCKER_HOST`, `DOCKER_CONTEXT` | which engine, as for the `docker` CLI. `ssh://user@host` reaches a CI server; the key comes from `~/.ssh` of the user running gespann |
+
+The gespann image contains the `docker` CLI. For the local engine, mount its socket and give the `node` user access: `-v /var/run/docker.sock:/var/run/docker.sock --group-add $(stat -c %g /var/run/docker.sock)`. A stopped container keeps its disk; `docker rm` deletes a sandbox, and gespann makes a new one on the next job.
+
+### SSH
+
+```bash
+-e SANDBOX_PROVIDER=ssh \
+-e SSH_HOST=ci@ci.example.com \
+-e SSH_PRIVATE_KEY="$(cat gespann_ci_key)" \
+-e SSH_KNOWN_HOSTS="$(ssh-keyscan ci.example.com)"
+```
+
+| Variable | |
+|---|---|
+| `SSH_HOST` | `user@host` (required) |
+| `SSH_PORT` | default 22 |
+| `SSH_PRIVATE_KEY` | the key itself (`\n` for line breaks works too); or `SSH_KEY_FILE` with a path |
+| `SSH_KNOWN_HOSTS` | the host's key line; then a changed host key stops gespann. Without it, the first key seen is pinned in `DATA_DIR/ssh/known_hosts` |
+| `SANDBOX_ROOT` | directory on the host for the sandboxes (default `~/gespann-sandboxes`); letters, digits, `. _ - /` only |
+
+Each sandbox is a directory under `SANDBOX_ROOT`. Every command gespann runs there has it as `HOME`, so `~/.codex` and gespann's own install stay per project. The SSH user's own `~/.codex/config.toml` is linked into every sandbox: give Codex its browser or computer-use tool there (e.g. an MCP server such as Playwright's on an Xvfb display), and export `DISPLAY` at the top of the user's `~/.bashrc` so `gespann shot` sees the same screen. All projects still share the machine's user, its processes and its Docker engine, and PR code runs with that user's rights: use a dedicated user on a machine that holds no secrets you would not hand to a PR. Recipes should name their Docker projects and ports after `$GESPANN_RUN` so two projects can run side by side. gespann starts no login shell: check with `ssh ci@ci.example.com 'command -v node npm git codex'` that the tools are on that `PATH`.
+
+#### Prepare a Debian or Ubuntu host
+
+These steps set up a CI server so the tester can click through the app in a real browser. Run them as an admin on the host; `GESPANN_IP` is the address your gespann server connects from.
+
+1. A user for gespann, with Docker but without sudo. PR code runs as this user.
+
+   ```bash
+   sudo useradd -m -s /bin/bash -G docker gespann
+   ```
+
+2. Its key, usable only from the gespann server. Generate the key pair anywhere; the private half goes into `SSH_PRIVATE_KEY`.
+
+   ```bash
+   ssh-keygen -t ed25519 -N '' -f gespann_ci -C gespann
+   sudo install -d -m 700 -o gespann -g gespann /home/gespann/.ssh
+   echo "from=\"$GESPANN_IP\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding $(cat gespann_ci.pub)" \
+     | sudo tee /home/gespann/.ssh/authorized_keys
+   sudo chown gespann:gespann /home/gespann/.ssh/authorized_keys && sudo chmod 600 /home/gespann/.ssh/authorized_keys
+   ```
+
+3. SSH reachable from the gespann server. With ufw, and only for that address:
+
+   ```bash
+   sudo ufw allow from "$GESPANN_IP" to any port 22 proto tcp comment gespann
+   ```
+
+4. Tools for the user: Node.js 22.18 or newer, git, curl and Docker system-wide; Codex, Playwright's MCP server and a matching Chromium in the user's home. Chromium also needs its system libraries (`npx playwright install-deps chromium` as an admin).
+
+   ```bash
+   sudo apt-get install -y xvfb imagemagick
+   sudo -u gespann -H bash -c 'cd ~ && npm i -g --prefix ~/.local @openai/codex @playwright/mcp \
+     && PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright node ~/.local/lib/node_modules/@playwright/mcp/node_modules/playwright/cli.js install chromium'
+   ```
+
+5. A virtual screen for the browser, display `:77`:
+
+   ```bash
+   sudo tee /etc/systemd/system/gespann-xvfb.service <<'EOF'
+   [Unit]
+   Description=Virtual screen :77 for the gespann tester
+   [Service]
+   User=gespann
+   ExecStart=/usr/bin/Xvfb :77 -screen 0 1440x900x24 -nolisten tcp
+   Restart=always
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   sudo systemctl daemon-reload && sudo systemctl enable --now gespann-xvfb
+   ```
+
+6. The environment every gespann command sees. gespann starts no login shell, so these lines go at the very top of the user's `~/.bashrc`, before its check for interactive shells:
+
+   ```bash
+   export PATH=/home/gespann/.local/bin:$PATH DISPLAY=:77 PLAYWRIGHT_BROWSERS_PATH=/home/gespann/.cache/ms-playwright
+   ```
+
+7. Codex's browser tool, in `/home/gespann/.codex/config.toml`. gespann links this file into every sandbox:
+
+   ```toml
+   [mcp_servers.browser]
+   command = "/home/gespann/.local/bin/playwright-mcp"
+   args = ["--browser", "chromium", "--viewport-size", "1440x900"]
+   startup_timeout_sec = 60
+   env = { DISPLAY = ":77", PLAYWRIGHT_BROWSERS_PATH = "/home/gespann/.cache/ms-playwright" }
+   ```
+
+8. Check over SSH from the gespann server (the key works only from there; add your own address to `from=` for a check from elsewhere): `ssh -i gespann_ci gespann@<host> 'command -v node npm git curl docker codex playwright-mcp; echo $DISPLAY'` lists every tool and `:77`. Then set the variables above and deploy; the log line `sandboxes: ssh` confirms the provider.
+
+Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo systemctl disable --now gespann-xvfb`, `sudo userdel -r gespann`.
+
+### Your own provider
+
+`SANDBOX_PROVIDER=module:/path/to/provider.js` loads an ES module whose default export gets the server's environment and returns the sandbox object (sync or async). It implements the `Sandboxes` interface in [src/server/sandbox.ts](../src/server/sandbox.ts): `create`, `exists`, `home`, `ensureRunning`, `keepAlive`, `stop`, `remove`, `exec`, `start`, `status`, `kill`, `readFile`, `writeFile`, `download`, and optionally `startRecording` and `stopRecording` for a video of the tester's screen, `jobScript(home)` for a shell script that runs before every job and may export variables through `<home>/gespann/env.sh` (for example a build cache that survives the sandbox stopping), and `testerNote` for how to drive the browser your sandbox provides. gespann checks the methods at startup and logs `sandboxes: <kind>`.
+
+```js
+// provider.js: read your settings from env, return the sandboxes
+export default (env) => new MySandboxes(env.MY_SANDBOX_API_KEY);
+```
+
+## GitHub App
+
+Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
+
+## How a project works
+
+1. A user signs in with GitHub and connects Codex once in **Settings** (`codex login --device-auth` in a short-lived sandbox). gespann keeps the resulting `auth.json` encrypted and deletes the sandbox.
+2. Adding a repository starts the setup: in the project's own sandbox, Codex reads the repo and writes `verify.yml` (see [recipe.md](recipe.md)), the scripts it calls, `NOTES.md` and `CHECKS.md`. gespann then starts and stops the copy once without Codex to check the recipe.
+3. **Start** turns on PR testing. Each matching PR (not from forks) gets the check `gespann/verify`: the sandbox merges the PR onto its base, brings the copy up, Codex tests it with the sandbox's computer-use tools, and the verdict, screenshots and a recording land on the run page and in a PR comment.
+
+The project sandbox stops after every job, and the Codex sign-in is only inside it while a job runs.
+
+## Agent access (MCP)
+
+Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON responses, no sessions). Each user creates a token under **Settings → Agent access**; a token sees the projects its user sees, and `ADMIN_TOKEN` sees all of them. Only the token's hash is stored. Which repositories a user can access is what GitHub reported at their last sign-in; like a web session, a token relies on that for 7 days, then asks the user to sign in again. Every tool is read-only:
+
+| Tool | Returns |
+|---|---|
+| `list_projects` | projects with setup state and newest run |
+| `list_runs` | runs of a project, optionally of one PR |
+| `get_run` | status, verdict, summary, every check, the `issues` to act on and the run's files; `repo` + `pr` gives the newest run of a PR |
+| `get_review` | the PR comment as Markdown |
+| `get_run_file` | a screenshot as an image; the recording as a link (MCP has no video content); `verdict.json` as text |
+| `get_run_log` | the end of the job log |
+
+```bash
+claude mcp add --transport http gespann https://gespann.example.com/mcp --header "Authorization: Bearer gsp_..."
+```
+
+Codex: `[mcp_servers.gespann]` with `url = "https://gespann.example.com/mcp"` and `bearer_token_env_var = "GESPANN_TOKEN"` in `~/.codex/config.toml`.
+
+## Merge gate
+
+The gate is a per-project setting (*Merge gate* on the project page), off for new projects. When it is on, a PR with the label `gespann` cannot be merged until gespann's test of its current commit passes. gespann turns the PR into a draft, which GitHub does not merge, and back to ready for review once the test passes. This works on every GitHub plan, also on private repositories without required checks. A person releases a PR without a passing test by commenting `/gespann approve` (needs the `issue_comment` event; apps created before it was added need it ticked under the app's *Permissions & events*), by clicking *Ready for review*, or by removing the label. A new push needs a new pass or approval. GitHub lets an app switch a PR to draft only with *Contents: Read and write*; apps created before the gate need that permission raised and the installation needs to accept it. Without it, PRs are still tested but not held. Sandboxes only ever get a read-only token.
+
