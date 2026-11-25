@@ -165,7 +165,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     return next();
   });
   app.get("/ops/projects", (c) =>
-    c.json(db.allProjects().map((p) => ({ id: p.id, repo: p.repo, setup: p.setup, active: p.active, sandbox: p.sandbox_id, criteria: p.criteria, runs: db.runs(p.id, 5).map((r) => ({ id: r.id, pr: r.pr, status: r.status, outcome: r.outcome })) }))),
+    c.json(db.allProjects().map((p) => ({ id: p.id, repo: p.repo, setup: p.setup, active: p.active, sandboxes: db.slots(p.id).map((s) => ({ id: s.sandbox_id, job: s.job_id })), criteria: p.criteria, runs: db.runs(p.id, 5).map((r) => ({ id: r.id, pr: r.pr, status: r.status, outcome: r.outcome })) }))),
   );
   app.post("/ops/projects/:id/runs", async (c) => {
     const p = db.project(Number(c.req.param("id")));

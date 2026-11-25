@@ -1,5 +1,6 @@
 import { serve as listen } from "@hono/node-server";
 import { createApp, githubApp } from "./app.ts";
+import { parallelJobs } from "./capacity.ts";
 import { startLogin } from "./codex.ts";
 import { loadConfig } from "./config.ts";
 import { Db } from "./db.ts";
@@ -24,8 +25,10 @@ export async function serve(): Promise<void> {
   const sandboxes = await createSandboxes(config);
   const app = createApp({ config, db, github, githubReady: () => !!githubApp(config, db), ...(sandboxes ? { startCodexLogin: (userId: number) => startLogin(db, sandboxes, config, userId) } : {}) });
   if (sandboxes) {
-    startWorker({ db, sandboxes, github, config });
+    const parallel = await parallelJobs(config.maxParallel, sandboxes);
+    startWorker({ db, sandboxes, github, config }, parallel.jobs);
     console.log(JSON.stringify({ level: "info", message: `sandboxes: ${sandboxes.kind}` }));
+    console.log(JSON.stringify({ level: "info", message: `parallel jobs: ${parallel.jobs} (${parallel.why})` }));
   } else console.error(JSON.stringify({ level: "warn", message: "no sandbox provider (SANDBOX_PROVIDER): jobs stay queued" }));
   listen({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" }, (info) => {
     console.log(JSON.stringify({ level: "info", message: `gespann listening on ${info.port}`, baseUrl: config.baseUrl }));

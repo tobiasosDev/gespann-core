@@ -21,13 +21,22 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `SANDBOX_PROVIDER` | `docker`, `ssh` or `module:<path>` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
 | `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
+| `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
 | `DATA_DIR` | default `/data` in the image |
 
 Restarting or redeploying the server never loses a job. A job whose server stops (a deploy, a crash) goes back into the queue about a minute later and starts again from the beginning. Before that, gespann stops the commands it left running in the sandbox and takes a copy that was still up down. While the old server keeps running during a rolling deploy, the job stays with it. A job lost in three restarts fails instead of starting again.
 
 ## Sandboxes
 
-Every project gets one sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
+Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
+
+### Parallel jobs
+
+At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; a provider module can report its size with an optional `capacity()`, otherwise gespann runs 2.
+
+Jobs of one project and one owner run side by side, each in its own sandbox with its own checkout. Only a project's setup runs alone. A new sandbox takes over the project's current recipe: after each setup and each fix of the copy, gespann keeps the recipe directory as `DATA_DIR/projects/<id>/recipe.tgz` and copies it into the project's other sandboxes before their next job. Its first job builds the app's images from scratch unless the host's Docker cache already has them.
+
+All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign-in after 8 days, and OpenAI accepts each refresh token once, so two jobs must not refresh the same copy: while a refresh is due, one job starts Codex first and the others wait until its refresh is stored, then start with the new sign-in.
 
 | Provider | A sandbox is | Good for |
 |---|---|---|
@@ -75,7 +84,7 @@ The gespann image contains the `docker` CLI. For the local engine, mount its soc
 | `SSH_KNOWN_HOSTS` | the host's key line; then a changed host key stops gespann. Without it, the first key seen is pinned in `DATA_DIR/ssh/known_hosts` |
 | `SANDBOX_ROOT` | directory on the host for the sandboxes (default `~/gespann-sandboxes`); letters, digits, `. _ - /` only |
 
-Each sandbox is a directory under `SANDBOX_ROOT`. Every command gespann runs there has it as `HOME`, so `~/.codex` and gespann's own install stay per project. The SSH user's own `~/.codex/config.toml` is linked into every sandbox: give Codex its browser or computer-use tool there (e.g. an MCP server such as Playwright's on an Xvfb display), and export `DISPLAY` at the top of the user's `~/.bashrc` so `gespann shot` sees the same screen. All projects still share the machine's user, its processes and its Docker engine, and PR code runs with that user's rights: use a dedicated user on a machine that holds no secrets you would not hand to a PR. Recipes should name their Docker projects and ports after `$GESPANN_RUN` so two projects can run side by side. gespann starts no login shell: check with `ssh ci@ci.example.com 'command -v node npm git codex'` that the tools are on that `PATH`.
+Each sandbox is a directory under `SANDBOX_ROOT`. Every command gespann runs there has it as `HOME`, so `~/.codex` and gespann's own install stay per sandbox. On a host with a screen (`DISPLAY` set and Xvfb installed), each sandbox gets its own virtual screen while it runs a job, so parallel testers never see each other's browser: gespann starts Xvfb on a free display and sets `DISPLAY` for everything in that sandbox, Codex's browser tool included when its config forwards `DISPLAY` (step 7). The SSH user's own `~/.codex/config.toml` is linked into every sandbox: give Codex its browser or computer-use tool there (e.g. an MCP server such as Playwright's on an Xvfb display), and export `DISPLAY` at the top of the user's `~/.bashrc` so `gespann shot` sees the same screen. All projects still share the machine's user, its processes and its Docker engine, and PR code runs with that user's rights: use a dedicated user on a machine that holds no secrets you would not hand to a PR. Recipes should name their Docker projects and ports after `$GESPANN_RUN` so two projects can run side by side. gespann starts no login shell: check with `ssh ci@ci.example.com 'command -v node npm git codex'` that the tools are on that `PATH`.
 
 #### Prepare a Debian or Ubuntu host
 
@@ -133,14 +142,15 @@ These steps set up a CI server so the tester can click through the app in a real
    export PATH=/home/gespann/.local/bin:$PATH DISPLAY=:77 PLAYWRIGHT_BROWSERS_PATH=/home/gespann/.cache/ms-playwright
    ```
 
-7. Codex's browser tool, in `/home/gespann/.codex/config.toml`. gespann links this file into every sandbox:
+7. Codex's browser tool, in `/home/gespann/.codex/config.toml`. gespann links this file into every sandbox. `env_vars` passes the sandbox's own `DISPLAY` to the browser; a fixed `DISPLAY = ":77"` in `env` would put the browsers of parallel jobs on one screen:
 
    ```toml
    [mcp_servers.browser]
    command = "/home/gespann/.local/bin/playwright-mcp"
    args = ["--browser", "chromium", "--viewport-size", "1440x900"]
    startup_timeout_sec = 60
-   env = { DISPLAY = ":77", PLAYWRIGHT_BROWSERS_PATH = "/home/gespann/.cache/ms-playwright" }
+   env_vars = ["DISPLAY"]
+   env = { PLAYWRIGHT_BROWSERS_PATH = "/home/gespann/.cache/ms-playwright" }
    ```
 
 8. Check over SSH from the gespann server (the key works only from there; add your own address to `from=` for a check from elsewhere): `ssh -i gespann_ci gespann@<host> 'command -v node npm git curl docker codex playwright-mcp; echo $DISPLAY'` lists every tool and `:77`. Then set the variables above and deploy; the log line `sandboxes: ssh` confirms the provider.
@@ -149,7 +159,7 @@ Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo
 
 ### Your own provider
 
-`SANDBOX_PROVIDER=module:/path/to/provider.js` loads an ES module whose default export gets the server's environment and returns the sandbox object (sync or async). It implements the `Sandboxes` interface in [src/server/sandbox.ts](../src/server/sandbox.ts): `create`, `exists`, `home`, `ensureRunning`, `keepAlive`, `stop`, `remove`, `exec`, `start`, `status`, `kill`, `readFile`, `writeFile`, `download`, and optionally `startRecording` and `stopRecording` for a video of the tester's screen, `jobScript(home)` for a shell script that runs before every job and may export variables through `<home>/gespann/env.sh` (for example a build cache that survives the sandbox stopping), and `testerNote` for how to drive the browser your sandbox provides. gespann checks the methods at startup and logs `sandboxes: <kind>`.
+`SANDBOX_PROVIDER=module:/path/to/provider.js` loads an ES module whose default export gets the server's environment and returns the sandbox object (sync or async). It implements the `Sandboxes` interface in [src/server/sandbox.ts](../src/server/sandbox.ts): `create`, `exists`, `home`, `ensureRunning`, `keepAlive`, `stop`, `remove`, `exec`, `start`, `status`, `kill`, `readFile`, `writeFile`, `download`, and optionally `startRecording` and `stopRecording` for a video of the tester's screen, `jobScript(home)` for a shell script that runs before every job and may export variables through `<home>/gespann/env.sh` (for example a build cache that survives the sandbox stopping), `testerNote` for how to drive the browser your sandbox provides, and `capacity` for the host's size ([Parallel jobs](#parallel-jobs)). gespann checks the methods at startup and logs `sandboxes: <kind>`.
 
 ```js
 // provider.js: read your settings from env, return the sandboxes

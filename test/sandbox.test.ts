@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { seal } from "../src/server/codex.ts";
+import { open, seal, withCodex } from "../src/server/codex.ts";
 import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
 import type { Github } from "../src/server/github.ts";
@@ -176,7 +176,7 @@ class FakeSandboxes implements Sandboxes {
   async writeFile(_id: string, path: string, content: string) {
     this.files.set(path, content);
   }
-  async download() {
+  async download(_id: string, _path: string) {
     return Buffer.from("");
   }
 }
@@ -392,4 +392,199 @@ test("worker: a run cancelled while GitHub answers does not start", async () => 
   assert.equal(db.job(job.id)?.status, "cancelled", db.job(job.id)?.error ?? "");
   assert.equal(db.run_(run)?.status, "cancelled");
   assert.deepEqual(sb.commands, []);
+});
+
+test("parallel: two PR runs of one project run at once in two sandboxes; the new one takes over the recipe as the project's bundle", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_state: "connected", codex_auth: seal(config.sessionSecret, JSON.stringify({ tokens: {}, last_refresh: new Date().toISOString() })) });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "first", setup: "ready", recipe: "version: 1" });
+  class Pool extends FakeSandboxes {
+    readonly live = new Set(["first"]);
+    override async create(opts: { name: string }) {
+      this.created.push(opts.name);
+      this.live.add("second");
+      return { id: "second" };
+    }
+    override async exists(id: string) {
+      return this.live.has(id);
+    }
+    override async exec(id: string, command: string) {
+      // Unpacking the bundle brings the recipe into that sandbox.
+      if (command.includes("tar -xzf project.tgz")) this.files.set(`/srv/${id}/gespann/project/verify.yml`, "version: 1");
+      return super.exec(id, command);
+    }
+    override async download(_id: string, path: string) {
+      return Buffer.from(path.endsWith("project.tgz") ? "TGZ" : "");
+    }
+  }
+  const sb = new Pool();
+  sb.files.set("/srv/first/gespann/project/verify.yml", "version: 1");
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const jobs = [4, 5].map((pr, i) => {
+    const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
+    const id = db.enqueue(p, "run", run);
+    db.claimJob(id);
+    return db.job(id)!;
+  });
+  await Promise.all(jobs.map((job) => processJob({ db, sandboxes: sb, github: () => github, config }, job)));
+  for (const job of jobs) assert.equal(db.job(job.id)?.status, "done", db.job(job.id)?.error ?? "");
+  assert.deepEqual(sb.created, ["gespann-acme-shop"], "one more sandbox, for the second run");
+  assert.deepEqual(db.slots(p).map((s) => [s.sandbox_id, s.job_id, s.bundle]), [["first", null, 1], ["second", null, 1]], "both free again, both on the same recipe");
+  const second = db.job(jobs[1]!.id)?.log ?? "";
+  assert.match(second, /created sandbox second \(docker\), the project's sandbox number 2: the others are busy/);
+  assert.match(second, /took over the project's current recipe/);
+  assert.doesNotMatch(second, /preparing the environment again/, "no second setup");
+  assert.match(second, /the PR has a newer push: its comment stays with the newer run/, "a run of an older head does not touch the PR comment");
+  assert.equal(db.project(p)?.bundle, 1);
+  assert.equal(readFileSync(join(config.dataDir, "projects", String(p), "recipe.tgz"), "utf8"), "TGZ");
+  assert.equal(sb.files.get("/srv/second/gespann/project.tgz.b64"), Buffer.from("TGZ").toString("base64"));
+  const all = sb.commands.join("\n");
+  assert.match(all, /tar -czf \/srv\/first\/gespann\/project\.tgz -C \/srv\/first\/gespann project/);
+  assert.match(all, /cd \/srv\/first\/repo && gespann verify prepare --recipe \/srv\/first\/gespann\/project\/verify\.yml --pr 4 /);
+  assert.match(all, /cd \/srv\/second\/repo && gespann verify prepare --recipe \/srv\/second\/gespann\/project\/verify\.yml --pr 5 /, "each run in its own checkout");
+  assert.ok(all.indexOf("verify prepare --recipe /srv/second") < all.indexOf("verify finish --recipe /srv/first"), "side by side: the second copy comes up before the first goes down");
+
+  // A later run takes a free sandbox again instead of making a third.
+  const run = db.createRun({ project_id: p, pr: 6, title: "t", head: "h6", base: "b", base_ref: "main", token: "2".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.equal(sb.created.length, 1);
+  assert.doesNotMatch(db.job(job.id)?.log ?? "", /took over/, "it already has the current recipe");
+});
+
+/** A sandbox stand-in with files only, for the Codex sign-in. */
+function authBox() {
+  const files = new Map<string, string>();
+  const sb = {
+    kind: "test",
+    home: (id: string) => `/srv/${id}`,
+    exec: async (_id: string, command: string) => {
+      const rm = /rm -f ~\/\.codex\/auth\.json/.test(command);
+      if (rm) for (const k of [...files.keys()]) if (k.endsWith("/.codex/auth.json")) files.delete(k);
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    writeFile: async (_id: string, path: string, content: string) => void files.set(path, content),
+    readFile: async (_id: string, path: string) => files.get(path) ?? null,
+  } as unknown as Sandboxes;
+  return { sb, files };
+}
+
+const auth = (token: string, daysAgo: number) => JSON.stringify({ tokens: { refresh_token: token }, last_refresh: new Date(Date.now() - daysAgo * 86_400_000).toISOString() });
+
+test("Codex sign-in: jobs of one owner use it side by side while no refresh is due", async () => {
+  const config = loadConfig({});
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_auth: seal(config.sessionSecret, auth("r1", 1)) });
+  const { sb } = authBox();
+  let meet: () => void = () => {};
+  const met = new Promise<void>((ok) => (meet = ok));
+  const both = Promise.all([
+    withCodex(db, sb, config, u.id, "a", () => met, 10),
+    withCodex(db, sb, config, u.id, "b", async () => meet(), 10),
+  ]);
+  await Promise.race([both, new Promise((_, no) => setTimeout(() => no(new Error("the second job waited for the first")), 2000))]);
+});
+
+test("Codex sign-in: while a refresh is due one job refreshes and the others start with the new sign-in; an older refresh never replaces a newer one", async () => {
+  const config = loadConfig({});
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_auth: seal(config.sessionSecret, auth("r1", 9)) });
+  const { sb, files } = authBox();
+  const stored = () => JSON.parse(open(config.sessionSecret, db.codexAuth(u.id)!)) as { tokens: { refresh_token: string } };
+  const seen: string[] = [];
+  let finishFirst: () => void = () => {};
+  const first = withCodex(db, sb, config, u.id, "a", async () => {
+    seen.push(`a:${JSON.parse(files.get("/srv/a/.codex/auth.json")!).tokens.refresh_token}`);
+    // Codex refreshes: the old refresh token is spent.
+    files.set("/srv/a/.codex/auth.json", auth("r2", 0));
+    await new Promise<void>((ok) => (finishFirst = ok));
+  }, 10);
+  await new Promise((ok) => setTimeout(ok, 1));
+  const second = withCodex(db, sb, config, u.id, "b", async () => {
+    seen.push(`b:${JSON.parse(files.get("/srv/b/.codex/auth.json")!).tokens.refresh_token}`);
+  }, 10);
+  await second;
+  assert.deepEqual(seen, ["a:r1", "b:r2"], "the second job waited for the refresh and got its result, while the first still ran");
+  assert.equal(stored().tokens.refresh_token, "r2");
+  finishFirst();
+  await first;
+
+  // The owner disconnected Codex during a job: its refresh does not bring the sign-in back.
+  db.setCodex(u.id, { codex_auth: seal(config.sessionSecret, auth("r5", 0)) });
+  await withCodex(db, sb, config, u.id, "d", async () => {
+    db.setCodex(u.id, { codex_auth: null });
+    files.set("/srv/d/.codex/auth.json", auth("r6", -1));
+  }, 10);
+  assert.equal(db.codexAuth(u.id), null);
+
+  // A job that started with an older sign-in and refreshed it later than another job stored a newer one.
+  db.setCodex(u.id, { codex_auth: seal(config.sessionSecret, auth("r9", 0)) });
+  await withCodex(db, sb, config, u.id, "c", async () => void files.set("/srv/c/.codex/auth.json", auth("r3", 2)), 10);
+  assert.equal(stored().tokens.refresh_token, "r9");
+});
+
+test("parallel: two PR runs that both find no recipe anywhere prepare the environment once; the other takes over the result", async () => {
+  const RECIPE = "version: 1\ntrigger:\n  paths: ['**']\nenv:\n  up: ./up.sh\n  down: ./down.sh\n  url: http://copy\n";
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_state: "connected", codex_auth: seal(config.sessionSecret, JSON.stringify({ tokens: {}, last_refresh: new Date().toISOString() })) });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { setup: "ready", recipe: "version: 1" });
+  class Pool extends FakeSandboxes {
+    private n = 0;
+    readonly live = new Set<string>();
+    setups = 0;
+    override async create(opts: { name: string }) {
+      this.created.push(opts.name);
+      const id = `box${++this.n}`;
+      this.live.add(id);
+      return { id };
+    }
+    override async exists(id: string) {
+      return this.live.has(id);
+    }
+    override async exec(id: string, command: string) {
+      if (command.includes("tar -xzf project.tgz")) this.files.set(`/srv/${id}/gespann/project/verify.yml`, "version: 1");
+      if (command.startsWith("curl ")) return { exitCode: 0, stdout: "200", stderr: "" };
+      return super.exec(id, command);
+    }
+    private procs: string[] = [];
+    override async start(id: string, command: string) {
+      if (command.includes("setup-prompt.txt")) {
+        this.setups++;
+        this.files.set(`/srv/${id}/gespann/project/verify.yml`, RECIPE);
+      }
+      await super.start(id, command);
+      return this.procs.push(command);
+    }
+    // The setup's check of the copy passes: it comes up and answers.
+    override async status(_id: string, processId: number): Promise<ProcessStatus> {
+      const up = this.procs[processId - 1]?.includes("verify prepare") && this.procs[processId - 1]?.includes("--pr 0");
+      return { running: false, status: "exited", exitCode: 0, stdout: up ? '{"ok":true,"url":"http://copy","run":"r0"}' : "", stderr: "" };
+    }
+    override async download(_id: string, path: string) {
+      return Buffer.from(path.endsWith("project.tgz") ? "TGZ" : "");
+    }
+  }
+  const sb = new Pool();
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const jobs = [4, 5].map((pr, i) => {
+    const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
+    const id = db.enqueue(p, "run", run);
+    db.claimJob(id);
+    return db.job(id)!;
+  });
+  await Promise.all(jobs.map((job) => processJob({ db, sandboxes: sb, github: () => github, config }, job)));
+  assert.equal(sb.setups, 1, "one setup for both runs");
+  const logs = jobs.map((j) => db.job(j.id)?.log ?? "");
+  assert.equal(logs.filter((l) => /preparing the environment again/.test(l)).length, 1);
+  assert.equal(logs.filter((l) => /took over the project's current recipe/.test(l)).length, 1);
+  assert.equal(db.project(p)?.bundle, 1);
 });

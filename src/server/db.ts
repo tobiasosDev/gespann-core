@@ -36,7 +36,10 @@ export interface Project {
   default_branch: string;
   criteria: string;
   model: string | null;
+  /** The project's first sandbox, from before projects had several; `slots` holds them all now. */
   sandbox_id: string | null;
+  /** Version of the recipe bundle on the server (DATA_DIR/projects/<id>/recipe.tgz); 0 while there is none. */
+  bundle: number;
   codex: CodexState;
   /** JSON {url, code, lines} while a device login waits for the user. */
   codex_login: string | null;
@@ -69,6 +72,16 @@ export interface Job {
   heartbeat: string | null;
   /** JSON [[sandboxId, processId], ...]: the background commands it started, stopped when it starts again. */
   procs: string;
+}
+
+/** One of a project's sandboxes. A job holds one at a time, so parallel jobs never share a checkout. */
+export interface Slot {
+  id: number;
+  project_id: number;
+  sandbox_id: string;
+  job_id: number | null;
+  /** The recipe bundle version this sandbox has; 0 when unknown. */
+  bundle: number;
 }
 
 export interface Run {
@@ -128,6 +141,9 @@ create table if not exists holds (
   project_id integer not null references projects(id), pr integer not null,
   held integer not null default 0, approved_by text, approved_head text, comment_id integer, updated text not null,
   primary key (project_id, pr));
+create table if not exists slots (
+  id integer primary key, project_id integer not null references projects(id), sandbox_id text not null,
+  job_id integer, bundle integer not null default 0);
 create table if not exists api_tokens (
   id integer primary key, user_id integer not null references users(id), name text not null,
   hash text not null unique, hint text not null, created text not null, last_used text);
@@ -179,6 +195,7 @@ export class Db {
     }
     const pcols = new Set((this.sql.prepare("pragma table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
+    if (!pcols.has("bundle")) this.sql.exec("alter table projects add column bundle integer not null default 0");
     if (!pcols.has("gate")) {
       // New projects start with the gate off; projects from before the setting keep the gate they had.
       this.sql.exec("alter table projects add column gate integer not null default 0");
@@ -329,13 +346,67 @@ export class Db {
     return this.run("insert into jobs (project_id, kind, status, run_id, created) values (?, ?, 'queued', ?, ?)", projectId, kind, runId, now());
   }
 
-  /** The oldest queued job whose project and owner have no running job: one sandbox and one Codex sign-in, one job at a time. */
+  /**
+   * The oldest queued job that may start now. Jobs run side by side, also of one project and one owner,
+   * each in its own sandbox; only a setup runs alone in its project, and no job overtakes a queued setup.
+   */
   nextJob(): Job | undefined {
     return this.one<Job>(
-      `select j.* from jobs j join projects p on p.id = j.project_id where j.status = 'queued' and not exists (
-         select 1 from jobs r join projects rp on rp.id = r.project_id where r.status = 'running' and (r.project_id = j.project_id or rp.owner_id = p.owner_id)
-       ) order by j.id limit 1`,
+      `select j.* from jobs j where j.status = 'queued'
+         and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
+         and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
+       order by j.id limit 1`,
     );
+  }
+
+  /**
+   * The project sandbox this job uses: the one it held before a restart, or a free one. A slot is free
+   * when no queued or running job holds it. Undefined when all are taken: the caller makes a new one.
+   */
+  takeSlot(projectId: number, jobId: number): Slot | undefined {
+    // Projects from before slots: their one sandbox becomes the first slot.
+    const p = this.project(projectId);
+    if (p?.sandbox_id && !this.one("select 1 from slots where project_id = ?", projectId)) this.run("insert into slots (project_id, sandbox_id) values (?, ?)", projectId, p.sandbox_id);
+    const mine = this.one<Slot>("select * from slots where project_id = ? and job_id = ? order by id limit 1", projectId, jobId);
+    if (mine) return mine;
+    const free = this.all<Slot>(
+      "select s.* from slots s where s.project_id = ? and (s.job_id is null or not exists (select 1 from jobs j where j.id = s.job_id and j.status in ('queued', 'running'))) order by s.id",
+      projectId,
+    );
+    for (const s of free) {
+      // Conditional, so a second server (during a rolling deploy) cannot take the same slot.
+      const taken = Number(this.sql.prepare("update slots set job_id = ? where id = ? and job_id is ?").run(jobId, s.id, s.job_id).changes) === 1;
+      if (taken) return { ...s, job_id: jobId };
+    }
+    return undefined;
+  }
+
+  addSlot(projectId: number, sandboxId: string, jobId: number): Slot {
+    const id = this.run("insert into slots (project_id, sandbox_id, job_id) values (?, ?, ?)", projectId, sandboxId, jobId);
+    return this.one<Slot>("select * from slots where id = ?", id) as Slot;
+  }
+
+  slot(id: number): Slot | undefined {
+    return this.one<Slot>("select * from slots where id = ?", id);
+  }
+
+  slots(projectId: number): Slot[] {
+    return this.all<Slot>("select * from slots where project_id = ? order by id", projectId);
+  }
+
+  setSlotBundle(id: number, bundle: number): void {
+    this.run("update slots set bundle = ? where id = ?", bundle, id);
+  }
+
+  /** A slot whose sandbox is gone for good. */
+  dropSlot(id: number): void {
+    const s = this.slot(id);
+    this.run("delete from slots where id = ?", id);
+    if (s) this.run("update projects set sandbox_id = null where id = ? and sandbox_id = ?", s.project_id, s.sandbox_id);
+  }
+
+  releaseSlots(jobId: number): void {
+    this.run("update slots set job_id = null where job_id = ?", jobId);
   }
 
   job(id: number): Job | undefined {
@@ -346,9 +417,6 @@ export class Db {
     return this.all<Job>("select * from jobs where project_id = ? order by id desc limit ?", projectId, limit);
   }
 
-  pendingJobs(projectId: number): number {
-    return this.one<{ n: number }>("select count(*) n from jobs where project_id = ? and status in ('queued', 'running')", projectId)?.n ?? 0;
-  }
 
   startJob(id: number): void {
     this.run("update jobs set status = 'running', started = coalesce(started, ?), heartbeat = ? where id = ?", now(), now(), id);
