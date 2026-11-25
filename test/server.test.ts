@@ -236,3 +236,36 @@ test("the operator API needs the exact admin token", async () => {
   const none = createApp({ config: loadConfig({ DATA_DIR: "/tmp/gespann-test-data" }), db, github: () => { throw new Error("no app"); }, githubReady: () => false });
   assert.equal((await none.request("/ops/projects", { headers: { Authorization: "Bearer " } })).status, 404, "no admin token, no operator API");
 });
+
+test("ALLOWED_USERS: only listed GitHub logins sign in; others' sessions and tokens stop working", async () => {
+  const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data", ALLOWED_USERS: " Tobi , ops" });
+  assert.deepEqual(config.allowedUsers, ["tobi", "ops"]);
+  assert.deepEqual(loadConfig({ DATA_DIR: "/tmp/gespann-test-data" }).allowedUsers, [], "unset lets everyone in");
+  assert.throws(() => loadConfig({ ALLOWED_USERS: " , " }), /names no GitHub login/, "an empty list never opens the instance");
+  const db = new Db(":memory:");
+  let who = { id: 2, login: "eve", name: null, avatar_url: "" };
+  const gh = { exchangeCode: async () => "tok", user: async () => who, userInstallations: async () => [], userRepos: async () => [], installUrl: () => "https://github.com/apps/x/installations/new" } as unknown as Github;
+  const server = createApp({ config, db, github: () => gh, githubReady: () => true });
+  const callback = () => server.request("/auth/github/callback?state=st&code=c", { headers: { Cookie: "gs_oauth=st" } });
+
+  const denied = await callback();
+  assert.equal(denied.headers.get("location"), "/?closed=1");
+  assert.equal(denied.headers.get("set-cookie")?.includes("gs="), false, "no session for a login not on the list");
+  assert.deepEqual({ ...db.sql.prepare("select (select count(*) from users) u, (select count(*) from sessions) s").get() }, { u: 0, s: 0 }, "no user and no session for a login not on the list");
+
+  who = { id: 1, login: "tobi", name: null, avatar_url: "" };
+  const ok = await callback();
+  assert.equal(ok.headers.get("location"), "/projects/new");
+  assert.match(ok.headers.get("set-cookie") ?? "", /gs=[0-9a-f]{64}/);
+
+  // Eve signed in before the instance was closed: her session and her agent token are refused now.
+  const eve = db.upsertUser({ github_id: 2, login: "eve", name: null, avatar: null });
+  db.setRepos(eve.id, []);
+  db.createSession("e".repeat(64), eve.id);
+  const cookie = { Cookie: `gs=${"e".repeat(64)}`, "x-gespann": "1" };
+  assert.equal((await (await server.request("/api/me", { headers: cookie })).json()).user, null);
+  assert.equal((await server.request("/api/projects", { headers: cookie })).status, 401);
+  const { token } = db.createToken(eve.id, "agent");
+  const mcp = await server.request("/mcp", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
+  assert.equal(mcp.status, 401);
+});
