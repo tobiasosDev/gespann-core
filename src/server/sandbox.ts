@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 /**
- * Where gespann runs PR code: one sandbox per project, kept between jobs, plus a short-lived one for
- * each Codex sign-in. `SANDBOX_PROVIDER` picks the implementation: Docker (local, or a CI server
+ * Where gespann runs PR code: sandboxes per project, kept between jobs, one for each of its jobs
+ * running at once, plus a short-lived one for each Codex sign-in. `SANDBOX_PROVIDER` picks the implementation: Docker (local, or a CI server
  * through `DOCKER_HOST`), a plain SSH host, or a module of your own (`module:<path>`).
  */
 export interface Sandboxes {
@@ -34,6 +34,11 @@ export interface Sandboxes {
   readFile(id: string, path: string): Promise<string | null>;
   writeFile(id: string, path: string, content: string): Promise<void>;
   download(id: string, path: string): Promise<Buffer>;
+  /**
+   * Optional: the size of the machine sandboxes run on, read once at startup to decide how many jobs
+   * run at once (`MAX_PARALLEL_JOBS` overrides it). Without it, gespann runs two.
+   */
+  capacity?(): Promise<{ cpus: number; memoryGb: number }>;
   /** Optional: records the sandbox's screen to an mp4 at `file` while the tester works. */
   startRecording?(id: string, file: string): Promise<void>;
   stopRecording?(id: string): Promise<void>;
@@ -176,7 +181,8 @@ export const SAFE_PATH = /^\/[A-Za-z0-9._\/-]+$/;
  * Sets up a sandbox's shell: `HOME` is the sandbox, and Codex's sign-in and global npm installs (the
  * gespann command) live below it, so a sandbox works without root and projects sharing a machine
  * stay apart. The machine user's own `~/.codex/config.toml` (its MCP tools, e.g. a browser) is
- * linked into each sandbox, so the tester gets the browser the machine sets up.
+ * linked into each sandbox, so the tester gets the browser the machine sets up. A sandbox with its own
+ * screen (`.gespann-display`) gets that `DISPLAY`.
  */
 export function prelude(home: string): string {
   const h = q(home);
@@ -186,6 +192,8 @@ export function prelude(home: string): string {
     `export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"`,
     `if [ "$_gespann_user_home" != "$HOME" ] && [ -f "$_gespann_user_home/.codex/config.toml" ] && [ ! -e "$CODEX_HOME/config.toml" ]; then mkdir -p "$CODEX_HOME" && ln -s "$_gespann_user_home/.codex/config.toml" "$CODEX_HOME/config.toml"; fi`,
     `unset _gespann_user_home`,
+    // A sandbox with its own screen (SSH hosts: see Ssh.screen) uses it instead of the machine's.
+    `if [ -s "$HOME/.gespann-display" ]; then export DISPLAY="$(cat "$HOME/.gespann-display")"; fi`,
     `cd "$HOME" || exit 1`,
   ].join("\n");
 }
@@ -268,6 +276,9 @@ export abstract class ShellSandboxes {
 }
 
 const suffix = () => randomBytes(3).toString("hex");
+
+/** Size of a sandbox's own virtual screen on an SSH host; the tester's browser viewport is 1440x900. */
+const SCREEN = "1440x900x24";
 
 export interface DockerOptions {
   image: string;
@@ -365,6 +376,12 @@ export class Docker extends ShellSandboxes implements Sandboxes {
 
   async keepAlive(): Promise<void> {}
 
+  /** The engine's machine, which a remote `DOCKER_HOST` makes the CI server. */
+  async capacity(): Promise<{ cpus: number; memoryGb: number }> {
+    const [cpus, bytes] = (await this.must(["info", "--format", "{{.NCPU}} {{.MemTotal}}"], "info", 60_000)).split(/\s+/).map(Number);
+    return { cpus: cpus ?? 0, memoryGb: (bytes ?? 0) / 1024 ** 3 };
+  }
+
   async stop(id: string): Promise<void> {
     await this.must(["stop", "-t", "10", id], "stop");
   }
@@ -381,6 +398,30 @@ export class Docker extends ShellSandboxes implements Sandboxes {
     if (r.code !== 0 && /^(Error response from daemon|Cannot connect to the Docker daemon|error during connect)/m.test(err)) throw new Error(`docker exec: ${err.trim().slice(0, 300)}`);
     return r;
   }
+}
+
+/**
+ * Starts a virtual screen for the sandbox at `dir` unless it has a live one, and writes its display to
+ * `dir/.gespann-display` (which `prelude` exports). Does nothing on a machine without `DISPLAY` or Xvfb.
+ */
+export function screenScript(dir: string): string {
+  return [
+    `f=${q(`${dir}/.gespann-display`)}`,
+    `if [ -z "\${DISPLAY:-}" ] || ! command -v Xvfb >/dev/null 2>&1; then rm -f "$f" "$f.pid"; exit 0; fi`,
+    `if [ -s "$f" ] && [ -s "$f.pid" ] && kill -0 "$(cat "$f.pid")" 2>/dev/null; then exit 0; fi`,
+    `rm -f "$f" "$f.pid" "$f.n"`,
+    `s="$(command -v setsid || true)"`,
+    `nohup $s Xvfb -displayfd 3 -screen 0 ${SCREEN} -nolisten tcp 3> "$f.n" > /dev/null 2>&1 < /dev/null &`,
+    `echo $! > "$f.pid"`,
+    `i=0; while [ ! -s "$f.n" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done`,
+    `n="$(tr -dc 0-9 < "$f.n")"; rm -f "$f.n"`,
+    `if [ -z "$n" ]; then kill "$(cat "$f.pid")" 2>/dev/null; rm -f "$f.pid"; echo "Xvfb did not start" >&2; exit 1; fi`,
+    `echo ":$n" > "$f"`,
+  ].join("\n");
+}
+
+export function stopScreenScript(dir: string): string {
+  return `f=${q(`${dir}/.gespann-display`)}; p="$(cat "$f.pid" 2>/dev/null)"; [ -n "$p" ] && kill "$p" 2>/dev/null; rm -f "$f" "$f.pid"; exit 0`;
 }
 
 export interface SshOptions {
@@ -463,16 +504,37 @@ export class Ssh extends ShellSandboxes implements Sandboxes {
 
   async ensureRunning(id: string): Promise<void> {
     if (!(await this.exists(id))) throw new Error(`sandbox directory ${id} is gone on ${this.o.host}`);
+    await this.screen(id);
+  }
+
+  /**
+   * Sandboxes share the machine, and jobs run side by side: each sandbox gets its own virtual screen,
+   * so a tester's browser and screenshots never show another job's window. Only on a machine set up
+   * with a screen (`DISPLAY` set and Xvfb installed); Xvfb picks a free display number itself.
+   */
+  private async screen(id: string): Promise<void> {
+    const r = await this.raw(screenScript(id), { timeoutMs: 60_000 });
+    if (r.code !== 0) throw new Error(`could not start the sandbox's screen on ${this.o.host}: ${r.stderr.toString("utf8").trim().slice(0, 300)}`);
   }
 
   async keepAlive(): Promise<void> {}
 
-  /** The machine keeps running; the copy is already down when a job ends. */
-  async stop(): Promise<void> {}
+  async capacity(): Promise<{ cpus: number; memoryGb: number }> {
+    const r = await this.raw(`nproc; awk '/^MemTotal:/ { print $2 }' /proc/meminfo`, { timeoutMs: 60_000 });
+    const [cpus, kb] = r.stdout.toString("utf8").trim().split(/\s+/).map(Number);
+    if (r.code !== 0) throw new Error(`ssh ${this.o.host}: ${r.stderr.toString("utf8").trim().slice(0, 200)}`);
+    return { cpus: cpus ?? 0, memoryGb: (kb ?? 0) / 1024 ** 2 };
+  }
+
+  /** The machine keeps running; the copy is already down when a job ends. The sandbox's screen goes. */
+  async stop(id: string): Promise<void> {
+    await this.raw(stopScreenScript(id), { timeoutMs: 60_000 });
+  }
 
   async remove(id: string): Promise<void> {
     // Only directories this provider made: absolute, named gespann-…
     if (!/^\/.+\/gespann-[A-Za-z0-9_.-]+$/.test(id)) throw new Error(`refusing to delete ${id}: not a gespann sandbox directory`);
+    await this.stop(id).catch(() => undefined);
     const r = await this.raw(`chmod -R u+w ${q(id)} 2>/dev/null; rm -rf -- ${q(id)}`, { timeoutMs: 10 * 60_000 });
     if (r.code !== 0) throw new Error(`could not delete ${id}: ${r.stderr.toString("utf8").slice(0, 300)}`);
   }

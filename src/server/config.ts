@@ -11,6 +11,8 @@ export interface Config {
   sandboxProvider: string;
   docker: { image: string; args: string[]; command: string[]; user: string; home: string };
   ssh: { host: string; port: string; keyFile: string; key: string; knownHosts: string; root: string };
+  /** `MAX_PARALLEL_JOBS`: how many jobs run at once; null computes it from the sandbox host. */
+  maxParallel: number | null;
   /** git ref of gespann-core that sandboxes install, so sandbox and server run the same code. */
   gespannRef: string;
   /** Guards /setup (GitHub App creation). */
@@ -65,6 +67,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (sandboxProvider === "docker" && !docker.image) throw new Error("SANDBOX_PROVIDER=docker needs SANDBOX_IMAGE");
   if (sandboxProvider === "docker" && !SAFE_PATH.test(docker.home)) throw new Error("SANDBOX_HOME has to be an absolute path of letters, digits, . _ - and /");
   if (sandboxProvider === "ssh" && !ssh.host) throw new Error("SANDBOX_PROVIDER=ssh needs SSH_HOST");
+  const max = (env.MAX_PARALLEL_JOBS ?? "").trim();
+  if (max && !/^[1-9]\d{0,2}$/.test(max)) throw new Error(`MAX_PARALLEL_JOBS ${max} is not a whole number from 1 to 999`);
   return {
     baseUrl,
     port,
@@ -74,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxProvider,
     docker,
     ssh,
+    maxParallel: max ? Number(max) : null,
     gespannRef: env.GESPANN_REF ?? "main",
     adminToken: env.ADMIN_TOKEN ?? "",
     production,

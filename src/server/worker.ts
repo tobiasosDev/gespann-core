@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verify/prompt.ts";
@@ -7,7 +7,7 @@ import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/s
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
-import type { Db, Job, Project, Run } from "./db.ts";
+import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import { withCodex } from "./codex.ts";
 import type { Github } from "./github.ts";
 import { q, runLong, type Sandboxes } from "./sandbox.ts";
@@ -25,6 +25,7 @@ export interface Deps {
 /** A project's sandbox and the places in it: the repo checkout, gespann's files, the recipe. */
 interface Box {
   id: string;
+  slot: Slot;
   repo: string;
   gespann: string;
   project: string;
@@ -32,28 +33,35 @@ interface Box {
   core: string;
 }
 
-function box(sb: Sandboxes, id: string): Box {
+function box(sb: Sandboxes, slot: Slot): Box {
+  const id = slot.sandbox_id;
   const home = sb.home(id);
   const gespann = `${home}/gespann`;
-  return { id, repo: `${home}/repo`, gespann, project: `${gespann}/project`, recipe: `${gespann}/project/verify.yml`, core: `${gespann}/core` };
+  return { id, slot, repo: `${home}/repo`, gespann, project: `${gespann}/project`, recipe: `${gespann}/project/verify.yml`, core: `${gespann}/core` };
 }
 
-/** One sandbox per project, reused across jobs: it keeps the repo, the images and the Codex login. */
-async function ensureSandbox(d: Deps, p: Project, log: (s: string) => void): Promise<Box> {
-  let id = p.sandbox_id;
+/**
+ * A sandbox of the project for this job, reused across jobs: it keeps the repo, the images and the
+ * build caches. Each job holds its own, so jobs of one project run side by side without sharing a
+ * checkout; a project gets another sandbox when all of its sandboxes are busy.
+ */
+async function ensureSandbox(d: Deps, p: Project, job: Job, log: (s: string) => void): Promise<Box> {
+  let slot = d.db.takeSlot(p.id, job.id);
   // A sandbox deleted by hand, or made by the provider the instance used before, is replaced.
-  if (id && !(await d.sandboxes.exists(id))) {
-    log(`sandbox ${id} no longer exists on ${d.sandboxes.kind}; creating a new one`);
-    id = null;
+  while (slot && !(await d.sandboxes.exists(slot.sandbox_id))) {
+    log(`sandbox ${slot.sandbox_id} no longer exists on ${d.sandboxes.kind}; creating a new one`);
+    d.db.dropSlot(slot.id);
+    slot = d.db.takeSlot(p.id, job.id);
   }
-  if (!id) {
+  if (!slot) {
+    const n = d.db.slots(p.id).length;
     const s = await d.sandboxes.create({ name: `gespann-${p.repo.replace(/[^A-Za-z0-9-]+/g, "-")}`.slice(0, 60), purpose: "project", labels: { gespann_project: String(p.id) } });
-    id = s.id;
-    d.db.updateProject(p.id, { sandbox_id: id });
-    log(`created sandbox ${id} (${d.sandboxes.kind})`);
-  }
-  await d.sandboxes.ensureRunning(id);
-  const b = box(d.sandboxes, id);
+    slot = d.db.addSlot(p.id, s.id, job.id);
+    if (!n) d.db.updateProject(p.id, { sandbox_id: s.id });
+    log(`created sandbox ${s.id} (${d.sandboxes.kind})${n ? `, the project's sandbox number ${n + 1}: the others are busy` : ""}`);
+  } else if (d.db.slots(p.id).length > 1) log(`using sandbox ${slot.sandbox_id}`);
+  await d.sandboxes.ensureRunning(slot.sandbox_id);
+  const b = box(d.sandboxes, slot);
   try {
     await installGespann(d, b, log);
   } catch (err) {
@@ -61,6 +69,76 @@ async function ensureSandbox(d: Deps, p: Project, log: (s: string) => void): Pro
     throw err;
   }
   return b;
+}
+
+const bundleFile = (d: Deps, projectId: number) => join(d.config.dataDir, "projects", String(projectId), "recipe.tgz");
+
+/**
+ * Keeps the sandbox's recipe dir (recipe, scripts, notes) as the project's current bundle on the
+ * server, so the project's other sandboxes take it over. Called after a setup or repair passed.
+ */
+async function saveBundle(d: Deps, p: Project, b: Box): Promise<void> {
+  const tgz = `${b.gespann}/project.tgz`;
+  const r = await d.sandboxes.exec(b.id, `tar -czf ${tgz} -C ${b.gespann} project 2>&1`, 120);
+  if (r.exitCode !== 0) throw new Error(`could not pack the recipe: ${r.stdout.slice(-300)}`);
+  const data = await d.sandboxes.download(b.id, tgz);
+  await d.sandboxes.exec(b.id, `rm -f ${tgz}`, 30).catch(() => undefined);
+  const file = bundleFile(d, p.id);
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(`${file}.tmp`, data);
+  renameSync(`${file}.tmp`, file);
+  const version = (d.db.project(p.id)?.bundle ?? 0) + 1;
+  d.db.updateProject(p.id, { bundle: version });
+  d.db.setSlotBundle(b.slot.id, version);
+  b.slot.bundle = version;
+}
+
+/** Projects whose first bundle is being made from a sandbox that has the recipe. */
+const bootstrapping = new Map<number, Promise<void>>();
+
+/**
+ * Brings the project's current recipe into this sandbox when it has an older one or none. Projects
+ * from before bundles get theirs from a sandbox that has a recipe. True when the sandbox has a recipe.
+ */
+async function syncRecipe(d: Deps, p: Project, b: Box, log: (s: string) => void): Promise<boolean> {
+  const has = async (box: Box) => (await d.sandboxes.exec(box.id, `test -f ${box.recipe}`, 30)).exitCode === 0;
+  const saved = () => !!d.db.project(p.id)?.bundle && existsSync(bundleFile(d, p.id));
+  while (!saved() && bootstrapping.has(p.id)) await bootstrapping.get(p.id);
+  if (!saved()) {
+    const made = (async () => {
+      for (const s of [b.slot, ...d.db.slots(p.id).filter((s) => s.id !== b.slot.id)]) {
+        const other = s.id === b.slot.id ? b : box(d.sandboxes, s);
+        if (!(await d.sandboxes.exists(other.id).catch(() => false)) || !(await has(other).catch(() => false))) continue;
+        await saveBundle(d, p, other);
+        return;
+      }
+    })();
+    bootstrapping.set(p.id, made.catch(() => undefined));
+    try {
+      await made;
+    } finally {
+      bootstrapping.delete(p.id);
+    }
+  }
+  b.slot.bundle = d.db.slot(b.slot.id)?.bundle ?? b.slot.bundle;
+  const version = d.db.project(p.id)?.bundle ?? 0;
+  if (version && b.slot.bundle !== version && existsSync(bundleFile(d, p.id))) {
+    const data = readFileSync(bundleFile(d, p.id));
+    const tgz = `${b.gespann}/project.tgz`;
+    await d.sandboxes.exec(b.id, `mkdir -p ${b.gespann}`, 30);
+    await d.sandboxes.writeFile(b.id, `${tgz}.b64`, data.toString("base64"));
+    // Unpacked next to it and swapped in, so nothing ever sees half a recipe.
+    const r = await d.sandboxes.exec(
+      b.id,
+      `set -e; cd ${b.gespann}; base64 -d < project.tgz.b64 > project.tgz; rm -rf project.new; mkdir project.new; tar -xzf project.tgz -C project.new; rm -rf project.old; if [ -d project ]; then mv project project.old; fi; mv project.new/project project; rm -rf project.new project.old project.tgz project.tgz.b64`,
+      120,
+    );
+    if (r.exitCode !== 0) throw new Error(`could not unpack the recipe: ${r.stdout}${r.stderr}`.slice(0, 500));
+    d.db.setSlotBundle(b.slot.id, version);
+    b.slot.bundle = version;
+    log("took over the project's current recipe");
+  }
+  return has(b);
 }
 
 /** The sandbox runs the same gespann as this server; then the provider's own job script, if it has one. */
@@ -122,8 +200,9 @@ async function ensureRepo(d: Deps, b: Box, p: Project): Promise<void> {
   if (present.exitCode !== 0) await git(d, b, p, `clone --quiet https://github.com/${p.repo}.git ${b.repo}`, 600);
 }
 
+/** Stops the sandbox after its job unless another job of the project waits. */
 async function stopIfIdle(d: Deps, p: Project, b: Box): Promise<void> {
-  if (d.db.pendingJobs(p.id) <= 1) await d.sandboxes.stop(b.id).catch(() => undefined);
+  if (!d.db.queuedJobs(p.id)) await d.sandboxes.stop(b.id).catch(() => undefined);
 }
 
 function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: string, model: string | null): string {
@@ -133,7 +212,7 @@ function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: stri
 
 /** Codex reads the repo and proposes concrete checks; the user takes them over in the UI. */
 async function suggest(d: Deps, job: Job, p: Project, log: (s: string) => void): Promise<void> {
-  const b = await ensureSandbox(d, p, log);
+  const b = await ensureSandbox(d, p, job, log);
   try {
     await ensureRepo(d, b, p);
     await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(p.default_branch)}`);
@@ -159,7 +238,7 @@ async function setup(d: Deps, job: Job, p: Project, log: (s: string) => void, ag
   if (!again) d.db.updateProject(p.id, { setup: "running", setup_error: null });
   let b: Box | null = null;
   try {
-    b = await ensureSandbox(d, p, log);
+    b = await ensureSandbox(d, p, job, log);
     await ensureRepo(d, b, p);
     await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(p.default_branch)}`);
     const co = await d.sandboxes.exec(b.id, `cd ${b.repo} && git checkout --quiet --force --detach FETCH_HEAD && git clean -fdq && mkdir -p ${b.project} 2>&1`, 120);
@@ -193,6 +272,7 @@ async function setup(d: Deps, job: Job, p: Project, log: (s: string) => void, ag
       log("no setup-proof.png");
     }
     await checkCopy(d, b, log);
+    await saveBundle(d, p, b);
     // Codex's concrete checks become the project's checks unless the team wrote their own.
     const own = d.db.project(p.id)?.criteria.trim();
     d.db.updateProject(p.id, { setup: "ready", recipe, notes, setup_error: null, ...(!own && checks ? { criteria: checks.slice(0, 8000) } : {}) });
@@ -260,17 +340,18 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const progress = (title: string, summary: string) =>
     run.check_run_id ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
   await progress("Testing the change", "An agent is testing this PR on a production-near copy.");
-  let b = await ensureSandbox(d, p, log);
-  // A replacement sandbox (deleted, or the instance changed provider) lacks the recipe and its scripts.
-  const hasRecipe = await d.sandboxes.exec(b.id, `test -f ${b.recipe}`, 30).catch(async (err: Error) => {
+  let b = await ensureSandbox(d, p, job, log);
+  // A new sandbox, or one with an older recipe, takes over the project's current one; a replaced
+  // sandbox of a project without a saved recipe needs the setup again.
+  const hasRecipe = await syncRecipe(d, p, b, log).catch(async (err: Error) => {
     await stopIfIdle(d, p, b);
     throw err;
   });
-  if (hasRecipe.exitCode !== 0) {
+  if (!hasRecipe) {
     log("the sandbox has no recipe yet: preparing the environment again before the test");
     const current = d.db.project(p.id) ?? p;
     await setup(d, job, current, log, true);
-    b = await ensureSandbox(d, d.db.project(p.id) ?? current, log);
+    b = await ensureSandbox(d, d.db.project(p.id) ?? current, job, log);
   }
   const cancelled = () => d.db.job(job.id)?.status === "cancelled";
   let prText: string | null = null;
@@ -452,6 +533,8 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
     if (co.exitCode !== 0) throw new Error(`checkout of ${run.base_ref} failed: ${co.stdout.slice(-300)}`);
     log(`the fixed recipe has to work for every PR: checking it on ${run.base_ref}`);
     await checkCopy(d, b, log, cancelled);
+    // The project's other sandboxes take the fixed recipe over before their next job.
+    await saveBundle(d, p, b);
     d.db.updateProject(p.id, { recipe, notes: await d.sandboxes.readFile(b.id, `${b.project}/NOTES.md`) });
     log("the copy is fixed; the test runs again");
     return true;
@@ -586,9 +669,11 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
       await verifyRun(d, job, p, run, log);
     }
     d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
+    d.db.releaseSlots(job.id);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     d.db.endJob(job.id, "failed", (err as Error).message.slice(0, 4000));
+    d.db.releaseSlots(job.id);
     if (job.kind === "setup" && d.db.project(p.id)?.setup === "queued") d.db.updateProject(p.id, { setup: "failed", setup_error: (err as Error).message.slice(0, 4000) });
     if (job.kind === "run" && job.run_id) {
       const run = d.db.run_(job.run_id);
@@ -627,7 +712,7 @@ function tracked(sb: Sandboxes, onStart: (sandboxId: string, processId: number) 
   });
 }
 
-/** Polls the queue. Jobs of different projects run side by side, up to `parallel`. */
+/** Polls the queue. Jobs run side by side, each in its own sandbox, up to `parallel` at once. */
 export function startWorker(d: Deps, parallel = 2): () => void {
   let stopped = false;
   const running = new Set<number>();
