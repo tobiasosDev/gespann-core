@@ -1,0 +1,12 @@
+# Steps of the Buildkite pipeline `gespann-core` on our self-hosted agents
+# (queue `gespann`), not GitHub-hosted runners. The pipeline settings hold one
+# step, `.buildkite/jobs/upload.sh`, which uploads this file. The agents run
+# with no-command-eval, so every command is a script in this repository.
+agents:
+  queue: gespann
+
+steps:
+  - key: check
+    label: Typecheck, tests, build
+    command: .buildkite/jobs/check.sh
+    timeout_in_minutes: 15

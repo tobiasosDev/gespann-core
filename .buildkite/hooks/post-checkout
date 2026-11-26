@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# PR builds test the PR merged into its base branch, like GitHub's
+# refs/pull/N/merge. Every step of a build merges the SAME base commit: the
+# first step (upload) pins it in build meta-data. The commit status still lands
+# on the PR head (BUILDKITE_COMMIT). Branch and manual builds test the commit
+# as checked out.
+set -euo pipefail
+
+[[ "${BUILDKITE_PULL_REQUEST:-false}" =~ ^[0-9]+$ ]] || exit 0
+base_branch="${BUILDKITE_PULL_REQUEST_BASE_BRANCH:?PR build without a base branch}"
+[[ "${base_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "unexpected base branch: ${base_branch}" >&2; exit 1; }
+
+fetch_branch() {
+  git fetch --no-tags --quiet origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}"
+}
+
+sha="$(buildkite-agent meta-data get gespann:base-sha --default '')"
+if [[ -z "${sha}" ]]; then
+  fetch_branch
+  sha="$(git rev-parse "refs/remotes/origin/${base_branch}^{commit}")"
+  buildkite-agent meta-data set gespann:base-sha "${sha}"
+elif ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+  git fetch --no-tags --quiet origin "${sha}" 2>/dev/null || fetch_branch
+fi
+[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "bad pinned base commit: ${sha}" >&2; exit 1; }
+
+echo "Merging ${base_branch} at ${sha} into PR #${BUILDKITE_PULL_REQUEST} head ${BUILDKITE_COMMIT}"
+if ! git -c user.name="Buildkite CI" -c user.email="ci@invalid" merge --no-ff --no-edit --quiet \
+    -m "CI merge of ${base_branch} ${sha:0:12}" "${sha}"; then
+  git merge --abort 2>/dev/null || true
+  echo "^^^ +++"
+  echo "PR #${BUILDKITE_PULL_REQUEST} does not merge cleanly into ${base_branch} (${sha}); merge ${base_branch} into the branch." >&2
+  exit 1
+fi
+git log --oneline -1
