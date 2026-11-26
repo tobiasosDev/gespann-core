@@ -104,6 +104,37 @@ test("shell sandboxes: the machine user's Codex config (its MCP tools) is linked
   assert.deepEqual(r.stdout.toString().trim().split("\n"), ["[mcp_servers.browser]", 'command = "mcp-browser"', id, "unset"]);
 });
 
+test("shell sandboxes: the screen recording starts on the sandbox's DISPLAY, ends with SIGTERM so the mp4 is complete, and says why it cannot start", async () => {
+  // A stand-in for ffmpeg: notes its arguments, writes the file only when it is stopped with SIGTERM.
+  const bin = mkdtempSync(join(tmpdir(), "gespann-bin-"));
+  writeFileSync(join(bin, "ffmpeg"), `#!/usr/bin/env bash\nout="\${@: -1}"\necho "$*" > "$HOME/ffmpeg-args"\ntrap 'echo mp4 > "$out"; exit 0' TERM\nwhile :; do sleep 0.05; done\n`, { mode: 0o755 });
+  const env = (extra: NodeJS.ProcessEnv) => ({ ...process.env, PATH: `${bin}:${process.env.PATH}`, ...extra });
+  class Recording extends ShellSandboxes {
+    private readonly e: NodeJS.ProcessEnv;
+    constructor(e: NodeJS.ProcessEnv) {
+      super();
+      this.e = e;
+    }
+    protected shell(id: string, script: string, opts: { input?: string; timeoutMs: number }): Promise<Ran> {
+      return spawnCollect("bash", ["-c", `${prelude(id)}\n${script}`], { ...opts, env: this.e });
+    }
+  }
+  const id = mkdtempSync(join(tmpdir(), "gespann-shell-"));
+  const file = join(id, "run", "out", "recording.mp4");
+  // A sandbox with its own screen records that one, not the machine's.
+  writeFileSync(join(id, ".gespann-display"), ":91\n");
+  const sb = new Recording(env({ DISPLAY: ":77" }));
+  await sb.startRecording(id, file);
+  assert.match(readFileSync(join(id, "ffmpeg-args"), "utf8"), /-f x11grab .*-i :91 .*recording\.mp4/);
+  await sb.stopRecording(id);
+  assert.equal(readFileSync(file, "utf8"), "mp4\n", "SIGTERM let ffmpeg finish the file");
+  await sb.stopRecording(id);
+
+  const bare = mkdtempSync(join(tmpdir(), "gespann-shell-"));
+  await assert.rejects(new Recording(env({ DISPLAY: "" })).startRecording(bare, join(bare, "r.mp4")), /no screen/);
+  await assert.rejects(new Recording({ ...process.env, PATH: "/usr/bin:/bin", DISPLAY: ":1" }).startRecording(bare, join(bare, "r.mp4")), /ffmpeg is not installed/);
+});
+
 const hasDocker = spawnSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 }).status === 0;
 
 test("docker provider: create, run, keep files across stop and start, remove", { skip: hasDocker ? false : "no docker engine" }, async () => {

@@ -92,6 +92,17 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
       ) : null}
 
       <Card className="mb-6">
+        <CardHeader title="Recording" description={video ? "The tester's screen during the whole test." : undefined} />
+        {video ? (
+          <div className="p-4">
+            <video controls playsInline preload="metadata" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
+          </div>
+        ) : (
+          <Empty>{live ? "The recording appears when the tester is done." : "This run has no recording. The log below says why."}</Empty>
+        )}
+      </Card>
+
+      <Card className="mb-6">
         <CardHeader title="Checks" description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : undefined} />
         {!v || v.checks.length === 0 ? (
           <Empty>{live ? "The tester is working. Checks appear when it is done." : "No checks."}</Empty>
@@ -123,15 +134,6 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
         <Card className="mb-6">
           <CardHeader title="Screenshots" description={`${shots.length} from the tester. Select one to see it full screen.`} />
           <ShotList shots={shots} className="p-4" />
-        </Card>
-      )}
-
-      {video && (
-        <Card className="mb-6">
-          <CardHeader title="Recording" />
-          <div className="p-4">
-            <video controls playsInline preload="metadata" src={src(video)} className="w-full rounded-md border border-border bg-background" />
-          </div>
         </Card>
       )}
 

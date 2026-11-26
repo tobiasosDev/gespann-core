@@ -262,7 +262,9 @@ test("the PR comment shows what needs a person and folds the rest away", () => {
   assert.doesNotMatch(open, /Sign in works/);
   assert.match(body, /<summary>✅ 1 passed check<\/summary>/);
   assert.match(body, /<summary>📸 2 screenshots<\/summary>/);
-  assert.match(body, /Full run and recording/);
+  // The recording link comes before the screenshots.
+  assert.match(body, /🎬 \*\*\[Watch the recording\]\(https:\/\/x\/recording\.mp4\)\*\*/);
+  assert.ok(body.indexOf("Watch the recording") < body.indexOf("📸"), "recording above the screenshots");
   assert.ok(!body.includes("A third sentence"), "the summary keeps whole sentences that fit");
   const none = renderComment({ outcome: "FAIL", judged: null, error: "sandbox 502", files: [], fileUrl: (f) => f, runUrl: "u", head: "h", baseRef: "main" });
   assert.match(none, /could not test this PR[\s\S]*sandbox 502/);
