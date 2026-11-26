@@ -15,7 +15,7 @@ import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
-import type { ServerModule } from "./extension.ts";
+import { capFor, type ServerModule } from "./extension.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
@@ -257,18 +257,27 @@ export function createApp(d: AppDeps): Hono<Env> {
   });
 
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
+  // The most a user may choose: the host's number, lowered by the server module's cap (e.g. a plan's).
+  const ceiling = (u: User) => {
+    const host = (typeof d.parallel === "function" ? d.parallel(u.id) : d.parallel) ?? null;
+    const cap = capFor(d.module, { id: u.id, login: u.login });
+    const most = [host, cap?.jobs].filter((n): n is number => typeof n === "number");
+    return { host, cap, most: most.length ? Math.min(...most) : null };
+  };
+
   app.get("/api/boxes", (c) => {
-    const u = me(c).id;
-    const host = (typeof d.parallel === "function" ? d.parallel(me(c).id) : d.parallel) ?? null;
-    const own = db.maxJobs(u);
-    const waiting = db.queuedJobs(u);
-    return c.json({ host, limit: own === null ? host : host === null ? own : Math.min(own, host), own, running: db.runningBoxes(u), queued: waiting.sandbox, waitingForChecks: waiting.checks, time: db.boxTime(u) });
+    const u = me(c);
+    const { host, cap, most } = ceiling(u);
+    const own = db.maxJobs(u.id);
+    const limit = own === null ? most : most === null ? own : Math.min(own, most);
+    const waiting = db.queuedJobs(u.id);
+    return c.json({ host, cap, limit, own, running: db.runningBoxes(u.id), queued: waiting.sandbox, waitingForChecks: waiting.checks, time: db.boxTime(u.id) });
   });
 
   app.post("/api/boxes/limit", async (c) => {
     const { limit } = await c.req.json<{ limit?: unknown }>();
-    const host = (typeof d.parallel === "function" ? d.parallel(me(c).id) : d.parallel) ?? null;
-    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > (host ?? 999)) throw new HttpError(400, `limit: a whole number from 1 to ${host ?? 999}`);
+    const top = ceiling(me(c)).most ?? 999;
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > top) throw new HttpError(400, `limit: a whole number from 1 to ${top}`);
     db.setMaxJobs(me(c).id, limit);
     return c.json({ ok: true });
   });

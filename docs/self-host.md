@@ -40,7 +40,7 @@ Every project gets a sandbox that keeps its checkout, its recipe and its built i
 
 At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; a provider module can report its size with an optional `capacity()`, otherwise gespann runs 2.
 
-That number is shared by everyone on the same provider; with [several providers](#several-providers) each counts its own jobs, and `MAX_PARALLEL_JOBS` sets the number for each. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
+That number is shared by everyone on the same provider; with [several providers](#several-providers) each counts its own jobs, and `MAX_PARALLEL_JOBS` sets the number for each. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number, or up to a server module's cap, see [Server module](#server-module)), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
 
 Jobs of one project and one owner run side by side, each in its own sandbox with its own checkout. Only a project's setup runs alone. A new sandbox takes over the project's current recipe: after each setup and each fix of the copy, gespann keeps the recipe directory as `DATA_DIR/projects/<id>/recipe.tgz` and copies it into the project's other sandboxes before their next job. Its first job builds the app's images from scratch unless the host's Docker cache already has them.
 
@@ -197,6 +197,7 @@ export default (env) => new MySandboxes(env.MY_SANDBOX_API_KEY);
 - `settings(user)` returns cards for the top of the Settings page: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the card. `/settings#<id>` scrolls to a card. If `settings` throws, only its cards are missing.
 - `admit(job)` runs before a job takes a sandbox. Return a string and the job fails with `not started: <string>` (a PR gets a neutral check with that text); return null to let it start. `job` names the job, its kind, its project and the project's owner.
 - `jobEnded(end)` runs after a job ended and gave its sandbox back, with its status and `seconds` from start to end (the sandbox time Settings shows). Errors are logged, never fail the job.
+- `jobCap(owner)` caps how many jobs of an owner's projects run at once: return `{ jobs, reason }` or null for no cap. A job over the cap waits in the queue and starts when one of the owner's jobs ends; it does not fail. The worker asks while it picks the next job, so answer right away from memory, without a network call. Settings → Sandboxes lets the owner choose at most the cap and shows `<reason> allows <jobs> at once`. Without `jobCap`, or when it throws, there is no cap.
 
 The log says `server module: <name>` at startup.
 
@@ -206,6 +207,7 @@ export default (env) => ({
   name: "quota",
   admit: (job) => (overQuota(job.owner.login) ? "the monthly quota is used up" : null),
   jobEnded: (end) => record(end.owner.id, end.seconds),
+  jobCap: (owner) => (isSmallTeam(owner.login) ? { jobs: 2, reason: "your quota" } : null),
 });
 ```
 

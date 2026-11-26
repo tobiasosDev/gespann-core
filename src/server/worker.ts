@@ -11,7 +11,7 @@ import { conflictNote } from "./comment.ts";
 import { applyGate, approvedHead, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
-import type { ServerModule } from "./extension.ts";
+import { capFor, type ServerModule } from "./extension.ts";
 import { withCodex } from "./codex.ts";
 import type { Github, LinkedIssue, OtherChecks } from "./github.ts";
 import { finishRecordingScript, q, runLong, type Sandboxes } from "./sandbox.ts";
@@ -1048,7 +1048,7 @@ export function startWorker(d: Omit<Deps, "sandboxes"> & { sandboxes?: Sandboxes
   const busy = (key: string) => [...running.values()].filter((k) => k === key).length;
   /** Starts the first queued job whose provider has room; false when none can start now. */
   const startOne = (): boolean => {
-    for (const job of d.db.nextJobs()) {
+    for (const job of d.db.nextJobs(-1, d.module?.jobCap ? (owner) => capFor(d.module, owner)?.jobs ?? null : undefined)) {
       if (running.has(job.id)) continue;
       const owner = d.db.project(job.project_id)?.owner_id;
       const r = owner === undefined ? null : route(owner);

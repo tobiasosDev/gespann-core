@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 export type CodexState = "none" | "pending" | "connected" | "failed";
 export type SetupState = "none" | "queued" | "running" | "ready" | "failed";
 export type JobKind = "login" | "setup" | "run" | "suggest";
+/** The server module's cap for an owner: at most this many of their jobs at once; null for none. */
+export type JobCapFn = (owner: { id: number; login: string }) => number | null;
+
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface User {
@@ -422,22 +425,39 @@ export class Db {
   /**
    * The oldest queued job that may start now. Jobs run side by side, also of one project and one owner,
    * each in its own sandbox; only a setup runs alone in its project, no job overtakes a queued setup,
-   * and an owner never has more jobs running than the limit they set in Settings.
+   * and an owner never has more jobs running than the limit they set in Settings, nor more than `cap`
+   * allows (the server module's cap, e.g. a plan's). A job over either limit stays queued.
    */
-  nextJob(): Job | undefined {
-    return this.nextJobs(1)[0];
+  nextJob(cap?: JobCapFn): Job | undefined {
+    return this.nextJobs(1, cap)[0];
   }
 
-  /** The queued jobs that may start now, oldest first (see `nextJob`); the worker takes the first whose sandbox provider has room. */
-  nextJobs(limit = -1): Job[] {
-    return this.sql.prepare(
-      `select j.* from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
+  /**
+   * The queued jobs that may start now, oldest first (see `nextJob`); the worker takes the first whose
+   * sandbox provider has room. `cap` skips owners who already run as many jobs as it allows.
+   */
+  nextJobs(limit = -1, cap?: JobCapFn): Job[] {
+    const rows = this.sql.prepare(
+      `select j.*, u.id as cap_owner, u.login as cap_login, (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) as cap_running
+         from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
          and (j.not_before is null or j.not_before <= ?)
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
          and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
        order by j.id limit ?`,
-    ).all(now(), limit) as unknown as Job[];
+    ).all(now(), cap ? -1 : limit) as unknown as (Job & { cap_owner: number; cap_login: string; cap_running: number })[];
+    const caps = new Map<number, number | null>();
+    const out: Job[] = [];
+    for (const { cap_owner, cap_login, cap_running, ...job } of rows) {
+      if (cap) {
+        if (!caps.has(cap_owner)) caps.set(cap_owner, cap({ id: cap_owner, login: cap_login }));
+        const most = caps.get(cap_owner);
+        if (most != null && cap_running >= most) continue;
+      }
+      out.push(job as Job);
+      if (limit >= 0 && out.length >= limit) break;
+    }
+    return out;
   }
 
   /** How many jobs of the user's projects may run at once; null leaves it to the sandbox host. */
