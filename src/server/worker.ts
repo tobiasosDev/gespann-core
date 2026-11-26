@@ -449,7 +449,9 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   }
   let judged = a.judged;
   const outcome = a.outcome;
-  const { files, alias } = await collect(d, b, run, `${dir}/out`, log);
+  // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
+  const sizes = viewportsOf((d.db.project(p.id) ?? p).viewports).length;
+  const { files, alias } = await collect(d, b, run, `${dir}/out`, log, sizes < 2);
   if (judged) judged = withAliases(judged, alias);
   // A verdict without the issue goals says why, on the run page and over MCP.
   if (unread && judged?.verdict) {
@@ -498,6 +500,14 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       // finish reads the refs to require one goal per issue.
       await d.sandboxes.writeFile(b.id, `${dir}/work/issues.json`, `${JSON.stringify(issues.map((i) => ({ ref: i.ref, url: i.url })))}\n`);
     }
+    const viewports = viewportsOf((d.db.project(p.id) ?? p).viewports);
+    const screen = screenFor(viewports);
+    if (screen) {
+      // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
+      // Before the copy comes up: a new screen ends whatever ran on the old one.
+      await d.sandboxes.writeFile(b.id, `${d.sandboxes.home(b.id)}/.gespann-screen`, `${screen}\n`);
+      await d.sandboxes.ensureRunning(b.id);
+    }
     log("bringing the copy up");
     const prep = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify prepare --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir}`), {
       timeoutMs: 60 * 60_000,
@@ -511,15 +521,8 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     const recipe = parseRecipe(current.recipe ?? (await d.sandboxes.readFile(b.id, b.recipe)) ?? "");
     const addendum = recipe.prompt ? ((await d.sandboxes.readFile(b.id, `${b.project}/${recipe.prompt}`)) ?? (await d.sandboxes.readFile(b.id, `${b.repo}/${recipe.prompt}`)) ?? "") : "";
     const notes = (await d.sandboxes.readFile(b.id, `${b.project}/NOTES.md`)) ?? "";
-    const viewports = viewportsOf(current.viewports);
-    const screen = screenFor(viewports);
-    if (screen) {
-      // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
-      await d.sandboxes.writeFile(b.id, `${d.sandboxes.home(b.id)}/.gespann-screen`, `${screen}\n`);
-      await d.sandboxes.ensureRunning(b.id);
-    }
     // Every further screen size repeats the checks: half the recipe's time more for each.
-    const minutes = Math.round(recipe.timeout * (1 + Math.max(0, viewports.length - 1) / 2));
+    const minutes = recipe.timeout * (1 + Math.max(0, viewports.length - 1) / 2);
     if (viewports.length) log(`screen sizes to test: ${viewports.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ")}`);
     const prompt = testerPrompt({
       testerNote: d.sandboxes.testerNote,
@@ -642,13 +645,13 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
  * Copies the run's proof to the server. Screenshots of the same screen are copied once; `alias`
  * maps each skipped one to the screenshot that was kept.
  */
-async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string> }> {
+async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void, dedupe = true): Promise<{ files: string[]; alias: Map<string, string> }> {
   const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -104857601c -printf '%f\\n'`, 30);
   const big = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size +104857600c -printf '%f %s\\n'`, 30).catch(() => null);
   for (const line of big?.stdout.split("\n").filter(Boolean) ?? []) log(`✗ ${line.split(" ")[0]} is too large to keep (${Math.round(Number(line.split(" ")[1]) / 1024 ** 2)} MB, limit 100 MB)`);
   const all = ls.stdout.split("\n").filter((f) => /^[A-Za-z0-9._-]+$/.test(f) && (IMAGE.test(f) || VIDEO.test(f) || f === "verdict.json"));
   const images = all.filter((f) => IMAGE.test(f));
-  const thumbs = images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;
+  const thumbs = dedupe && images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;
   const alias = sameScreens(parseThumbs(thumbs?.stdout ?? ""));
   if (alias.size) log(`${alias.size} of ${images.length} screenshots show the same screen as another one; kept one of each`);
   // The recording first: it is the run's main proof and must not fall behind a long list of screenshots.
