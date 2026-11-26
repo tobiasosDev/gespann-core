@@ -4,7 +4,7 @@ import type { Judged } from "../verify/verdict.ts";
 import type { AppDeps, Env } from "./app.ts";
 import type { Db, Project, Run } from "./db.ts";
 import { skipClosedRuns, withPrLock } from "./gate.ts";
-import { awaitChecks, ended, issuesText, prContext, refusal, report } from "./worker.ts";
+import { awaitChecks, ended, issuesText, pendingCheck, prContext, refusal, report } from "./worker.ts";
 
 /**
  * The internal API the orchestrator calls (docs/orchestrator.md): everything a job needs that talks
@@ -123,8 +123,8 @@ export function mountInternal(app: Hono<Env>, d: AppDeps): void {
     if (!found) return notFound(c, "run");
     const { p, run } = found;
     const { title, summary } = await c.req.json<{ title?: string; summary?: string }>();
-    // Progress only: the run goes on when GitHub does not take it.
-    if (run.check_run_id) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title: String(title ?? ""), summary: String(summary ?? "") }).catch(() => undefined);
+    // Progress only: the run goes on when GitHub does not take it. A head a person approved keeps its neutral check.
+    await pendingCheck(d, p, run, { status: "in_progress", title: String(title ?? ""), summary: String(summary ?? "") });
     return c.json({});
   });
 

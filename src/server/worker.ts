@@ -890,7 +890,7 @@ async function skipForChecks(d: ReportDeps, started: Project, run: Run, reason: 
 }
 
 /** Marks the run's check as waiting or testing, unless a person approved its head: that check stays neutral. */
-async function pendingCheck(d: Deps, p: Project, run: Run, fields: { status: "queued" | "in_progress"; title: string; summary: string }): Promise<void> {
+export async function pendingCheck(d: ReportDeps, p: Project, run: Run, fields: { status: "queued" | "in_progress"; title: string; summary: string }): Promise<void> {
   // In the PR's lock, so an approval that lands at the same time is not undone.
   await withPrLock(p, run.pr, async () => {
     if (run.check_run_id && !approvedHead(d.db, p, run.pr, run.head)) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, fields);

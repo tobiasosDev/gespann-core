@@ -112,6 +112,11 @@ test("internal API: pull, skip-closed, check, git-token and context ask GitHub a
   db.updateRun(run, { check_run_id: 31 });
   await call("POST", `/internal/runs/${run}/check`, { title: "Testing", summary: "An agent tests it." });
   assert.deepEqual(gh.checks, [{ id: 31, status: "in_progress", title: "Testing", summary: "An agent tests it." }]);
+  // A head a person approved keeps its neutral check.
+  db.setHold(p, 4, { approved_by: "tobi", approved_head: "a".repeat(40) });
+  await call("POST", `/internal/runs/${run}/check`, { title: "Testing again", summary: "x" });
+  assert.equal(gh.checks.length, 1);
+  db.setHold(p, 4, { approved_by: null, approved_head: null });
 
   assert.deepEqual((await call("POST", `/internal/projects/${p}/git-token`)).body, { token: "ghs_token" });
   assert.deepEqual(gh.tokens, [[9, true]], "read-only");
