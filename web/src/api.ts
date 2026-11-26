@@ -117,7 +117,7 @@ export interface Viewport {
 }
 
 export interface ProjectDetail extends ProjectRow {
-  /** Merge gate: PRs with the label gespann stay drafts until they pass. */
+  /** Merge gate: a FAIL fails the check, and PRs with the label gespann stay drafts until they pass. */
   gate: number;
   /** Codex sign-in of the project's owner (Settings). */
   codex: CodexState;

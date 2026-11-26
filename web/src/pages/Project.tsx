@@ -279,7 +279,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           n={6}
           title="Merge gate"
           state={p.gate ? "done" : "todo"}
-          summary={p.gate ? "On: PRs with the label gespann cannot be merged until they pass." : "Off: results are reported, merging stays free."}
+          summary={p.gate ? "On: a FAIL fails the check gespann/verify, and PRs with the label gespann stay drafts until they pass." : "Off: results are reported, the check never fails, merging stays free."}
           action={
             <Button size="sm" variant={p.gate ? "outline" : "default"} disabled={busy} onClick={() => post("/gate", { gate: !p.gate })}>
               {p.gate ? "Turn off" : "Turn on"}

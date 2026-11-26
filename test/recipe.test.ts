@@ -59,7 +59,6 @@ function problems(text: string): string[] {
 
 test("a minimal recipe gets the defaults", () => {
   const r = parseRecipe(MINIMAL);
-  assert.equal(r.mode, "shadow");
   assert.equal(r.timeout, 25);
   assert.deepEqual(r.trigger, { branches: [], paths: ["src/**"], ignore: [] });
   assert.deepEqual([r.setup, r.services, r.alongside, r.seeds, r.cleanup], [[], [], [], [], []]);
@@ -68,7 +67,7 @@ test("a minimal recipe gets the defaults", () => {
 
 test("a full recipe parses every section", () => {
   const r = parseRecipe(FULL);
-  assert.equal(r.mode, "gate");
+  assert.equal("mode" in r, false, "an old recipe with mode stays valid; the merge gate is the project setting");
   assert.equal(r.services[0]?.readyTimeout, 30);
   assert.deepEqual(r.alongside[0], { name: "golden", run: "./golden.sh", output: "golden.md", required: true });
   assert.deepEqual(r.login, { path: "/login", user: "dev@example.test", password: "dev" });
@@ -95,7 +94,6 @@ prompt: ../outside.md
     "alongside[0].required: must be true or false",
     "env.down: required",
     "env.url: must be a non-empty string",
-    "mode: must be shadow or gate",
     "prompt: a repo-relative path",
     "servics: unknown field",
     "setup[0].runn: unknown field",

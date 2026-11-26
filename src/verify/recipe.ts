@@ -17,8 +17,6 @@ export interface Recipe {
   trigger: Trigger;
   /** Minutes for the whole run, setup to verdict. */
   timeout: number;
-  /** shadow: the check reports and never fails the PR. gate: FAIL fails the check. */
-  mode: "shadow" | "gate";
   /** Runs in order before anything else: install, build images, fetch fixtures. */
   setup: Step[];
   /** Background processes for the whole run (fakes, replay proxy). Stopped at the end. */
@@ -217,8 +215,8 @@ export function parseRecipe(text: string): Recipe {
   const top = new Reader(raw, "", problems).fields(["version", "trigger", "timeout", "mode", "setup", "services", "flags", "env", "replay", "alongside", "login", "seeds", "prompt", "cleanup"]);
 
   if (raw.version !== 1) problems.push("version: must be 1");
-  const mode = raw.mode ?? "shadow";
-  if (mode !== "shadow" && mode !== "gate") problems.push("mode: must be shadow or gate");
+  // `mode` is read no more: whether a FAIL blocks the merge is the project's merge gate, switched on
+  // the project page. Recipes that still carry it stay valid.
 
   const t = top.obj("trigger", true)?.fields(["branches", "paths", "ignore", "label"]);
   const trigger: Trigger = { branches: t?.strings("branches") ?? [], paths: t?.strings("paths") ?? [], ignore: t?.strings("ignore") ?? [] };
@@ -250,7 +248,6 @@ export function parseRecipe(text: string): Recipe {
     version: 1,
     trigger,
     timeout: top.num("timeout", 25),
-    mode: mode === "gate" ? "gate" : "shadow",
     setup: top.list("setup").map((s) => step(s)),
     services,
     env,

@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parse } from "yaml";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verify/prompt.ts";
 import { screenFor, viewportsOf } from "../verify/viewports.ts";
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
@@ -761,12 +760,14 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
   return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
 
-async function report(d: Deps, p: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
+export async function report(d: Deps, started: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
   const gh = d.github();
   const outcome = run.outcome ?? "FAIL";
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
   // Gate, check and comment together under the PR lock, so an approval cannot interleave.
-  await withPrLock(p, run.pr, async () => {
+  await withPrLock(started, run.pr, async () => {
+    // The merge gate as it is now: a person may switch it while the test runs.
+    const p = d.db.project(started.id) ?? started;
     // The gate follows the result only for the PR's current head; a newer push has its own run.
     let state = "off" as GateState;
     let gateText = "";
@@ -783,13 +784,7 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     }
     const body = runComment(d.config.baseUrl, run, judged, files, gateText);
     const conflict = run.conflict ? conflictNote(run.base_ref, JSON.parse(run.conflict) as string[]) : null;
-    const conclusion = conflict || !judged?.verdict
-      ? "neutral" // gespann itself failed (sandbox, copy, Codex): never a FAIL on the PR
-      : outcome === "FAIL" && (state !== "off" || !isShadow(p)) && !approvedHead(d.db, p, run.pr, run.head) // a person released this head
-        ? "failure"
-        : outcome === "FAIL"
-          ? "neutral"
-          : CONCLUSION[outcome];
+    const conclusion = checkConclusion({ outcome, tested: !conflict && !!judged?.verdict, gate: p.gate === 1, approved: approvedHead(d.db, p, run.pr, run.head) });
     const checkId = d.db.run_(run.id)?.check_run_id ?? run.check_run_id;
     if (checkId) {
       await gh
@@ -816,12 +811,16 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
   });
 }
 
-function isShadow(p: Project): boolean {
-  try {
-    return (parse(p.recipe ?? "") as { mode?: string } | null)?.mode !== "gate";
-  } catch {
-    return true;
-  }
+/**
+ * The gespann/verify check's conclusion. Only the project's merge gate lets a FAIL fail the check:
+ * with the gate off, results are reported and merging stays free, also under a rule that requires
+ * the check. A head a person approved, and a run that could not test (conflict, sandbox, Codex),
+ * end neutral.
+ */
+export function checkConclusion(r: { outcome: NonNullable<Run["outcome"]>; tested: boolean; gate: boolean; approved: boolean }): "success" | "neutral" | "failure" {
+  if (!r.tested) return "neutral";
+  if (r.outcome === "FAIL") return r.gate && !r.approved ? "failure" : "neutral";
+  return CONCLUSION[r.outcome];
 }
 
 /** How often a run asks GitHub again while the PR's other checks run. */
@@ -849,11 +848,12 @@ export function ciStep(c: OtherChecks, ageMs: number): CiStep {
 }
 
 /** A run whose PR failed its other checks ends as SKIP, without a sandbox; a held PR stays held for a person. */
-async function skipForChecks(d: Deps, p: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
+async function skipForChecks(d: Deps, started: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
   d.db.updateRun(run.id, { status: "done", outcome: "SKIP", error: reason, finished: new Date().toISOString() });
   log(`skipped: ${reason}`);
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
-  await withPrLock(p, run.pr, async () => {
+  await withPrLock(started, run.pr, async () => {
+    const p = d.db.project(started.id) ?? started; // the merge gate as it is now
     const checkId = d.db.run_(run.id)?.check_run_id ?? run.check_run_id;
     if (checkId)
       await d

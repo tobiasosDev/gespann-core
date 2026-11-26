@@ -44,7 +44,7 @@ export function renderPlan(r: Recipe): string {
   const lines = plan(r).map((p, i) => `${String(i + 1).padStart(2)}. ${p.phase.padEnd(9)} ${p.name}${p.always ? " (always)" : ""}`);
   const t = r.trigger;
   return [
-    `mode ${r.mode}, timeout ${r.timeout} min`,
+    `timeout ${r.timeout} min`,
     `trigger: ${t.branches.length ? `PRs into ${t.branches.join(", ")}` : "any PR"}, ${t.paths.length} path pattern(s), ${t.ignore.length} ignored${t.label ? `, label ${t.label}` : ""}`,
     ...lines,
   ].join("\n");
