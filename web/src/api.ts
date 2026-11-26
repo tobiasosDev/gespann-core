@@ -6,6 +6,8 @@ export interface Me {
   user: { login: string; avatar: string | null } | null;
   githubReady: boolean;
   installUrl: string | null;
+  /** Pages a server module of this instance adds, shown in the sidebar. */
+  links?: { label: string; href: string }[];
 }
 
 export interface RunRow {
@@ -135,6 +137,8 @@ export interface RunDetail extends RunRow {
   verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[] } | null;
   files: string[];
   token: string;
+  /** When the screenshots and recording were deleted after the PR closed. */
+  media_cleared: string | null;
   log: string;
 }
 

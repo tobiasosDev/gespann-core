@@ -14,6 +14,7 @@ import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
+import type { ServerModule } from "./extension.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 
@@ -50,6 +51,8 @@ export interface AppDeps {
   githubReady: () => boolean;
   /** How many jobs the sandbox host runs at once, for all users together; absent without sandboxes. */
   parallel?: number;
+  /** `SERVER_MODULE`: its routes and sidebar links. */
+  module?: ServerModule | null;
 }
 
 export function githubApp(config: Config, db: Db): GithubApp | null {
@@ -202,7 +205,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const u = c.get("user");
     let installUrl: string | null = null;
     if (d.githubReady()) installUrl = d.github().installUrl();
-    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl });
+    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [] });
   });
 
   app.post("/api/logout", (c) => {
@@ -457,6 +460,14 @@ export function createApp(d: AppDeps): Hono<Env> {
     const handler = event === "pull_request" ? onPullRequest : event === "issue_comment" ? onIssueComment : null;
     if (handler) void handler(d, JSON.parse(body) as Record<string, unknown>).catch((err: Error) => console.error(JSON.stringify({ level: "error", at: `webhook ${event}`, message: err.message })));
     return c.json({ ok: true }, 202);
+  });
+
+  // The server module's pages come before the React app, so its paths are not client routes.
+  d.module?.routes?.(app, {
+    user: (c) => {
+      const u = (c as Context<Env>).get("user");
+      return u ? { id: u.id, login: u.login } : null;
+    },
   });
 
   // The React app: static assets, and index.html for every other GET so client routes work on reload.
