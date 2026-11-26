@@ -193,6 +193,18 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     let writes = sb.writes.lock().unwrap().len();
     with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap();
     assert_eq!(sb.writes.lock().unwrap().len(), writes);
+    // A takeover while Codex still runs: its command deleted the key file at its start, and the key
+    // is not written again for the process the takeover attaches to.
+    let jt = Journal::new(c.db.clone(), 11);
+    let _ = with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async { anyhow::bail!("orchestrator stopped") as anyhow::Result<()> }).await;
+    let writes = sb.writes.lock().unwrap().len();
+    with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async {
+        assert_eq!(sb.file(file), None, "no key file while the attached Codex runs");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(sb.writes.lock().unwrap().len(), writes, "not written again on a takeover");
     // A failed step removes the key too.
     let err = with_agent(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", &agent, || async { anyhow::bail!("codex failed") as anyhow::Result<()> }).await.unwrap_err();
     assert_eq!(err.to_string(), "codex failed");

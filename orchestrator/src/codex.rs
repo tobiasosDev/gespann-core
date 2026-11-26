@@ -75,8 +75,10 @@ impl Agent {
         if let Some(n) = self.context.filter(|n| *n > 0) {
             args.push_str(&format!(" -c model_context_window={n} -c model_auto_compact_token_limit={}", n * 8 / 10));
         }
-        // The key file goes as soon as the shell has read it, before Codex or any PR code runs.
-        (format!(r#"OPENROUTER_API_KEY="$(cat "$HOME/{OPENROUTER_KEY_FILE}"; rm -f "$HOME/{OPENROUTER_KEY_FILE}")" "#), args)
+        // The key file goes as soon as the shell has read it, before Codex or any PR code runs; without
+        // a key read and its file gone, Codex does not start.
+        let f = format!(r#""$HOME/{OPENROUTER_KEY_FILE}""#);
+        (format!(r#"_k="$(cat {f})" && rm -f {f} && test -n "$_k" && OPENROUTER_API_KEY="$_k" "#), args)
     }
 }
 
@@ -110,10 +112,15 @@ where
     let api_key = open(&ctx.cfg.session_secret, &sealed)?;
     let sb = ctx.sb.as_ref();
     let file = format!("{}/{OPENROUTER_KEY_FILE}", sb.home(sandbox_id));
-    // Written again on a takeover: a Codex step that is still running read it at its start already.
-    sb.exec(sandbox_id, &format!("umask 077 && : > {}", q(&file)), 30).await?;
+    // Written once per step under the journal: the step's command deletes it when it starts, and a
+    // takeover attaches to that command instead of writing the key again.
     let outcome = async {
-        sb.write_file(sandbox_id, &file, api_key.as_bytes()).await?;
+        j.step(&format!("{key}.key"), || async {
+            sb.exec(sandbox_id, &format!("umask 077 && : > {}", q(&file)), 30).await?;
+            sb.write_file(sandbox_id, &file, api_key.as_bytes()).await?;
+            Ok(true)
+        })
+        .await?;
         f().await
     }
     .await;
@@ -431,7 +438,11 @@ mod tests {
         assert_eq!(Agent { provider: Provider::Codex, model: None, context: None }.codex_args().1, "");
         let or = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
         let (env, args) = or.codex_args();
-        assert_eq!(env, r#"OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key"; rm -f "$HOME/.gespann-openrouter-key")" "#, "the key never appears on a command line, and its file goes at once");
+        assert_eq!(
+            env,
+            r#"_k="$(cat "$HOME/.gespann-openrouter-key")" && rm -f "$HOME/.gespann-openrouter-key" && test -n "$_k" && OPENROUTER_API_KEY="$_k" "#,
+            "the key never appears on a command line, and its file goes before Codex starts"
+        );
         assert!(args.starts_with(r#" -m 'anthropic/claude-x' -c model_provider=openrouter -c 'model_providers.openrouter={name="OpenRouter""#), "{args}");
         assert!(args.contains(r#"env_key="OPENROUTER_API_KEY",wire_api="responses""#), "{args}");
         assert!(args.contains(r#" -c 'shell_environment_policy.exclude=["OPENROUTER_API_KEY"]'"#), "the commands Codex runs never see the key: {args}");

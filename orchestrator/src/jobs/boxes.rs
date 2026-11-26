@@ -399,7 +399,7 @@ mod tests {
         assert!(codex_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
         let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None };
         let c = codex_exec(&b, "/p", "/l", "/j", &or, "high");
-        assert!(c.contains(r#"&& OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key"; rm -f "$HOME/.gespann-openrouter-key")" codex exec "#), "{c}");
+        assert!(c.contains(r#"&& test -n "$_k" && OPENROUTER_API_KEY="$_k" codex exec "#), "{c}");
         assert!(c.contains("-m 'x/y' -c model_provider=openrouter -c 'model_providers.openrouter="), "{c}");
     }
 }
