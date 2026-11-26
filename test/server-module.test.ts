@@ -69,16 +69,16 @@ test("a PR closed while its run waited is skipped, not refused", async () => {
   const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
   let asked = 0;
   const module: ServerModule = { name: "test", admit: () => { asked++; return "no plan"; } };
-  const github = { pull: async () => ({ state: "closed", merged: true, head: { sha: "h" } }), installationToken: async () => "tok", updateCheck: async () => undefined } as unknown as Github;
+  const github = { pull: async () => ({ number: 4, state: "closed", merged: true, head: { sha: "h" } }), installationToken: async () => "tok", updateCheck: async () => undefined } as unknown as Github;
   const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
   const job = db.job(db.enqueue(p, "run", run))!;
   const sandboxes = new Proxy({}, { get: () => () => { throw new Error("no sandbox in this test"); } }) as Sandboxes;
   await processJob({ db, sandboxes, github: () => github, config, module }, job);
-  assert.equal(db.job(job.id)?.status, "cancelled");
+  assert.equal(db.job(job.id)?.status, "cancelled", db.job(job.id)?.error ?? "");
   assert.equal(asked, 0, "the module is not asked about a run that does not happen");
 
   // Superseded while the module was deciding: the run stays cancelled, the refusal is dropped.
-  const open = { ...github, pull: async () => ({ state: "open", merged: false, head: { sha: "h" } }) } as unknown as Github;
+  const open = { ...github, pull: async () => ({ number: 5, state: "open", merged: false, head: { sha: "h" } }) } as unknown as Github;
   const run2 = db.createRun({ project_id: p, pr: 5, title: "t", head: "h", base: "b", base_ref: "main", token: "1".repeat(32) });
   const job2 = db.job(db.enqueue(p, "run", run2))!;
   const slow: ServerModule = { name: "slow", admit: async () => { db.cancelQueuedRuns(p, 5); db.updateRun(run2, { status: "cancelled" }); return "no plan"; } };
