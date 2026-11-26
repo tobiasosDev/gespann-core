@@ -78,7 +78,10 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
             <RunStatus run={g.latest} />
           </td>
           <td className="px-3 py-2.5 break-words sm:max-w-0 sm:truncate sm:px-4">
-            <Mono className="text-muted-foreground">#{g.pr}</Mono> {g.title}
+            {/* The title is the row's link, so keyboard users reach every row at every width. */}
+            <Link to={`/runs/${g.latest.id}`} className="hover:underline" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
+              <Mono className="text-muted-foreground">#{g.pr}</Mono> {g.title}
+            </Link>
           </td>
           <td className="hidden px-4 py-2.5 sm:table-cell">
             <History runs={g.runs} />
@@ -88,10 +91,8 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
           </td>
           <td className="hidden px-4 py-2.5 text-right font-mono text-[12px] whitespace-nowrap text-muted-foreground md:table-cell">{duration(g.latest.started, g.latest.finished)}</td>
           <td className="px-3 py-2.5 text-right align-top whitespace-nowrap text-muted-foreground sm:px-4 sm:align-middle">{ago(g.latest.started ?? g.latest.created)}</td>
-          <td className="hidden py-2.5 pr-3 text-right sm:table-cell">
-            <Link to={`/runs/${g.latest.id}`} className="text-muted-foreground" aria-label={`Open the latest run of #${g.pr}`}>
-              <ChevronRight className="inline size-4" />
-            </Link>
+          <td className="hidden py-2.5 pr-3 text-right text-muted-foreground sm:table-cell" aria-hidden="true">
+            <ChevronRight className="inline size-4" />
           </td>
         </tr>
       ))}
