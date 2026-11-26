@@ -4,7 +4,7 @@ import type { Me, ProjectRow, RunDetail } from "./api.ts";
 import { type Section, Sidebar } from "./components/Sidebar.tsx";
 import { LinkButton } from "./components/ui.tsx";
 import { usePath, useResource } from "./live.ts";
-import { landing, Logo, projectsBusy } from "./nav.tsx";
+import { landing, Lockup, projectsBusy } from "./nav.tsx";
 import { NewProject } from "./pages/NewProject.tsx";
 import { Project } from "./pages/Project.tsx";
 import { Projects } from "./pages/Projects.tsx";
@@ -28,8 +28,8 @@ function SignIn({ me }: { me: Me }) {
   return (
     <div className="grid min-h-screen place-items-center px-4">
       <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
-        <div className="mb-4 flex items-center gap-2 font-semibold">
-          <Logo /> gespann
+        <div className="mb-4 flex items-center">
+          <Lockup />
         </div>
         <h1 className="text-title font-semibold">Acceptance tests for every pull request</h1>
         <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own Codex plan clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
