@@ -411,8 +411,10 @@ export class Docker extends ShellSandboxes implements Sandboxes {
       const [uid, gid] = ids.split("\n");
       await this.must(["exec", "-u", "0", name, "sh", "-c", `mkdir -p ${q(this.o.home)} && chown ${uid}:${gid} ${q(this.o.home)}`], "exec");
     } catch (err) {
+      // A command that exits can pass the first look and stop before exec: start it again to get the hint, not "is not running".
+      const why = (await this.state(name).catch(() => null)) === "exited" ? await this.ensureRunning(name).then(() => err, (e: unknown) => e) : err;
       await this.remove(name).catch(() => undefined);
-      throw err;
+      throw why;
     }
     return { id: name };
   }

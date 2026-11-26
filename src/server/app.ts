@@ -321,6 +321,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const p = project(c);
     const { codex_login: _unused, codex: _old, ...rest } = p;
     const owner = db.codex(p.owner_id);
+    const ciWait = db.runsWaitingForChecks(p.id);
     return c.json({
       ...rest,
       codex: owner?.codex_state ?? "none",
@@ -330,7 +331,7 @@ export function createApp(d: AppDeps): Hono<Env> {
       viewports: viewportsOf(p.viewports).map((v) => v.id),
       viewport_presets: VIEWPORTS,
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
-      runs: db.runs(p.id),
+      runs: db.runs(p.id).map((r) => ({ ...r, waitingForChecks: ciWait.has(r.id) })),
       closed: db.closedPrs(p.id),
       jobs: db.jobs(p.id, 30).map((j) => ({ ...j, log: j.kind === "run" ? "" : j.log })),
     });

@@ -569,6 +569,11 @@ export class Db {
     this.run("update jobs set status = 'done', started = null, heartbeat = null, finished = ? where id = ?", now(), id);
   }
 
+  /** Runs of the project that wait in the queue for their PR's other checks (CI), not for a sandbox. */
+  runsWaitingForChecks(projectId: number): Set<number> {
+    return new Set(this.all<{ run_id: number }>("select run_id from jobs where project_id = ? and status = 'queued' and run_id is not null and not_before is not null", projectId).map((j) => j.run_id));
+  }
+
   /** Puts a running job that has not touched a sandbox back into the queue until `until`; the wait is no sandbox time. */
   deferJob(id: number, until: string): void {
     this.run("update jobs set status = 'queued', started = null, heartbeat = null, not_before = ? where id = ? and status = 'running'", until, id);
