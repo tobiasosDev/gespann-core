@@ -334,11 +334,15 @@ pub fn with_aliases(j: &Value, alias: &BTreeMap<String, String>) -> Value {
 
 // ---- verdict.ts
 
-/// Blocked checks the copy could be changed to support: the run fixes the copy and tests again.
+fn clean(j: &Value) -> bool {
+    j.get("verdict").is_some_and(Value::is_object) && j.get("problems").and_then(Value::as_array).map_or(0, Vec::len) == 0
+}
+
+/// Blocked checks the copy could be changed to support: the run fixes the copy and tests again. Also
+/// inside a FAIL: the failed checks stand, but the blocked ones would otherwise never be tested.
 pub fn copy_gaps(j: Option<&Value>) -> Vec<Value> {
     let Some(j) = j else { return vec![] };
-    let problems = j.get("problems").and_then(Value::as_array).map_or(0, Vec::len);
-    if !j.get("verdict").is_some_and(Value::is_object) || problems > 0 || j.get("outcome").and_then(Value::as_str) != Some("BLOCKED") {
+    if !clean(j) || !matches!(j.get("outcome").and_then(Value::as_str), Some("BLOCKED" | "FAIL")) {
         return vec![];
     }
     j["verdict"]["checks"]
@@ -348,6 +352,56 @@ pub fn copy_gaps(j: Option<&Value>) -> Vec<Value> {
         .filter(|c| c["result"] == "blocked" && c.get("fix").and_then(Value::as_str).is_some_and(|f| !f.is_empty()))
         .cloned()
         .collect()
+}
+
+/// Prefix of the first test's proof files that the combined result keeps.
+pub const FIRST: &str = "first-";
+
+/// The result after the copy was fixed and the PR tested again. The second test judges the PR on the
+/// fixed copy. A failure the first test found is a fault in the change, not in the copy: when the
+/// second test did not fail, the first test's failed checks and missed goals stay in the result and it
+/// fails. Their proof is renamed with `FIRST`; the list names the first test's files to keep. `None`
+/// when the second test's result stands as it is.
+pub fn combine(first: &Value, second: &Value) -> Option<(Value, Vec<String>)> {
+    if !clean(first) || !clean(second) || first["outcome"] != "FAIL" || second["outcome"] == "FAIL" {
+        return None;
+    }
+    let (v1, v2) = (&first["verdict"], &second["verdict"]);
+    let mut carried: Vec<String> = vec![];
+    let note = "In the first test, before the copy was fixed: ";
+    let mut moved = |e: &Value| {
+        let mut e = e.clone();
+        e["observed"] = Value::String(format!("{note}{}", e["observed"].as_str().unwrap_or("")));
+        if let Some(proof) = e.get("proof").and_then(Value::as_array).cloned() {
+            let names: Vec<String> = proof.iter().filter_map(Value::as_str).map(String::from).collect();
+            for f in &names {
+                if !carried.contains(f) {
+                    carried.push(f.clone());
+                }
+            }
+            e["proof"] = names.iter().map(|f| Value::String(format!("{FIRST}{f}"))).collect();
+        }
+        e
+    };
+    let list = |v: &Value, key: &str| v.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+    let failed: Vec<Value> = list(v1, "checks").iter().filter(|c| c["result"] == "fail").map(&mut moved).collect();
+    let missed: Vec<Value> = list(v1, "goals").iter().filter(|g| g["result"] == "missed").map(&mut moved).collect();
+    let same = |a: &Value, b: &Value| a.as_str().unwrap_or("").trim().to_lowercase() == b.as_str().unwrap_or("").trim().to_lowercase();
+    let mut verdict = v2.clone();
+    verdict["verdict"] = "FAIL".into();
+    let mut checks = list(v2, "checks");
+    checks.extend(failed);
+    verdict["checks"] = Value::Array(checks);
+    if let Some(goals) = v2.get("goals").and_then(Value::as_array) {
+        verdict["goals"] = goals.iter().map(|g| missed.iter().find(|m| same(&m["issue"], &g["issue"])).unwrap_or(g).clone()).collect();
+    }
+    let mut proof = list(v2, "proof");
+    proof.extend(carried.iter().map(|f| Value::String(format!("{FIRST}{f}"))));
+    verdict["proof"] = Value::Array(proof);
+    let s2 = v2["summary"].as_str().unwrap_or("");
+    let after = format!("After the copy was fixed, the second test ended {}{}", second["outcome"].as_str().unwrap_or(""), if s2.is_empty() { ".".into() } else { format!(": {s2}") });
+    verdict["summary"] = [v1["summary"].as_str().unwrap_or(""), &after].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(" ").into();
+    Some((serde_json::json!({ "verdict": verdict, "outcome": "FAIL", "problems": [] }), carried))
 }
 
 #[cfg(test)]
@@ -475,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_clean_blocked_verdict_asks_for_a_repair() {
+    fn a_clean_blocked_or_failed_verdict_asks_for_a_repair() {
         let blocked = json!({
             "outcome": "BLOCKED", "problems": [],
             "verdict": {"verdict": "BLOCKED", "summary": "s", "proof": [], "checks": [
@@ -486,13 +540,53 @@ mod tests {
         });
         let gaps = copy_gaps(Some(&blocked));
         assert_eq!(gaps.iter().map(|g| g["expect"].as_str().unwrap()).collect::<Vec<_>>(), ["pricing on the landing page"]);
+        // A failed check does not hide a gap in the copy: the blocked check still gets its repair.
         let mut failed = blocked.clone();
         failed["outcome"] = json!("FAIL");
-        assert!(copy_gaps(Some(&failed)).is_empty());
+        assert_eq!(copy_gaps(Some(&failed)).len(), 1);
+        let mut skipped = blocked.clone();
+        skipped["outcome"] = json!("SKIP");
+        assert!(copy_gaps(Some(&skipped)).is_empty());
         let mut broken = blocked.clone();
         broken["problems"] = json!(["BLOCKED with a failed check"]);
         assert!(copy_gaps(Some(&broken)).is_empty());
         assert!(copy_gaps(None).is_empty());
         assert!(copy_gaps(Some(&json!({"verdict": null, "outcome": "BLOCKED", "problems": []}))).is_empty());
+    }
+
+    #[test]
+    fn after_the_copy_is_fixed_a_failure_the_first_test_found_stays_in_the_result() {
+        let first = json!({
+            "outcome": "FAIL", "problems": [],
+            "verdict": {"verdict": "FAIL", "summary": "fail", "proof": ["report-error.png"], "checks": [
+                {"expect": "pair Zotero", "observed": "no Zotero client", "result": "blocked", "fix": "provide a Zotero test client"},
+                {"expect": "open the report", "observed": "React error #185", "result": "fail", "proof": ["report-error.png"]}
+            ], "goals": [{"issue": "#7", "goal": "g", "observed": "report breaks", "result": "missed", "proof": ["report-error.png"]}]}
+        });
+        let passed = json!({
+            "outcome": "PASS", "problems": [],
+            "verdict": {"verdict": "PASS", "summary": "pass", "proof": ["paired.png", "report.png"], "checks": [
+                {"expect": "pair Zotero", "observed": "paired", "result": "pass", "proof": ["paired.png"]},
+                {"expect": "open the report", "observed": "opened", "result": "pass", "proof": ["report.png"]}
+            ], "goals": [{"issue": " #7", "goal": "g", "observed": "ok", "result": "met"}]}
+        });
+        let (j, carried) = combine(&first, &passed).expect("the first test's failure is kept");
+        assert_eq!(j["outcome"], "FAIL");
+        assert_eq!(j["verdict"]["verdict"], "FAIL");
+        assert_eq!(carried, ["report-error.png"]);
+        let checks: Vec<(&str, &str)> = j["verdict"]["checks"].as_array().unwrap().iter().map(|c| (c["expect"].as_str().unwrap(), c["result"].as_str().unwrap())).collect();
+        assert_eq!(checks, [("pair Zotero", "pass"), ("open the report", "pass"), ("open the report", "fail")]);
+        assert!(j["verdict"]["checks"][2]["observed"].as_str().unwrap().starts_with("In the first test, before the copy was fixed: React error #185"));
+        assert_eq!(j["verdict"]["checks"][2]["proof"], json!(["first-report-error.png"]));
+        assert_eq!(j["verdict"]["goals"][0]["result"], "missed");
+        assert_eq!(j["verdict"]["proof"], json!(["paired.png", "report.png", "first-report-error.png"]));
+        assert_eq!(j["verdict"]["summary"], "fail After the copy was fixed, the second test ended PASS: pass");
+        // A second FAIL, or a first test that was only blocked, is reported as the second test found it.
+        let mut failed_again = passed.clone();
+        failed_again["outcome"] = json!("FAIL");
+        assert!(combine(&first, &failed_again).is_none());
+        let mut blocked = first.clone();
+        blocked["outcome"] = json!("BLOCKED");
+        assert!(combine(&blocked, &passed).is_none());
     }
 }
