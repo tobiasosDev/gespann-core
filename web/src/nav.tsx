@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import type { JobRow, Outcome, ProjectRow, RunRow } from "./api.ts";
+import { LOCKUP_MARK_TRANSFORM, LOCKUP_VIEWBOX, LOCKUP_WORDMARK_TRANSFORM, MARK_PATH, MARK_VIEWBOX, WORDMARK_PATH } from "./brand.ts";
+import { cn } from "./cn.ts";
 import { Badge } from "./components/ui.tsx";
 import { navigate } from "./live.ts";
 
@@ -31,11 +33,19 @@ export function Link({ to, className, children, ...rest }: { to: string; classNa
   );
 }
 
-export function Logo() {
+export function Logo({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" className="size-5" aria-hidden="true">
-      <path d="M7 6h4v20H7zM21 6h4v20h-4z" className="fill-foreground" />
-      <path d="M7 14h18v4H7z" className="fill-info" />
+    <svg viewBox={MARK_VIEWBOX} className={cn("size-5 shrink-0", className)} aria-hidden="true">
+      <path d={MARK_PATH} fill="currentColor" />
+    </svg>
+  );
+}
+
+export function Lockup({ className }: { className?: string }) {
+  return (
+    <svg viewBox={LOCKUP_VIEWBOX} className={cn("h-5 w-auto shrink-0", className)} role="img" aria-label="gespann">
+      <path d={MARK_PATH} transform={LOCKUP_MARK_TRANSFORM} fill="currentColor" />
+      <path d={WORDMARK_PATH} transform={LOCKUP_WORDMARK_TRANSFORM} fill="currentColor" />
     </svg>
   );
 }

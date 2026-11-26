@@ -2,7 +2,7 @@ import { BookOpen, Check, ChevronRight, FolderGit2, History, Link2, LogOut, Menu
 import { Fragment, useState, type ReactNode } from "react";
 import { api, type Me, type ProjectRow } from "../api.ts";
 import { usePath } from "../live.ts";
-import { landing, Link, Logo } from "../nav.tsx";
+import { landing, Link, Lockup, Logo } from "../nav.tsx";
 import { cn } from "./ui.tsx";
 
 type Dot = "ok" | "info" | "bad" | "warn" | "muted";
@@ -89,9 +89,8 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
     });
   const nav = (
     <nav className="flex h-full flex-col gap-5 px-3 py-4" aria-label="Main">
-      <Link to="/projects" className="flex items-center gap-2 px-2 font-semibold tracking-tight">
-        <Logo />
-        gespann
+      <Link to="/projects" className="flex items-center px-2">
+        <Lockup />
       </Link>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -298,8 +297,8 @@ function MobileBar({ section, children }: { section: Section; children: ReactNod
         <button className="-ml-1 cursor-pointer rounded p-1 hover:bg-accent" aria-label="Open navigation" aria-expanded={open} onClick={() => setOpen(true)}>
           <Menu className="size-5" />
         </button>
-        <Link to="/projects" className="flex items-center gap-2 font-semibold">
-          <Logo /> gespann
+        <Link to="/projects" className="flex items-center">
+          <Lockup />
         </Link>
       </header>
       {open && (
