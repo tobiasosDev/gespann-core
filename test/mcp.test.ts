@@ -7,14 +7,15 @@ import { test } from "node:test";
 import { createApp } from "../src/server/app.ts";
 import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
+import type { Github, PullRequest } from "../src/server/github.ts";
 
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a5f3d2b50000000049454e44ae426082", "hex");
 
-function setup() {
+function setup(gh?: unknown) {
   const dataDir = mkdtempSync(join(tmpdir(), "gespann-mcp-"));
   const config = loadConfig({ DATA_DIR: dataDir, ADMIN_TOKEN: "adm-token", BASE_URL: "http://localhost:3000" });
   const db = new Db(":memory:");
-  const server = createApp({ config, db, github: () => { throw new Error("no github in this test"); }, githubReady: () => false });
+  const server = createApp({ config, db, github: () => { if (!gh) throw new Error("no github in this test"); return gh as Github; }, githubReady: () => !!gh });
   const tobi = db.upsertUser({ github_id: 1, login: "tobi", name: null, avatar: null });
   const eve = db.upsertUser({ github_id: 2, login: "eve", name: null, avatar: null });
   db.setRepos(tobi.id, [{ repo_id: 1, installation_id: 9, account: "acme", full_name: "acme/shop", private: true, default_branch: "main" }]);
@@ -90,7 +91,7 @@ test("MCP: a token is needed; a revoked or wrong token is refused; the admin tok
   assert.equal((await server.request("/.well-known/openid-configuration")).status, 404, "no web app page for other discovery documents");
 });
 
-test("MCP: handshake and tool list; every tool is read-only", async () => {
+test("MCP: handshake and tool list; every tool but rerun is read-only", async () => {
   const { db, tobi, rpc, server } = setup();
   const { token } = db.createToken(tobi.id, "x");
   const init = await rpc(token, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
@@ -100,9 +101,10 @@ test("MCP: handshake and tool list; every tool is read-only", async () => {
   const note = await server.request("/mcp", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
   assert.equal(note.status, 202);
   const tools = (await rpc(token, "tools/list")).body?.result.tools as { name: string; annotations: { readOnlyHint: boolean; destructiveHint: boolean } }[];
-  assert.deepEqual(tools.map((t) => t.name), ["list_projects", "list_runs", "get_run", "get_review", "get_run_file", "get_run_log"]);
-  assert.ok(tools.every((t) => t.annotations.readOnlyHint && !t.annotations.destructiveHint));
-  assert.equal((await rpc(token, "tools/call", { name: "rerun", arguments: {} })).body?.error?.code, -32602);
+  assert.deepEqual(tools.map((t) => t.name), ["list_projects", "list_runs", "get_run", "get_review", "get_run_file", "get_run_log", "rerun"]);
+  assert.ok(tools.every((t) => !t.annotations.destructiveHint));
+  assert.deepEqual(tools.filter((t) => !t.annotations.readOnlyHint).map((t) => t.name), ["rerun"]);
+  assert.equal((await rpc(token, "tools/call", { name: "cancel", arguments: {} })).body?.error?.code, -32602);
   assert.equal((await rpc(token, "resources/list")).body?.error?.code, -32601);
 });
 
@@ -327,4 +329,102 @@ test("MCP OAuth: an agent discovers the sign-in, registers, gets the user's cons
   assert.equal((await token({ grant_type: "refresh_token", refresh_token: s1.body.refresh_token })).body.error, "invalid_grant");
   assert.equal((await rpc(s2.body.access_token, "ping")).status, 401, "the successor is revoked");
   assert.equal((await token({ grant_type: "refresh_token", refresh_token: s2.body.refresh_token })).body.error, "invalid_grant");
+});
+
+/** The PR on GitHub and the checks gespann creates for it. */
+class FakeGithub {
+  checks = 0;
+  current: PullRequest = {
+    number: 7,
+    node_id: "PR_7",
+    title: "Checkout",
+    body: null,
+    draft: false,
+    state: "open",
+    head: { sha: "f".repeat(40), ref: "checkout", repo: { full_name: "acme/shop" } },
+    base: { sha: "b".repeat(40), ref: "main", repo: { full_name: "acme/shop" } },
+    labels: [],
+    html_url: "",
+  };
+  onPull = () => {};
+  async pull() {
+    this.onPull();
+    return this.current;
+  }
+  async createCheck() {
+    return ++this.checks;
+  }
+  async updateCheck() {}
+}
+
+test("MCP: an agent reruns a failed PR at its current head; no second run while one is queued, none for a closed PR, at most 3 per head", async () => {
+  const gh = new FakeGithub();
+  const { db, tobi, eve, shop, run, foreign, call } = setup(gh);
+  const { token } = db.createToken(tobi.id, "x");
+
+  const notReady = await call(token, "rerun", { run_id: run });
+  assert.equal(notReady.isError, true);
+  assert.match(notReady.content[0].text, /no prepared environment/);
+  db.updateProject(shop, { setup: "ready" });
+
+  const started = await call(token, "rerun", { repo: "acme/shop", pr: 7 });
+  assert.equal(started.structuredContent.started, true);
+  const fresh = started.structuredContent.run;
+  assert.ok(fresh.run_id > run);
+  assert.equal(fresh.head, "f".repeat(40), "the PR's current head, not the failed run's");
+  assert.equal(fresh.status, "queued");
+  assert.equal(db.jobOfRun(fresh.run_id)?.kind, "run", "the worker gets a job");
+  assert.equal(gh.checks, 1, "the PR gets its check");
+
+  const again = await call(token, "rerun", { run_id: run });
+  assert.equal(again.structuredContent.started, false, "a queued run is not replaced");
+  assert.equal(again.structuredContent.run.run_id, fresh.run_id);
+
+  // Up to 3 runs of the same head, then a person decides.
+  db.updateRun(fresh.run_id, { status: "done", outcome: "BLOCKED" });
+  for (let i = 0; i < 2; i++) {
+    const r = (await call(token, "rerun", { run_id: run })).structuredContent;
+    assert.equal(r.started, true);
+    db.updateRun(r.run.run_id, { status: "failed" });
+  }
+  const capped = await call(token, "rerun", { run_id: run });
+  assert.equal(capped.isError, true);
+  assert.match(capped.content[0].text, /already tested 3 times/);
+  assert.equal(gh.checks, 3);
+
+  // A new push is a new head: the agent may rerun it.
+  gh.current = { ...gh.current, head: { ...gh.current.head, sha: "9".repeat(40) } };
+  assert.equal((await call(token, "rerun", { run_id: run })).structuredContent.started, true);
+  db.updateRun(db.runsOfPr(shop, 7, 1)[0]!.id, { status: "done", outcome: "PASS" });
+
+  // Someone clicks Rerun on the run page while gespann asks GitHub: that run is kept, not superseded.
+  let clicked = 0;
+  gh.onPull = () => void (clicked = db.createRun({ project_id: shop, pr: 7, title: "Checkout", head: "9".repeat(40), base: "b".repeat(40), base_ref: "main", token: "4".repeat(32) }));
+  const raced = (await call(token, "rerun", { run_id: run })).structuredContent;
+  assert.equal(raced.started, false);
+  assert.equal(raced.run.run_id, clicked);
+  assert.equal(db.run_(clicked)?.status, "queued");
+  db.updateRun(clicked, { status: "done", outcome: "PASS" });
+  gh.onPull = () => {};
+
+  gh.current = { ...gh.current, state: "closed" };
+  const closed = await call(token, "rerun", { run_id: run });
+  assert.equal(closed.isError, true);
+  assert.match(closed.content[0].text, /closed/);
+
+  // Nobody reruns a project they cannot see.
+  const { token: eveToken } = db.createToken(eve.id, "x");
+  const denied = await call(eveToken, "rerun", { run_id: run });
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /not found/);
+  void foreign;
+});
+
+test("MCP: without a GitHub App the instance says it cannot rerun", async () => {
+  const { db, tobi, shop, run, call } = setup();
+  db.updateProject(shop, { setup: "ready" });
+  const { token } = db.createToken(tobi.id, "x");
+  const r = await call(token, "rerun", { run_id: run });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /no GitHub App/);
 });

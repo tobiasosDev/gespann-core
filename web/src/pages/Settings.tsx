@@ -4,7 +4,7 @@ import { ago, api, type Settings, type Tokens, useResource } from "../api.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Sandboxes } from "./Sandboxes.tsx";
 
-/** Agent sign-ins and personal tokens for the read-only MCP endpoint, and how to connect Claude Code or Codex. */
+/** Agent sign-ins and personal tokens for the MCP endpoint, and how to connect Claude Code or Codex. */
 function AgentAccess() {
   const { data, error, reload } = useResource<Tokens>("/tokens");
   const [name, setName] = useState("");
@@ -34,7 +34,7 @@ function AgentAccess() {
     <Card className="mt-6">
       <CardHeader
         title="Agent access"
-        description="Lets Claude Code or Codex read your runs over MCP: status, issues, the review text, screenshots and recordings. Read-only: an agent cannot start, cancel or approve anything, and sees only the projects you see."
+        description="Lets Claude Code or Codex read your runs over MCP: status, issues, the review text, screenshots and recordings. An agent can also rerun a pull request (at most 3 times per commit), but cannot cancel or approve anything, and sees only the projects you see."
       />
       <div className="space-y-3 px-4 py-4">
         <p className="text-[13px] text-muted-foreground">Add gespann to your agent. It opens this site in your browser; you allow it once and are connected, no token to copy.</p>

@@ -3,11 +3,13 @@ import { extname, join } from "node:path";
 import type { Judged } from "../verify/verdict.ts";
 import { conflictNote } from "./comment.ts";
 import type { Db, Project, Run } from "./db.ts";
-import { runComment } from "./gate.ts";
+import { runComment, withPrLock } from "./gate.ts";
+import type { PullRequest } from "./github.ts";
 
 /**
- * Read-only MCP server (Streamable HTTP, stateless JSON responses) for coding agents: the status of
- * a run, its issues, the review text, the screenshots and the recording. Nothing here changes state.
+ * MCP server (Streamable HTTP, stateless JSON responses) for coding agents: the status of a run, its
+ * issues, the review text, the screenshots and the recording. The one tool that changes state,
+ * rerun, tests a PR's current head again; nothing here cancels or approves.
  */
 
 /** Who asks: a user sees the projects of repositories they can access; the operator sees all. */
@@ -17,6 +19,9 @@ export interface McpDeps {
   db: Db;
   dataDir: string;
   baseUrl: string;
+  /** The PR as GitHub has it now, and queueing a run of it; absent when the instance has no GitHub App. */
+  pull?: (p: Project, pr: number) => Promise<PullRequest>;
+  queueRun?: (p: Project, pr: PullRequest) => Promise<number>;
 }
 
 const VERSION = "0.3.0";
@@ -26,10 +31,13 @@ const IMAGE_TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "imag
 const VIDEO_TYPES: Record<string, string> = { ".mp4": "video/mp4", ".webm": "video/webm" };
 /** Larger images come back as a link only: agents' context limits are far below this. */
 const MAX_INLINE_IMAGE = 4 * 1024 * 1024;
+/** An agent may start at most this many runs of one head: a test that cannot pass must not loop. A person can still rerun from the run page. */
+export const MAX_RUNS_PER_HEAD = 3;
 
 const INSTRUCTIONS =
   "gespann tests pull requests in a production-near copy of the app and writes a verdict (PASS, FAIL, BLOCKED, SKIP) with checks, screenshots and a recording. " +
-  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. Read-only: these tools never start, cancel or approve anything.";
+  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. rerun tests the PR's current head again, e.g. after a run failed on something outside the PR or after you pushed a fix that did not start a run; it does nothing while a run of the PR is queued or running, and stops after " +
+  `${MAX_RUNS_PER_HEAD} runs of the same head. No tool cancels or approves anything.`;
 
 class ToolError extends Error {}
 
@@ -38,7 +46,9 @@ interface Tool {
   title: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  call: (args: Record<string, unknown>, v: Viewer, d: McpDeps) => ToolResult;
+  /** Only rerun changes state; every other tool just reads. */
+  writes?: true;
+  call: (args: Record<string, unknown>, v: Viewer, d: McpDeps) => ToolResult | Promise<ToolResult>;
 }
 
 interface Content {
@@ -258,6 +268,49 @@ const TOOLS: Tool[] = [
       return { content: [{ type: "text", text: shown.trim() ? shown : `Run ${run.id} has no log (status ${run.status}).` }] };
     },
   },
+  {
+    name: "rerun",
+    title: "Rerun",
+    description: `Tests the pull request of a run again, at the PR's current head (not the run's old head), like Rerun on the run page. Use it when a run failed or was blocked by something outside the PR, or when you pushed and no run started. Does nothing while a run of the PR is queued or running (returns that run), refuses closed PRs and stops after ${MAX_RUNS_PER_HEAD} runs of the same head. Give run_id, or repo and pr. Follow the new run with get_run.`,
+    inputSchema: { type: "object", properties: { run_id: { type: "integer" }, repo: { type: "string", description: "owner/repo or project id" }, pr: { type: "integer", minimum: 1 } }, additionalProperties: false },
+    writes: true,
+    call: async (a, v, d) => {
+      const { run, project } = runOf(d, v, a);
+      const { pull, queueRun } = d;
+      if (!pull || !queueRun) throw new ToolError("this gespann instance cannot start runs: it has no GitHub App");
+      if (project.setup !== "ready") throw new ToolError(`${project.repo} has no prepared environment yet (setup: ${project.setup}); prepare it on the project page first`);
+      // Under the PR's lock, so two calls at once (or a push arriving) cannot start two runs.
+      return withPrLock(project, run.pr, async () => {
+        const inFlight = () => {
+          const live = d.db.runsOfPr(project.id, run.pr, 1)[0];
+          return live && (live.status === "queued" || live.status === "running") ? json({ started: false, reason: `run ${live.id} of this PR is already ${live.status}; follow it with get_run`, run: runRow(d, live) }) : null;
+        };
+        const busy = inFlight();
+        if (busy) return busy;
+        let pr: PullRequest;
+        try {
+          pr = await pull(project, run.pr);
+        } catch (err) {
+          throw new ToolError(`GitHub did not return ${project.repo}#${run.pr}: ${(err as Error).message}`);
+        }
+        if (pr.state !== "open") throw new ToolError(`${project.repo}#${pr.number} is ${pr.state}; gespann tests open pull requests only`);
+        // The web Rerun button takes no lock: a run it queued while GitHub answered must not be superseded.
+        const queuedMeanwhile = inFlight();
+        if (queuedMeanwhile) return queuedMeanwhile;
+        const sameHead = d.db.runsAtHead(project.id, pr.number, pr.head.sha);
+        if (sameHead >= MAX_RUNS_PER_HEAD)
+          throw new ToolError(`${project.repo}#${pr.number} was already tested ${sameHead} times at ${pr.head.sha.slice(0, 12)}; push a change, or ask a person to use Rerun on the run page (${runUrl(d, run)})`);
+        let id: number;
+        try {
+          id = await queueRun(project, pr);
+        } catch (err) {
+          throw new ToolError(`gespann could not start a run: ${(err as Error).message}`);
+        }
+        const started = d.db.run_(id);
+        return json({ started: true, run: started ? runRow(d, started) : { run_id: id, url: `${d.baseUrl}/runs/${id}` } });
+      });
+    },
+  },
 ];
 
 export const TOOL_NAMES = TOOLS.map((t) => t.name);
@@ -272,7 +325,7 @@ interface RpcRequest {
 const reply = (id: RpcRequest["id"], result: unknown) => ({ jsonrpc: "2.0", id, result });
 const fail = (id: RpcRequest["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
-function handle(msg: RpcRequest, v: Viewer, d: McpDeps): unknown {
+async function handle(msg: RpcRequest, v: Viewer, d: McpDeps): Promise<unknown> {
   if (typeof msg !== "object" || msg === null || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return fail(msg?.id, -32600, "invalid request");
   // Notifications (no id) get no answer.
   if (msg.id === undefined) return undefined;
@@ -290,14 +343,14 @@ function handle(msg: RpcRequest, v: Viewer, d: McpDeps): unknown {
       return reply(msg.id, {});
     case "tools/list":
       return reply(msg.id, {
-        tools: TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: { title: t.title, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } })),
+        tools: TOOLS.map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: { title: t.title, readOnlyHint: !t.writes, destructiveHint: false, idempotentHint: !t.writes, openWorldHint: !!t.writes } })),
       });
     case "tools/call": {
       const tool = TOOLS.find((t) => t.name === msg.params?.name);
       if (!tool) return fail(msg.id, -32602, `unknown tool ${JSON.stringify(msg.params?.name)}`);
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
       try {
-        return reply(msg.id, tool.call(typeof args === "object" && args !== null ? args : {}, v, d));
+        return reply(msg.id, await tool.call(typeof args === "object" && args !== null ? args : {}, v, d));
       } catch (err) {
         if (err instanceof ToolError) return reply(msg.id, { content: [{ type: "text", text: err.message }], isError: true });
         throw err;
@@ -309,10 +362,10 @@ function handle(msg: RpcRequest, v: Viewer, d: McpDeps): unknown {
 }
 
 /** Answers one POSTed body: a JSON-RPC message or a batch. `null` means 202 with no body (only notifications). */
-export function mcpRespond(body: unknown, v: Viewer, d: McpDeps): unknown {
+export async function mcpRespond(body: unknown, v: Viewer, d: McpDeps): Promise<unknown> {
   if (Array.isArray(body)) {
-    const out = body.map((m) => handle(m as RpcRequest, v, d)).filter((r) => r !== undefined);
+    const out = (await Promise.all(body.map((m) => handle(m as RpcRequest, v, d)))).filter((r) => r !== undefined);
     return out.length ? out : null;
   }
-  return handle(body as RpcRequest, v, d) ?? null;
+  return (await handle(body as RpcRequest, v, d)) ?? null;
 }
