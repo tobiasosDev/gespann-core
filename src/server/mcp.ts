@@ -281,8 +281,12 @@ const TOOLS: Tool[] = [
       if (project.setup !== "ready") throw new ToolError(`${project.repo} has no prepared environment yet (setup: ${project.setup}); prepare it on the project page first`);
       // Under the PR's lock, so two calls at once (or a push arriving) cannot start two runs.
       return withPrLock(project, run.pr, async () => {
-        const live = d.db.runsOfPr(project.id, run.pr, 1)[0];
-        if (live && (live.status === "queued" || live.status === "running")) return json({ started: false, reason: `run ${live.id} of this PR is already ${live.status}; follow it with get_run`, run: runRow(d, live) });
+        const inFlight = () => {
+          const live = d.db.runsOfPr(project.id, run.pr, 1)[0];
+          return live && (live.status === "queued" || live.status === "running") ? json({ started: false, reason: `run ${live.id} of this PR is already ${live.status}; follow it with get_run`, run: runRow(d, live) }) : null;
+        };
+        const busy = inFlight();
+        if (busy) return busy;
         let pr: PullRequest;
         try {
           pr = await pull(project, run.pr);
@@ -290,7 +294,10 @@ const TOOLS: Tool[] = [
           throw new ToolError(`GitHub did not return ${project.repo}#${run.pr}: ${(err as Error).message}`);
         }
         if (pr.state !== "open") throw new ToolError(`${project.repo}#${pr.number} is ${pr.state}; gespann tests open pull requests only`);
-        const sameHead = d.db.runsOfPr(project.id, pr.number, 100).filter((r) => r.head === pr.head.sha && r.status !== "cancelled").length;
+        // The web Rerun button takes no lock: a run it queued while GitHub answered must not be superseded.
+        const queuedMeanwhile = inFlight();
+        if (queuedMeanwhile) return queuedMeanwhile;
+        const sameHead = d.db.runsAtHead(project.id, pr.number, pr.head.sha);
         if (sameHead >= MAX_RUNS_PER_HEAD)
           throw new ToolError(`${project.repo}#${pr.number} was already tested ${sameHead} times at ${pr.head.sha.slice(0, 12)}; push a change, or ask a person to use Rerun on the run page (${runUrl(d, run)})`);
         let id: number;

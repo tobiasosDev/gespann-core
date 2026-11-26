@@ -346,7 +346,9 @@ class FakeGithub {
     labels: [],
     html_url: "",
   };
+  onPull = () => {};
   async pull() {
+    this.onPull();
     return this.current;
   }
   async createCheck() {
@@ -394,6 +396,16 @@ test("MCP: an agent reruns a failed PR at its current head; no second run while 
   gh.current = { ...gh.current, head: { ...gh.current.head, sha: "9".repeat(40) } };
   assert.equal((await call(token, "rerun", { run_id: run })).structuredContent.started, true);
   db.updateRun(db.runsOfPr(shop, 7, 1)[0]!.id, { status: "done", outcome: "PASS" });
+
+  // Someone clicks Rerun on the run page while gespann asks GitHub: that run is kept, not superseded.
+  let clicked = 0;
+  gh.onPull = () => void (clicked = db.createRun({ project_id: shop, pr: 7, title: "Checkout", head: "9".repeat(40), base: "b".repeat(40), base_ref: "main", token: "4".repeat(32) }));
+  const raced = (await call(token, "rerun", { run_id: run })).structuredContent;
+  assert.equal(raced.started, false);
+  assert.equal(raced.run.run_id, clicked);
+  assert.equal(db.run_(clicked)?.status, "queued");
+  db.updateRun(clicked, { status: "done", outcome: "PASS" });
+  gh.onPull = () => {};
 
   gh.current = { ...gh.current, state: "closed" };
   const closed = await call(token, "rerun", { run_id: run });

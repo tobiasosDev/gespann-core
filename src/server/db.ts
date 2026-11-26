@@ -628,6 +628,11 @@ export class Db {
     return this.one<Run>("select * from runs where id = ?", id);
   }
 
+  /** How often this PR head was tested or queued, superseded runs not counted. */
+  runsAtHead(projectId: number, pr: number, head: string): number {
+    return this.one<{ n: number }>("select count(*) n from runs where project_id = ? and pr = ? and head = ? and status != 'cancelled'", projectId, pr, head)?.n ?? 0;
+  }
+
   /** The newest run of this PR head that was not superseded. */
   runForHead(projectId: number, pr: number, head: string): Run | undefined {
     return this.one<Run>("select * from runs where project_id = ? and pr = ? and head = ? and status != 'cancelled' order by id desc limit 1", projectId, pr, head);
