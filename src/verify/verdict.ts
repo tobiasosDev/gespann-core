@@ -109,10 +109,10 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
   const proof = Array.isArray(v.proof) ? v.proof.map(String) : [];
   const missed = goals.some((g) => g.result === "missed");
   const blockedGoal = goals.some((g) => g.result === "blocked");
-  // A FAIL whose only failures are already on the base branch is what the other checks make it.
+  // A FAIL whose only failures are already on the base branch is what the other checks make it; the verdict keeps what the tester wrote.
   let kind = written;
   if (written === "FAIL" && !missed && !checks.some(failed) && checks.some(preExisting)) kind = checks.some((c) => c.result === "blocked") || blockedGoal ? "BLOCKED" : "PASS";
-  const verdict: Verdict = { verdict: kind as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
+  const verdict: Verdict = { verdict: written as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
 
   if (kind === "PASS") {
     if (!checks.length) problems.push("PASS without checks");

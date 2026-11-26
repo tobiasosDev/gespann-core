@@ -13,7 +13,7 @@ const onBase = {
   expect: "the citation expanded in the embed stays expanded",
   observed: "the first reference is expanded instead",
   result: "fail",
-  pre_existing: "QuickCheck.tsx line 88 defaults to the first row on main as well",
+  pre_existing: "CartBadge.tsx line 12 reads the old count key on main as well",
 };
 
 test("a failed check that fails the same way on the base branch does not fail the PR", () => {
@@ -21,6 +21,7 @@ test("a failed check that fails the same way on the base branch does not fail th
   const asFail = judged("FAIL", [pass, onBase]);
   assert.equal(asFail.outcome, "PASS");
   assert.deepEqual(asFail.problems, []);
+  assert.equal(asFail.verdict?.verdict, "FAIL", "what the tester wrote stays as written");
   assert.equal(asFail.verdict?.checks[1]?.pre_existing, onBase.pre_existing);
   // Written as PASS, as the prompt asks, it stands.
   assert.equal(judged("PASS", [pass, onBase]).outcome, "PASS");
@@ -43,6 +44,6 @@ test("the PR comment shows a pre-existing failure as a note of its own, not as a
   const body = renderComment({ outcome: j.outcome, judged: j, files: ["a.png"], fileUrl: (f) => f, runUrl: "u", head: "abcdef123", baseRef: "main" });
   assert.match(body, /### ✅ gespann: PASS · 1\/2 checks passed · 1 already on `main`/);
   assert.match(body, /\*\*Already on `main`\*\*: this check fails on the base branch the same way/);
-  assert.match(body, /\| 🔁 \| the citation expanded in the embed stays expanded \| .* \| QuickCheck.tsx line 88/);
+  assert.match(body, /\| 🔁 \| the citation expanded in the embed stays expanded \| .* \| CartBadge.tsx line 12/);
   assert.doesNotMatch(body, /❌/);
 });
