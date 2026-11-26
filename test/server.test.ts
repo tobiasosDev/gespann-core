@@ -44,6 +44,26 @@ test("one job per project at a time; a newer push cancels queued runs of the sam
   assert.equal(db.job(j1)?.status, "running");
 });
 
+test("a newer push supersedes the PR's queued and running runs; its job keeps the sandbox until the worker stops", () => {
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const a = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/a", repo_id: 1, default_branch: "main" });
+  const mk = (pr: number, head: string) => db.createRun({ project_id: a, pr, title: "t", head, base: "b", base_ref: "main", token: head.padEnd(32, "0") });
+  const running = mk(4, "h1");
+  const rj = db.enqueue(a, "run", running);
+  db.claimJob(rj);
+  db.updateRun(running, { status: "running" });
+  const queued = mk(4, "h2");
+  const qj = db.enqueue(a, "run", queued);
+  const other = mk(5, "h3");
+  db.updateRun(other, { status: "running" });
+  assert.deepEqual(db.supersedeRuns(a, 4).map((r) => r.id).sort(), [running, queued]);
+  for (const r of [running, queued]) assert.deepEqual([db.run_(r)?.status, db.run_(r)?.error], ["cancelled", "superseded by a newer push"]);
+  assert.equal(db.job(qj)?.status, "cancelled", "the queued one never starts");
+  assert.equal(db.job(rj)?.status, "running", "the running one still holds its sandbox while it stops");
+  assert.equal(db.run_(other)?.status, "running", "another PR's run goes on");
+});
+
 test("API: anonymous me, setup hidden without the admin token, auth needed, CSRF header, webhook signature, SPA fallback", async () => {
   const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data", ADMIN_TOKEN: "adm" });
   const db = new Db(":memory:");

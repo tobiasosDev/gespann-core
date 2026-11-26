@@ -585,6 +585,67 @@ test("parallel: two PR runs of one project run at once in two sandboxes; the new
   assert.deepEqual(JSON.parse(sb.files.get(`${work}issues.json`) ?? "null"), [{ ref: "#12", url: issue.url }]);
 });
 
+test("worker: a newer push stops the PR's running test: the tester is killed, the copy goes down without waiting, nothing is reported", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_state: "connected", codex_auth: seal(config.sessionSecret, JSON.stringify({ tokens: {}, last_refresh: new Date().toISOString() })) });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  const recipe = "version: 1\ntrigger: { paths: [\"**\"] }\nenv: { up: x, down: y, url: \"http://127.0.0.1:3000\" }\n";
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe });
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h1", base: "b", base_ref: "main", token: "0".repeat(32) });
+  db.updateRun(run, { check_run_id: 11 });
+  class Busy extends FakeSandboxes {
+    readonly killed: number[] = [];
+    private readonly kinds = new Map<number, string>();
+    override async start(id: string, command: string) {
+      await super.start(id, command);
+      const pid = this.kinds.size + 1;
+      this.kinds.set(pid, command.includes("verify prepare") ? "prepare" : command.includes("prompt.txt") ? "tester" : "other");
+      // The tester is at work when the PR gets a newer push.
+      if (this.kinds.get(pid) === "tester") db.supersedeRuns(p, 4);
+      return pid;
+    }
+    override async status(_id: string, pid: number): Promise<ProcessStatus> {
+      const kind = this.kinds.get(pid);
+      if (kind === "tester" && !this.killed.includes(pid)) return { running: true, status: "running", exitCode: null, stdout: "", stderr: "" };
+      return { running: false, status: "exited", exitCode: 0, stdout: kind === "prepare" ? '{"ok":true,"url":"http://127.0.0.1:3000"}\n' : "", stderr: "" };
+    }
+    override async kill(_id: string, pid: number) {
+      this.killed.push(pid);
+    }
+  }
+  const sb = new Busy();
+  sb.files.set("/srv/fresh/gespann/project/verify.yml", recipe);
+  const checks: [number, string | undefined, string | undefined][] = [];
+  const comments: unknown[] = [];
+  const github = {
+    installationToken: async () => "tok",
+    pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h2" }, labels: [] }),
+    linkedIssues: async () => [],
+    updateCheck: async (_i: number, _r: string, id: number, f: { status?: string; conclusion?: string }) => void checks.push([id, f.status, f.conclusion]),
+    comment: async (...a: unknown[]) => void comments.push(a),
+    updateComment: async (...a: unknown[]) => void comments.push(a),
+  } as unknown as Github;
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.equal(db.job(job.id)?.status, "cancelled", db.job(job.id)?.error ?? "");
+  assert.equal(db.run_(run)?.status, "cancelled");
+  assert.equal(db.run_(run)?.error, "superseded by a newer push", "the reason stays, not the error the stop caused");
+  assert.equal(db.run_(run)?.outcome, null, "no verdict for a stopped run");
+  assert.equal(sb.killed.length, 1, "the tester is killed");
+  const all = sb.commands.join("\n");
+  assert.match(all, /gespann verify finish .* --wait 0/, "the copy goes down without waiting for checks alongside");
+  assert.deepEqual(checks, [[11, "in_progress", undefined]], "only the progress before the push; the newer run reports");
+  assert.deepEqual(comments, []);
+  const log = db.job(job.id)?.log ?? "";
+  assert.match(log, /the tester was stopped/);
+  assert.match(log, /stopped: a newer push supersedes this run/);
+  assert.doesNotMatch(log, /verdict:|finish did not report/, "the stopped attempt logs no verdict");
+  assert.deepEqual(db.slots(p).map((s) => s.job_id), [null], "the sandbox is free again");
+});
+
 /** A sandbox stand-in with files only, for the Codex sign-in. */
 function authBox() {
   const files = new Map<string, string>();
