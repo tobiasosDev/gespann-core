@@ -623,8 +623,8 @@ async function onIssueComment(d: AppDeps, payload: Record<string, unknown>): Pro
   if (!p) return;
   await withPrLock(p, issue.number, async () => {
     const pr = await d.github().pull(p.installation_id, p.repo, issue.number);
-    // Only a PR the gate applies to: labeled, and not a draft its author made.
-    if (pr.state !== "open" || !gated(p, pr) || (pr.draft && !d.db.hold(p.id, pr.number)?.held)) return;
+    // Any open PR: the approval ends its gespann check, so a required check lets it merge.
+    if (pr.state !== "open") return;
     await approve({ db: d.db, github: d.github, baseUrl: d.config.baseUrl }, p, pr, sender.login);
   });
 }

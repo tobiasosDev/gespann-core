@@ -8,7 +8,7 @@ import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/s
 import { emptyProgress, mergeTester, parseProgress, type Progress, type Stage, startStage } from "../verify/progress.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { conflictNote } from "./comment.ts";
-import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
+import { applyGate, approvedHead, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import type { ServerModule } from "./extension.ts";
@@ -399,8 +399,9 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const runUrl = `${d.config.baseUrl}/runs/${run.id}`;
   const started = new Date().toISOString();
   d.db.updateRun(run.id, { status: "running", started, progress: JSON.stringify(startStage(emptyProgress(), "sandbox", started)) });
+  // An approved head keeps the neutral check its approval gave it while the test runs.
   const progress = (title: string, summary: string) =>
-    run.check_run_id && !stopped(d, job) ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
+    run.check_run_id && !stopped(d, job) && !approvedHead(d.db, p, run.pr, run.head) ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
   await progress("Testing the change", "An agent is testing this PR on a production-near copy.");
   let b = await ensureSandbox(d, p, job, log);
   // A new sandbox, or one with an older recipe, takes over the project's current one; a replaced
@@ -774,7 +775,7 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     const conflict = run.conflict ? conflictNote(run.base_ref, JSON.parse(run.conflict) as string[]) : null;
     const conclusion = conflict || !judged?.verdict
       ? "neutral" // gespann itself failed (sandbox, copy, Codex): never a FAIL on the PR
-      : outcome === "FAIL" && (state !== "off" || !isShadow(p))
+      : outcome === "FAIL" && (state !== "off" || !isShadow(p)) && !approvedHead(d.db, p, run.pr, run.head) // a person released this head
         ? "failure"
         : outcome === "FAIL"
           ? "neutral"

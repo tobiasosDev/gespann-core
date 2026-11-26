@@ -171,6 +171,7 @@ test("merge gate: a person releases a held PR by comment, by Ready for review, o
   assert.equal(gh.calls[2], "ready");
   assert.match(gh.calls[3] ?? "", /^comment:🔓 Released by @tobi/);
   assert.equal(db.hold(project().id, 7)?.approved_head, gh.current.head.sha);
+  assert.deepEqual(gh.checks.at(-1), { id: 1, conclusion: "neutral", title: "Approved by @tobi without a passing test" }, "a required check lets it merge");
 
   // Ready for review by a person on a held PR counts as approval of that head.
   gh.current = { ...gh.current, head: { ...gh.current.head, sha: "d".repeat(40) } };
@@ -190,10 +191,25 @@ test("merge gate: a person releases a held PR by comment, by Ready for review, o
   await send("pull_request", { action: "unlabeled", label: { name: "gespann" }, pull_request: gh.current, sender: person });
   assert.deepEqual(gh.calls.slice(-2), ["ready", "edit"], "released, and the one gespann comment says so");
 
-  // Without the label, an approve comment is not recorded for later.
+  // Without the label, an approve comment still ends the head's check, so a required check lets it
+  // merge; a head gespann never started on gets a check for it. The PR stays as it is.
   gh.current = { ...gh.current, head: { ...gh.current.head, sha: "f".repeat(40) }, draft: false };
+  const calls = gh.calls.length;
   await say("/gespann approve", "OWNER");
-  assert.notEqual(db.hold(project().id, 7)?.approved_head, gh.current.head.sha);
+  assert.equal(db.hold(project().id, 7)?.approved_head, gh.current.head.sha);
+  assert.deepEqual(gh.calls.slice(calls), ["check"]);
+  assert.equal(gh.checks.at(-1)?.conclusion, "neutral");
+});
+
+test("merge gate: an approval leaves a passed head's green check alone", async () => {
+  const { db, gh, send, project } = setup();
+  gh.current = pr({ labels: [{ name: "gespann" }] });
+  await send("pull_request", { action: "opened", pull_request: gh.current, sender: person });
+  const run = db.runForHead(project().id, 7, gh.current.head.sha)!;
+  db.updateRun(run.id, { status: "done", outcome: "PASS" });
+  await send("issue_comment", { action: "created", issue: { number: 7, pull_request: {} }, comment: { body: "/gespann approve", author_association: "OWNER" }, sender: person });
+  assert.equal(db.hold(project().id, 7)?.approved_head, gh.current.head.sha);
+  assert.deepEqual(gh.checks, []);
 });
 
 test("merge gate: PRs without the label and the author's own drafts are left alone", async () => {
