@@ -309,6 +309,10 @@ export class Db {
     this.run("insert into sessions (id, user_id, created, expires) values (?, ?, ?, ?)", id, userId, now(), new Date(Date.now() + days * 86_400_000).toISOString());
   }
 
+  user(id: number): User | undefined {
+    return this.one<User>("select * from users where id = ?", id);
+  }
+
   sessionUser(id: string): User | undefined {
     return this.one<User>("select u.* from sessions s join users u on u.id = s.user_id where s.id = ? and s.expires > ?", id, now());
   }

@@ -6,6 +6,8 @@ export interface Me {
   user: { login: string; avatar: string | null } | null;
   githubReady: boolean;
   installUrl: string | null;
+  /** Pages a server module of this instance adds, shown in the sidebar. */
+  links?: { label: string; href: string }[];
 }
 
 export interface RunRow {

@@ -51,7 +51,7 @@ test("API: anonymous me, setup hidden without the admin token, auth needed, CSRF
   db.setSetting("github_app", JSON.stringify(app));
   const server = createApp({ config, db, github: () => new Github(app), githubReady: () => true });
   const me = await (await server.request("/api/me")).json();
-  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new" });
+  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new", links: [] });
   assert.equal((await server.request("/setup")).status, 404);
   assert.equal((await server.request("/setup/github/created?state=x&code=y")).status, 409, "an instance with an app never replaces it");
   assert.equal((await server.request("/api/projects", { headers: { "x-gespann": "1" } })).status, 401);
