@@ -278,7 +278,7 @@ export function SettingsPage() {
           )}
           {modelError && <p className="text-body text-bad">{modelError}</p>}
           {selected?.note && <p className="text-body text-warn">{selected.note}</p>}
-          {recommended && selected?.id !== recommended.id && (
+          {recommended && !isCustom && selected?.id !== recommended.id && (
             <p className="text-body">
               Recommended: {recommended.name}. In our benchmark it judged every test PR right.{" "}
               <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void saveModel(recommended.id)}>
