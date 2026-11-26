@@ -8,7 +8,7 @@ import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/s
 import { emptyProgress, mergeTester, parseProgress, type Progress, type Stage, startStage } from "../verify/progress.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { conflictNote } from "./comment.ts";
-import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
+import { applyGate, approvedHead, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import type { ServerModule } from "./extension.ts";
@@ -400,7 +400,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const started = new Date().toISOString();
   d.db.updateRun(run.id, { status: "running", started, progress: JSON.stringify(startStage(emptyProgress(), "sandbox", started)) });
   const progress = (title: string, summary: string) =>
-    run.check_run_id && !stopped(d, job) ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
+    run.check_run_id && !stopped(d, job) ? pendingCheck(d, p, run, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }) : undefined;
   await progress("Testing the change", "An agent is testing this PR on a production-near copy.");
   let b = await ensureSandbox(d, p, job, log);
   // A new sandbox, or one with an older recipe, takes over the project's current one; a replaced
@@ -774,7 +774,7 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     const conflict = run.conflict ? conflictNote(run.base_ref, JSON.parse(run.conflict) as string[]) : null;
     const conclusion = conflict || !judged?.verdict
       ? "neutral" // gespann itself failed (sandbox, copy, Codex): never a FAIL on the PR
-      : outcome === "FAIL" && (state !== "off" || !isShadow(p))
+      : outcome === "FAIL" && (state !== "off" || !isShadow(p)) && !approvedHead(d.db, p, run.pr, run.head) // a person released this head
         ? "failure"
         : outcome === "FAIL"
           ? "neutral"
@@ -866,6 +866,14 @@ async function skipForChecks(d: Deps, p: Project, run: Run, reason: string, log:
   });
 }
 
+/** Marks the run's check as waiting or testing, unless a person approved its head: that check stays neutral. */
+async function pendingCheck(d: Deps, p: Project, run: Run, fields: { status: "queued" | "in_progress"; title: string; summary: string }): Promise<void> {
+  // In the PR's lock, so an approval that lands at the same time is not undone.
+  await withPrLock(p, run.pr, async () => {
+    if (run.check_run_id && !approvedHead(d.db, p, run.pr, run.head)) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, fields);
+  }).catch(() => undefined);
+}
+
 /** "go" when the run may take a sandbox now; otherwise the job went back into the queue or the run ended. */
 async function awaitChecks(d: Deps, job: Job, p: Project, run: Run, log: (s: string) => void): Promise<"go" | "later" | "skipped"> {
   const age = Date.now() - Date.parse(run.created);
@@ -894,7 +902,7 @@ async function awaitChecks(d: Deps, job: Job, p: Project, run: Run, log: (s: str
   const last = d.db.job(job.id)?.log.trimEnd().split("\n").at(-1) ?? "";
   if (!last.endsWith(step.line)) {
     log(step.line);
-    if (run.check_run_id) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "queued", title: "Waiting for the other checks", summary: `gespann tests this PR once its other checks pass. ${step.line[0]?.toUpperCase()}${step.line.slice(1)}.` }).catch(() => undefined);
+    if (run.check_run_id) await pendingCheck(d, p, run, { status: "queued", title: "Waiting for the other checks", summary: `gespann tests this PR once its other checks pass. ${step.line[0]?.toUpperCase()}${step.line.slice(1)}.` });
   }
   d.db.deferJob(job.id, new Date(Date.now() + step.ms).toISOString());
   return "later";

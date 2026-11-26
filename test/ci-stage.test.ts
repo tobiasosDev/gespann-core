@@ -70,6 +70,14 @@ function setup(checks: OtherChecks | Error) {
   return { db, deps: { db, sandboxes: noSandboxes(calls), github: () => github, config }, job, id, updates, calls };
 }
 
+test("worker: a run waiting for CI leaves the neutral check of a head a person approved", async () => {
+  const t = setup({ ...none, pending: ["check"] });
+  t.db.setHold(1, 4, { approved_by: "tobi", approved_head: "h" });
+  await processJob(t.deps, t.job);
+  assert.equal(t.db.job(t.job.id)?.status, "queued", "it still waits to test");
+  assert.deepEqual(t.updates, [], "no queued check over the approval");
+});
+
 test("worker: a run whose PR still runs its other checks goes back into the queue without a sandbox, and the wait is no sandbox time", async () => {
   const t = setup({ ...none, pending: ["check"] });
   await processJob(t.deps, t.job);

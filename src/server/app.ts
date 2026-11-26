@@ -13,7 +13,7 @@ import { parseRecipe } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
-import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
+import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import type { ServerModule } from "./extension.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
@@ -532,6 +532,9 @@ async function queueRun(d: AppDeps, p: Project, pr: PullRequest): Promise<number
     return null;
   });
   if (check) d.db.updateRun(runId, { check_run_id: check });
+  // A head a person already approved keeps a neutral check; the test still runs and may turn it green.
+  const approvedBy = d.db.hold(p.id, pr.number)?.approved_head === pr.head.sha ? d.db.hold(p.id, pr.number)?.approved_by : null;
+  if (check && approvedBy) await d.github().updateCheck(p.installation_id, p.repo, check, approvedCheck(approvedBy)).catch((err: Error) => logError("approved-check", err));
   if (d.db.run_(runId)?.status === "cancelled") {
     // A newer push arrived while the check was created.
     if (check) await d.github().updateCheck(p.installation_id, p.repo, check, { status: "completed", conclusion: "cancelled", title: "Superseded by a newer push", summary: "A newer commit is tested instead." }).catch((err: Error) => logError("cancel-check", err));
@@ -623,8 +626,8 @@ async function onIssueComment(d: AppDeps, payload: Record<string, unknown>): Pro
   if (!p) return;
   await withPrLock(p, issue.number, async () => {
     const pr = await d.github().pull(p.installation_id, p.repo, issue.number);
-    // Only a PR the gate applies to: labeled, and not a draft its author made.
-    if (pr.state !== "open" || !gated(p, pr) || (pr.draft && !d.db.hold(p.id, pr.number)?.held)) return;
+    // Any open PR: the approval ends its gespann check, so a required check lets it merge.
+    if (pr.state !== "open") return;
     await approve({ db: d.db, github: d.github, baseUrl: d.config.baseUrl }, p, pr, sender.login);
   });
 }

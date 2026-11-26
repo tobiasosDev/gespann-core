@@ -97,9 +97,31 @@ export async function applyGate(d: GateDeps, p: Project, pr: PullRequest): Promi
   return state;
 }
 
-/** Releases a gated PR's current head without a passing test, on a person's word. */
+/** The person released this head of the PR without a passing test. */
+export const approvedHead = (db: Db, p: Project, pr: number, head: string) => db.hold(p.id, pr)?.approved_head === head;
+
+/** An approved head's gespann check: neutral, which a required check accepts. */
+export const approvedCheck = (login: string) => ({
+  status: "completed" as const,
+  conclusion: "neutral" as const,
+  title: `Approved by @${login} without a passing test`,
+  summary: `@${login} approved this commit: it may be merged without a passing gespann test. A new push needs a new pass or approval.`,
+});
+
+/**
+ * Releases the PR's current head without a passing test, on a person's word: its gespann check ends
+ * neutral and a gated PR leaves draft. A head that passed keeps its green check; a head gespann never
+ * started on gets a check, so a required check is not left missing. Call inside withPrLock.
+ */
 export async function approve(d: GateDeps, p: Project, pr: PullRequest, login: string): Promise<void> {
   d.db.setHold(p.id, pr.number, { approved_by: login, approved_head: pr.head.sha });
+  const run = d.db.runForHead(p.id, pr.number, pr.head.sha);
+  if (!(run?.status === "done" && run.outcome === "PASS" && run.check_run_id)) {
+    const gh = d.github();
+    const checkId = run?.check_run_id ?? (await gh.createCheck(p.installation_id, p.repo, pr.head.sha, run ? `${d.baseUrl}/runs/${run.id}` : d.baseUrl));
+    await gh.updateCheck(p.installation_id, p.repo, checkId, approvedCheck(login));
+  }
+  if (!gated(p, pr)) return;
   await applyGate(d, p, pr);
   await refreshComment(d, p, pr);
 }
