@@ -45,9 +45,14 @@ export async function sweepMedia(d: MediaSweepDeps): Promise<number[]> {
       .catch((err: Error) => (logError(`media sweep ${first.repo}#${first.pr}`, err), null));
     if (!pr || pr.state === "open" || !pr.closed_at || Date.parse(pr.closed_at) > cutoff) continue;
     for (const run of runs) {
-      // The database first: from here on the proof URLs answer 404 even if a file cannot be removed.
+      // Files first: a run whose files could not all be removed is tried again by the next sweep.
+      try {
+        for (const f of run.media) rmSync(join(d.dataDir, "runs", String(run.id), f), { force: true });
+      } catch (err) {
+        logError(`media sweep run ${run.id}`, err as Error);
+        continue;
+      }
       d.db.updateRun(run.id, { files: JSON.stringify((JSON.parse(run.files) as string[]).filter((f) => !MEDIA.test(f))), media_cleared: now() });
-      for (const f of run.media) rmSync(join(d.dataDir, "runs", String(run.id), f), { force: true });
       cleared.push(run.id);
     }
   }

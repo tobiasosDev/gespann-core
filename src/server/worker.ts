@@ -448,8 +448,8 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   }
   let judged = a.judged;
   const outcome = a.outcome;
-  const { files, alias } = await collect(d, b, run, `${dir}/out`, log);
-  await dropRunDirs(d, b, run, a.clean);
+  const { files, alias, complete } = await collect(d, b, run, `${dir}/out`, log);
+  if (complete) await dropProof(d, b, run);
   if (judged) judged = withAliases(judged, alias);
   // A verdict without the issue goals says why, on the run page and over MCP.
   if (unread && judged?.verdict) {
@@ -463,12 +463,12 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
 }
 
 /**
- * The server now has the proof: the run's folders in the sandbox go, of both attempts. After an
- * unclean teardown the work folder stays, its state.json says what is still up.
+ * The server now has the proof: the sandbox's copy of it goes, of both attempts. The work folders
+ * stay; their state.json says what may still be up.
  */
-async function dropRunDirs(d: Deps, b: Box, run: Run, clean: boolean): Promise<void> {
-  const dirs = [run.token.slice(0, 12), run.token.slice(12, 24)].map((id) => `${b.gespann}/runs/${id}`);
-  await d.sandboxes.exec(b.id, `rm -rf ${dirs.map((x) => (clean ? x : `${x}/out`)).join(" ")}`, 120).catch(() => undefined);
+async function dropProof(d: Deps, b: Box, run: Run): Promise<void> {
+  const outs = [run.token.slice(0, 12), run.token.slice(12, 24)].map((id) => `${b.gespann}/runs/${id}/out`);
+  await d.sandboxes.exec(b.id, `rm -rf ${outs.join(" ")}`, 120).catch(() => undefined);
 }
 
 /** A run lost in a restart may have left its copy up: finish tears it down before the run starts again. */
@@ -640,7 +640,7 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
  * Copies the run's proof to the server. Screenshots of the same screen are copied once; `alias`
  * maps each skipped one to the screenshot that was kept.
  */
-async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string> }> {
+async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string>; complete: boolean }> {
   const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -104857601c -printf '%f\\n'`, 30);
   const big = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size +104857600c -printf '%f %s\\n'`, 30).catch(() => null);
   for (const line of big?.stdout.split("\n").filter(Boolean) ?? []) log(`✗ ${line.split(" ")[0]} is too large to keep (${Math.round(Number(line.split(" ")[1]) / 1024 ** 2)} MB, limit 100 MB)`);
@@ -662,7 +662,7 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
       log(`could not copy ${f}: ${(err as Error).message}`);
     }
   }
-  return { files: saved, alias };
+  return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
 
 async function report(d: Deps, p: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
