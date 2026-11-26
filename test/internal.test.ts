@@ -10,7 +10,7 @@ import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
 import type { ModuleJobEnd, ServerModule } from "../src/server/extension.ts";
 import type { Github, LinkedIssue, PullRequest } from "../src/server/github.ts";
-import { hostSizeFor, internalToken, type OrchestratorState } from "../src/server/internal.ts";
+import { hostSizeFor, internalToken, type OrchestratorState, unservedBy } from "../src/server/internal.ts";
 import { endJob, startJob } from "./jobs.ts";
 import { issuesText } from "../src/server/jobs.ts";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../src/verify/prompt.ts";
@@ -282,6 +282,11 @@ test("Settings: each user's number of jobs at once is the one of the sandbox pro
   assert.equal(hostSizeFor({ ...s, providers: providers.slice(0, 1), kind: null, parallel: null }, "acme"), null, "no provider serves acme");
   assert.equal(hostSizeFor({ kind: "ssh", parallel: 3, why: "", instance: "i", beat: 0 }, "acme"), 3, "an orchestrator from before several providers");
   assert.equal(hostSizeFor(null, "acme"), null);
+  // No provider for acme is not an outage: Settings says so instead of "the service is not running".
+  assert.equal(unservedBy({ ...s, providers: providers.slice(0, 1) }, "acme"), true);
+  assert.equal(unservedBy(s, "acme"), false);
+  assert.equal(unservedBy({ kind: "ssh", parallel: 3, why: "", instance: "i", beat: 0 }, "acme"), false, "an orchestrator from before several providers");
+  assert.equal(unservedBy(null, "acme"), false, "no orchestrator: an outage");
 });
 
 const BIN = join(import.meta.dirname, "..", "src", "bin.ts");

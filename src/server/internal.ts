@@ -53,6 +53,11 @@ export function hostSizeFor(s: OrchestratorState | null, login: string): number 
 /** The orchestrator counts as present while its last beat is younger than this. */
 export const PRESENT_MS = 60_000;
 
+/** The orchestrator runs and lists its providers, but none serves this user: their jobs wait for an operator, not for an outage. */
+export function unservedBy(s: OrchestratorState | null, login: string): boolean {
+  return !!s && Array.isArray(s.providers) && hostSizeFor(s, login) === null;
+}
+
 export function orchestratorState(db: Db): OrchestratorState | null {
   try {
     const s = JSON.parse(db.setting("orchestrator") ?? "null") as OrchestratorState | null;

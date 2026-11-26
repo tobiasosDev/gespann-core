@@ -16,7 +16,7 @@ import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
-import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState } from "./internal.ts";
+import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
@@ -300,7 +300,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     const own = db.maxJobs(u.id);
     const limit = own === null ? most : most === null ? own : Math.min(own, most);
     const waiting = db.queuedJobs(u.id);
-    return c.json({ host, cap, limit, own, running: db.runningBoxes(u.id), queued: waiting.sandbox, waitingForChecks: waiting.checks, time: db.boxTime(u.id) });
+    const noProvider = orchestratorPresent(db) && unservedBy(orchestratorState(db), u.login);
+    return c.json({ host, cap, limit, own, noProvider, running: db.runningBoxes(u.id), queued: waiting.sandbox, waitingForChecks: waiting.checks, time: db.boxTime(u.id) });
   });
 
   app.post("/api/boxes/limit", async (c) => {
