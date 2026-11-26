@@ -52,6 +52,8 @@ export interface Project {
   active: number;
   /** Merge gate on: PRs with the gespann label are held as drafts until they pass. */
   gate: number;
+  /** Screen sizes the tester checks every PR at, preset ids joined with commas (`phone-s,desktop`); empty: the browser's own size. */
+  viewports: string;
   created: string;
 }
 
@@ -234,6 +236,7 @@ export class Db {
     const pcols = new Set((this.sql.prepare("pragma table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
     if (!pcols.has("bundle")) this.sql.exec("alter table projects add column bundle integer not null default 0");
+    if (!pcols.has("viewports")) this.sql.exec("alter table projects add column viewports text not null default ''");
     if (!pcols.has("gate")) {
       // New projects start with the gate off; projects from before the setting keep the gate they had.
       this.sql.exec("alter table projects add column gate integer not null default 0");

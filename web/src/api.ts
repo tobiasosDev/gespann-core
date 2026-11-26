@@ -87,6 +87,13 @@ export interface JobRow {
   created: string;
 }
 
+export interface Viewport {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+}
+
 export interface ProjectDetail extends ProjectRow {
   /** Merge gate: PRs with the label gespann stay drafts until they pass. */
   gate: number;
@@ -96,6 +103,9 @@ export interface ProjectDetail extends ProjectRow {
   own: boolean;
   criteria: string;
   default_checks: string;
+  /** Screen sizes the tester checks every PR at (preset ids); empty: the browser's own size. */
+  viewports: string[];
+  viewport_presets: Viewport[];
   suggestion: string | null;
   model: string | null;
   sandbox_id: string | null;
