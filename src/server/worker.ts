@@ -396,9 +396,10 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     if (merge.exitCode !== 0) throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
     const pr = await gh.pull(p.installation_id, p.repo, run.pr);
     prText = `# ${pr.title}\n\n${pr.body ?? ""}\n`;
-    // The issues the PR resolves set its goal; without them the tester judges from diff and PR text alone.
+    // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
+    // diff and PR text alone, as for a PR without issues, and the log says so.
     issues = await gh.linkedIssues(p.installation_id, p.repo, run.pr, pr.body).catch((err: Error) => {
-      log(`could not read the linked issues: ${err.message}`);
+      log(`✗ could not read the issues this PR resolves, so their goals are not checked: ${err.message}`);
       return [];
     });
     if (issues.length) log(`linked ${issues.length === 1 ? "issue" : "issues"}: ${issues.map((i) => i.ref).join(", ")}`);
@@ -466,9 +467,9 @@ async function downLeftovers(d: Deps, b: Box, run: Run, log: (s: string) => void
   }
 }
 
-/** Title and description of each linked issue, for the tester. Long descriptions are cut. */
+/** Title and description of each linked issue, for the tester. */
 export function issuesText(issues: LinkedIssue[]): string {
-  return `${issues.map((i) => `# ${i.ref}: ${i.title}\n\n${i.url}\n\n${i.body.trim().slice(0, 12_000) || "(no description)"}\n`).join("\n---\n\n")}`;
+  return `${issues.map((i) => `# ${i.ref}: ${i.title}\n\n${i.url}\n\n${i.body.trim() || "(no description)"}\n`).join("\n---\n\n")}`;
 }
 
 interface Attempt {

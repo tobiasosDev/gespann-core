@@ -25,28 +25,44 @@ test("closing keywords in the PR text name the issues the PR resolves; bare ment
   assert.deepEqual(closingRefs("", "acme/shop"), []);
 });
 
-test("linked issues: GitHub's list plus closing keywords it does not count, without PRs or duplicates", async () => {
+test("linked issues: this repository's issues from GitHub's list and the PR text; other repositories, PRs and duplicates stay out", async () => {
   const calls: string[] = [];
+  let graphql: unknown = {
+    data: {
+      repository: {
+        pullRequest: {
+          closingIssuesReferences: {
+            nodes: [
+              { number: 12, title: "Export as CSV", body: "Users need a CSV export.", url: "https://github.com/acme/shop/issues/12", repository: { nameWithOwner: "acme/shop" } },
+              { number: 3, title: "Private roadmap", body: "secret", url: "https://github.com/acme/private/issues/3", repository: { nameWithOwner: "acme/private" } },
+            ],
+          },
+        },
+      },
+    },
+  };
   const fetchImpl = (async (url: string, init: RequestInit) => {
     const path = new URL(url).pathname;
     calls.push(`${init.method} ${path}`);
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
     if (path.endsWith("/access_tokens")) return json({ token: "t", expires_at: new Date(Date.now() + 3600_000).toISOString() });
-    if (path === "/graphql") {
-      return json({ data: { repository: { pullRequest: { closingIssuesReferences: { nodes: [{ number: 12, title: "Export as CSV", body: "Users need a CSV export.", url: "https://github.com/acme/shop/issues/12", repository: { nameWithOwner: "acme/shop" } }] } } } } });
-    }
-    if (path === "/repos/acme/other/issues/3") return json({ number: 3, title: "Dark mode", body: null, html_url: "https://github.com/acme/other/issues/3" });
+    if (path === "/graphql") return json(graphql);
+    if (path === "/repos/acme/shop/issues/8") return json({ number: 8, title: "Dark mode", body: null, html_url: "https://github.com/acme/shop/issues/8" });
     if (path === "/repos/acme/shop/issues/7") return json({ number: 7, title: "a PR", body: "", html_url: "x", pull_request: {} });
     return json({ message: "Not Found" }, 404);
   }) as typeof fetch;
   const gh = new Github({ appId: "1", slug: "s", privateKey: TEST_KEY, webhookSecret: "w", clientId: "c", clientSecret: "s" }, fetchImpl);
-  const issues = await gh.linkedIssues(9, "acme/shop", 4, "Fixes #12, closes acme/other#3, fixes #7, fixes #99");
+  const issues = await gh.linkedIssues(9, "acme/shop", 4, "Fixes #12, closes acme/other#3, fixes acme/shop#8, fixes #7, fixes #99");
   assert.deepEqual(issues, [
     { ref: "#12", title: "Export as CSV", body: "Users need a CSV export.", url: "https://github.com/acme/shop/issues/12" },
-    { ref: "acme/other#3", title: "Dark mode", body: "", url: "https://github.com/acme/other/issues/3" },
+    { ref: "#8", title: "Dark mode", body: "", url: "https://github.com/acme/shop/issues/8" },
   ]);
+  assert.ok(!calls.some((c) => /acme\/(other|private)/.test(c)), "issues of other repositories are never read");
   assert.ok(!calls.includes("GET /repos/acme/shop/issues/12"), "an issue GitHub already listed is not fetched again");
-  assert.match(issuesText(issues), /# #12: Export as CSV[\s\S]*Users need a CSV export[\s\S]*# acme\/other#3: Dark mode[\s\S]*\(no description\)/);
+  assert.match(issuesText(issues), /# #12: Export as CSV[\s\S]*Users need a CSV export[\s\S]*# #8: Dark mode[\s\S]*\(no description\)/);
+
+  graphql = { errors: [{ message: "rate limited" }] };
+  await assert.rejects(gh.linkedIssues(9, "acme/shop", 4, "Fixes #12"), /rate limited/, "a GitHub failure is no empty list");
 });
 
 const check = { expect: "Export works", observed: "CSV downloaded", result: "pass", proof: ["a.png"] };
@@ -76,6 +92,7 @@ test("judge: every linked issue needs a goal, and a missed goal fails the PR", (
   assert.ok(judge(v("SKIP", [missed], []), () => true, ["#12"]).problems.some((p) => /SKIP although/.test(p)));
   assert.equal(judge(v("SKIP", [met], []), () => true, ["#12"]).outcome, "SKIP", "a CI-only issue can be met from the diff");
   assert.ok(judge(v("FAIL", [{ ...missed, proof: ["gone.png"] }]), (f) => f !== "gone.png", ["#12"]).problems.some((p) => /gone\.png/.test(p)));
+  assert.ok(judge(v("PASS", [{ ...met, goal: " " }]), () => true, ["#12"]).problems.includes("goal without the issue's goal"));
   assert.equal(judge(v("PASS", []), () => true).outcome, "PASS", "without linked issues nothing changes");
 });
 

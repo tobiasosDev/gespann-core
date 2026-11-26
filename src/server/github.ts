@@ -57,7 +57,7 @@ export interface PullRequest {
 }
 
 export interface LinkedIssue {
-  /** `#12` in the PR's own repository, `owner/repo#12` in another. */
+  /** `#12`: always an issue of the PR's own repository. */
   ref: string;
   title: string;
   body: string;
@@ -65,10 +65,6 @@ export interface LinkedIssue {
 }
 
 const MAX_ISSUES = 5;
-
-function issueRef(prRepo: string, issueRepo: string, n: number): string {
-  return issueRepo.toLowerCase() === prRepo.toLowerCase() ? `#${n}` : `${issueRepo}#${n}`;
-}
 
 /**
  * Issues the PR text closes with GitHub's keywords: `Fixes #12`, `closes owner/repo#3`,
@@ -177,18 +173,16 @@ export class Github {
   }
 
   /**
-   * The issues this PR says it resolves: GitHub's own list (closing keywords and issues linked in the
-   * sidebar) plus closing keywords in the PR text that GitHub does not count, e.g. on a PR into a
-   * branch other than the default. Issues the app cannot read are left out.
+   * The issues of this repository that this PR says it resolves: GitHub's own list (closing keywords
+   * and issues linked in the sidebar) plus closing keywords in the PR text that GitHub does not count,
+   * e.g. on a PR into a branch other than the default. Issues of other repositories are left out: their
+   * text would reach this repository's sandbox and PR comment, which may be public while they are not.
+   * Throws when GitHub does not answer, so the run can say it judged without them.
    */
   async linkedIssues(installationId: number, repo: string, pr: number, body: string | null): Promise<LinkedIssue[]> {
     const [owner, name] = repo.split("/");
-    const found = new Map<string, LinkedIssue>();
-    const add = (r: { number: number; title: string; body: string | null; html_url: string; repo: string }) => {
-      const ref = issueRef(repo, r.repo, r.number);
-      if (!found.has(ref.toLowerCase())) found.set(ref.toLowerCase(), { ref, title: r.title, body: r.body ?? "", url: r.html_url });
-    };
-    const q = await this.asInstallation<{ data?: { repository?: { pullRequest?: { closingIssuesReferences?: { nodes: { number: number; title: string; body: string; url: string; repository: { nameWithOwner: string } }[] } } } } }>(
+    const found = new Map<number, LinkedIssue>();
+    const q = await this.asInstallation<{ errors?: { message: string }[]; data?: { repository?: { pullRequest?: { closingIssuesReferences?: { nodes: { number: number; title: string; body: string; url: string; repository: { nameWithOwner: string } }[] } } } } }>(
       installationId,
       "POST",
       "/graphql",
@@ -196,13 +190,20 @@ export class Github {
         query: "query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { closingIssuesReferences(first: 10) { nodes { number title body url repository { nameWithOwner } } } } } }",
         variables: { owner, name, pr },
       },
-    ).catch(() => null);
-    for (const n of q?.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? []) add({ ...n, html_url: n.url, repo: n.repository.nameWithOwner });
+    );
+    if (q.errors?.length) throw new GithubError(422, `closingIssuesReferences: ${q.errors.map((e) => e.message).join("; ").slice(0, 300)}`);
+    for (const n of q.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? []) {
+      if (n.repository.nameWithOwner.toLowerCase() === repo.toLowerCase()) found.set(n.number, { ref: `#${n.number}`, title: n.title, body: n.body ?? "", url: n.url });
+    }
     for (const r of closingRefs(body ?? "", repo)) {
       if (found.size >= MAX_ISSUES) break;
-      if (found.has(issueRef(repo, r.repo, r.number).toLowerCase())) continue;
-      const i = await this.asInstallation<{ number: number; title: string; body: string | null; html_url: string; pull_request?: unknown }>(installationId, "GET", `/repos/${r.repo}/issues/${r.number}`).catch(() => null);
-      if (i && !i.pull_request) add({ ...i, repo: r.repo });
+      if (r.repo.toLowerCase() !== repo.toLowerCase() || found.has(r.number)) continue;
+      // A number that is no issue (a typo, a PR) is no goal; any other GitHub failure stops the lookup.
+      const i = await this.asInstallation<{ number: number; title: string; body: string | null; html_url: string; pull_request?: unknown }>(installationId, "GET", `/repos/${repo}/issues/${r.number}`).catch((err: unknown) => {
+        if (err instanceof GithubError && (err.status === 404 || err.status === 410)) return null;
+        throw err;
+      });
+      if (i && !i.pull_request) found.set(r.number, { ref: `#${r.number}`, title: i.title, body: i.body ?? "", url: i.html_url });
     }
     return [...found.values()].slice(0, MAX_ISSUES);
   }

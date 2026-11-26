@@ -111,6 +111,7 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
     // An issue asks for a change; "nothing observable changed" cannot meet it.
     if (!goals.length || goals.some((g) => g.result !== "met")) problems.push("SKIP although the PR resolves an issue whose goal was not met");
   }
+  if (goals.some((g) => !g.goal.trim())) problems.push("goal without the issue's goal");
   if (goals.some((g) => g.result !== "met" && !g.observed.trim())) problems.push("goal without an observation");
   const all = [...proof, ...checks.flatMap((c) => c.proof ?? []), ...goals.flatMap((g) => g.proof ?? [])];
   const missing = [...new Set(all.filter((f) => f.includes("/") || f.startsWith(".") || !proofExists(f)))];
