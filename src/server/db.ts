@@ -161,7 +161,7 @@ create table if not exists api_tokens (
 `;
 
 /**
- * Access to the read-only MCP endpoint: a personal token, or an agent's OAuth sign-in (`client` set),
+ * Access to the MCP endpoint: a personal token, or an agent's OAuth sign-in (`client` set),
  * whose access token expires and is renewed with a refresh token. Only hashes are stored.
  */
 export interface ApiToken {
