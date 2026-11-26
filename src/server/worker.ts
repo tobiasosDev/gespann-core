@@ -499,18 +499,30 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       addendum: [notes, addendum].filter(Boolean).join("\n\n"),
     });
     await d.sandboxes.writeFile(b.id, `${dir}/work/prompt.txt`, prompt);
-    await d.sandboxes.startRecording?.(b.id, `${dir}/out/recording.mp4`).catch(() => undefined);
-    log("the tester is working");
-    const tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
-      runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
-        timeoutMs: recipe.timeout * 60_000,
-        isCancelled: () => d.db.job(job.id)?.status === "cancelled",
-      }),
-    );
-    await d.sandboxes.stopRecording?.(b.id).catch(() => undefined);
-    // Index at the front (faststart), so browsers start playing before the whole file is loaded.
     const rec = `${dir}/out/recording.mp4`;
-    await d.sandboxes.exec(b.id, `test -s ${rec} && ffmpeg -loglevel error -y -i ${rec} -c copy -movflags +faststart ${rec}.tmp.mp4 && mv ${rec}.tmp.mp4 ${rec}; rm -f ${rec}.tmp.mp4`, 300).catch(() => undefined);
+    // Every run should come with a video of the tester's screen; when there is none, the log says why.
+    const recording = d.sandboxes.startRecording
+      ? await d.sandboxes.startRecording(b.id, rec).then(
+          () => true,
+          (err: Error) => (log(`✗ no recording of this run: ${err.message}`), false),
+        )
+      : (log(`✗ no recording of this run: the ${d.sandboxes.kind} sandboxes cannot record the screen`), false);
+    log("the tester is working");
+    let tester: Awaited<ReturnType<typeof runLong>>;
+    try {
+      tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
+        runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
+          timeoutMs: recipe.timeout * 60_000,
+          isCancelled: () => d.db.job(job.id)?.status === "cancelled",
+        }),
+      );
+    } finally {
+      if (recording) {
+        await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
+        // Index at the front (faststart), so browsers start playing before the whole file is loaded.
+        await d.sandboxes.exec(b.id, `test -s ${rec} && ffmpeg -loglevel error -y -i ${rec} -c copy -movflags +faststart ${rec}.tmp.mp4 && mv ${rec}.tmp.mp4 ${rec}; rm -f ${rec}.tmp.mp4`, 300).catch(() => undefined);
+      }
+    }
     log(tester.timedOut ? `the tester ran out of time (${recipe.timeout} min)` : `the tester finished (exit ${tester.exitCode})`);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
@@ -593,13 +605,16 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
  * maps each skipped one to the screenshot that was kept.
  */
 async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string> }> {
-  const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -60M -printf '%f\\n'`, 30);
+  const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -104857601c -printf '%f\\n'`, 30);
+  const big = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size +104857600c -printf '%f %s\\n'`, 30).catch(() => null);
+  for (const line of big?.stdout.split("\n").filter(Boolean) ?? []) log(`✗ ${line.split(" ")[0]} is too large to keep (${Math.round(Number(line.split(" ")[1]) / 1024 ** 2)} MB, limit 100 MB)`);
   const all = ls.stdout.split("\n").filter((f) => /^[A-Za-z0-9._-]+$/.test(f) && (IMAGE.test(f) || VIDEO.test(f) || f === "verdict.json"));
   const images = all.filter((f) => IMAGE.test(f));
   const thumbs = images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;
   const alias = sameScreens(parseThumbs(thumbs?.stdout ?? ""));
   if (alias.size) log(`${alias.size} of ${images.length} screenshots show the same screen as another one; kept one of each`);
-  const names = all.filter((f) => !alias.has(f));
+  // The recording first: it is the run's main proof and must not fall behind a long list of screenshots.
+  const names = all.filter((f) => !alias.has(f)).sort((a, b) => Number(VIDEO.test(b)) - Number(VIDEO.test(a)));
   const dir = join(d.config.dataDir, "runs", String(run.id));
   mkdirSync(dir, { recursive: true });
   const saved: string[] = [];

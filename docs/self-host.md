@@ -47,7 +47,7 @@ All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign
 | `ssh` | a directory on a Linux machine you already run, used as `HOME` | a CI server without Docker, or one that already has your toolchain |
 | `module:<path>` | whatever your module makes | a sandbox service of your own ([Your own provider](#your-own-provider)) |
 
-Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. A video recording of the run needs a provider that records ([Your own provider](#your-own-provider)); Docker and SSH do not.
+Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Docker and SSH sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen; a provider of your own records with `startRecording` ([Your own provider](#your-own-provider)). When a run cannot be recorded, the run page says so and the job log names the reason.
 
 ### Docker
 
@@ -118,7 +118,7 @@ These steps set up a CI server so the tester can click through the app in a real
 4. Tools for the user: Node.js 22.18 or newer, git, curl and Docker system-wide; Codex, Playwright's MCP server and a matching Chromium in the user's home. Chromium also needs its system libraries (`npx playwright install-deps chromium` as an admin).
 
    ```bash
-   sudo apt-get install -y xvfb imagemagick
+   sudo apt-get install -y xvfb imagemagick ffmpeg
    sudo -u gespann -H bash -c 'cd ~ && npm i -g --prefix ~/.local @openai/codex @playwright/mcp \
      && PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright node ~/.local/lib/node_modules/@playwright/mcp/node_modules/playwright/cli.js install chromium'
    ```

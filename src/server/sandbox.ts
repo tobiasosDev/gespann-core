@@ -273,6 +273,55 @@ export abstract class ShellSandboxes {
     if (r.code !== 0) throw new Error(`could not download ${path}: ${r.stderr.toString("utf8").slice(0, 300)}`);
     return r.stdout;
   }
+
+  /** Records the sandbox's screen (`DISPLAY`) with ffmpeg; the machine needs both. */
+  /** True where sandboxes share a machine, so only a sandbox's own screen may be recorded. */
+  protected readonly sharedScreen: boolean = false;
+
+  async startRecording(id: string, file: string): Promise<void> {
+    const r = await this.shell(id, recordScript(file, this.sharedScreen), { timeoutMs: 60_000 });
+    if (r.code !== 0) throw new Error(r.stderr.toString("utf8").trim().slice(0, 300) || `exit ${r.code}`);
+  }
+
+  async stopRecording(id: string): Promise<void> {
+    await this.shell(id, stopRecordScript(), { timeoutMs: 60_000 });
+  }
+}
+
+/**
+ * Starts ffmpeg on the sandbox's screen in the background, writing an mp4 to `file`. Few frames and a
+ * high CRF: the screen mostly stands still, so a long test stays a small file.
+ */
+export function recordScript(file: string, ownScreen = false): string {
+  return [
+    `p="$HOME/.gespann-recording"`,
+    `command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg is not installed on the sandbox's machine" >&2; exit 1; }`,
+    `[ -n "\${DISPLAY:-}" ] || { echo "the sandbox has no screen (DISPLAY is not set)" >&2; exit 1; }`,
+    // On a shared machine the fallback DISPLAY may show other jobs' windows: record only the sandbox's own screen.
+    ...(ownScreen ? [`[ -s "$HOME/.gespann-display" ] || { echo "the sandbox has no screen of its own (Xvfb is not installed on the machine)" >&2; exit 1; }`] : []),
+    stopRecordScript(),
+    `mkdir -p "$(dirname ${q(file)})"; rm -f ${q(file)}`,
+    `s="$(command -v setsid || true)"`,
+    `nohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i "$DISPLAY" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p ${q(file)} > "$p.log" 2>&1 < /dev/null &`,
+    `echo $! > "$p.pid"`,
+    // ffmpeg fails at once when it cannot open the screen; give it that moment.
+    `sleep 1`,
+    `kill -0 "$(cat "$p.pid")" 2>/dev/null || { echo "ffmpeg stopped right away: $(tail -c 300 "$p.log")" >&2; rm -f "$p.pid"; exit 1; }`,
+  ].join("\n");
+}
+
+/**
+ * Ends the recording with SIGTERM, on which ffmpeg writes the mp4's index, and waits up to 30 s for it.
+ * Not SIGINT: a shell starts background commands with SIGINT ignored.
+ */
+export function stopRecordScript(): string {
+  return [
+    `p="$HOME/.gespann-recording"`,
+    `r="$(cat "$p.pid" 2>/dev/null)"`,
+    `if [ -n "$r" ] && kill -TERM "$r" 2>/dev/null; then i=0; while kill -0 "$r" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL "$r" 2>/dev/null; fi`,
+    `rm -f "$p.pid"`,
+    `true`,
+  ].join("\n");
 }
 
 const suffix = () => randomBytes(3).toString("hex");
@@ -446,6 +495,7 @@ export interface SshOptions {
  */
 export class Ssh extends ShellSandboxes implements Sandboxes {
   readonly kind = "ssh" as const;
+  protected override readonly sharedScreen = true;
   private readonly o: SshOptions;
 
   constructor(o: SshOptions) {
