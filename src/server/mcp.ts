@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
-import type { Judged } from "../verify/verdict.ts";
+import { preExisting, type Judged } from "../verify/verdict.ts";
 import { conflictNote } from "./comment.ts";
 import type { Db, Project, Run } from "./db.ts";
 import { runComment, withPrLock } from "./gate.ts";
@@ -36,7 +36,7 @@ export const MAX_RUNS_PER_HEAD = 3;
 
 const INSTRUCTIONS =
   "gespann tests pull requests in a production-near copy of the app and writes a verdict (PASS, FAIL, BLOCKED, SKIP) with checks, screenshots and a recording. " +
-  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. Otherwise do not rebase or merge the base just to catch up: every run merges the PR into its base branch as it is when the run starts. When the base got changes after a PASS that may affect the PR, use rerun. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. rerun tests the PR's current head again, e.g. after a run failed on something outside the PR or after you pushed a fix that did not start a run; it does nothing while a run of the PR is queued or running, and stops after " +
+  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind pre_existing failed the same way on the base branch: it did not fail the run and is no fault of the PR, so fix it only when the PR is meant to. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. Otherwise do not rebase or merge the base just to catch up: every run merges the PR into its base branch as it is when the run starts. When the base got changes after a PASS that may affect the PR, use rerun. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. rerun tests the PR's current head again, e.g. after a run failed on something outside the PR or after you pushed a fix that did not start a run; it does nothing while a run of the PR is queued or running, and stops after " +
   `${MAX_RUNS_PER_HEAD} runs of the same head. No tool cancels or approves anything.`;
 
 class ToolError extends Error {}
@@ -104,9 +104,12 @@ function runRow(d: McpDeps, run: Run) {
 
 const conflictOf = (run: Run): string[] | null => (run.conflict ? (JSON.parse(run.conflict) as string[]) : null);
 
-/** What a coding agent has to act on: merge conflicts with the base, gespann's own failure, a rejected verdict, every check that did not pass. */
+/**
+ * What a coding agent has to act on: merge conflicts with the base, gespann's own failure, a rejected verdict, every check that did not pass.
+ * A failed check that fails the same way on the base branch is a `pre_existing` issue: noted, not the PR's fault, and never what failed the run.
+ */
 function issuesOf(run: Run, judged: Judged | null) {
-  const issues: { kind: string; text: string; observed?: string; fix?: string; proof?: string[] }[] = [];
+  const issues: { kind: string; text: string; observed?: string; base?: string; fix?: string; proof?: string[] }[] = [];
   const conflict = conflictOf(run);
   if (conflict) {
     const n = conflictNote(run.base_ref, conflict);
@@ -116,7 +119,8 @@ function issuesOf(run: Run, judged: Judged | null) {
   for (const p of judged?.problems ?? []) issues.push({ kind: "verdict_rejected", text: p });
   for (const c of judged?.verdict?.checks ?? []) {
     if (c.result === "pass") continue;
-    issues.push({ kind: c.result === "fail" ? "check_failed" : "check_blocked", text: c.expect, observed: c.observed, ...(c.fix ? { fix: c.fix } : {}), ...(c.proof?.length ? { proof: c.proof } : {}) });
+    const kind = preExisting(c) ? "pre_existing" : c.result === "fail" ? "check_failed" : "check_blocked";
+    issues.push({ kind, text: c.expect, observed: c.observed, ...(c.pre_existing ? { base: c.pre_existing } : {}), ...(c.fix ? { fix: c.fix } : {}), ...(c.proof?.length ? { proof: c.proof } : {}) });
   }
   for (const g of judged?.verdict?.goals ?? []) {
     if (g.result === "met") continue;

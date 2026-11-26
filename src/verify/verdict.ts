@@ -10,7 +10,17 @@ export interface Check {
   proof?: string[];
   /** For a blocked check: what the copy lacks that it could have (an app not built, a fake missing). */
   fix?: string;
+  /**
+   * For a failed check: how the tester confirmed that the base branch behaves the same. The failure
+   * is then already on the base branch, not caused by the PR, and does not count against it.
+   */
+  pre_existing?: string;
 }
+
+/** A failed check whose behaviour is the same on the base branch: shown, but not the PR's fault. */
+export const preExisting = (c: Check) => c.result === "fail" && !!c.pre_existing;
+/** A failed check the PR is to blame for. */
+const failed = (c: Check) => c.result === "fail" && !c.pre_existing;
 
 /** Whether the PR reaches what a linked issue asks for, judged against the issue's description. */
 export interface Goal {
@@ -49,7 +59,8 @@ const sameRef = (a: string, b: string) => a.trim().toLowerCase() === b.trim().to
 /**
  * Validates `verdict.json`. A verdict that breaks its own rules (PASS without proof,
  * BLOCKED with a failed check, proof files that do not exist) counts as FAIL. `issues` are the
- * linked issues the tester was given: each needs a goal, and a missed goal fails the PR.
+ * linked issues the tester was given: each needs a goal, and a missed goal fails the PR. A failed
+ * check marked `pre_existing` behaves the same on the base branch: it never fails the PR.
  */
 export function judge(raw: string | null, proofExists: (file: string) => boolean, issues: string[] = []): Judged {
   if (raw === null) return { verdict: null, outcome: "FAIL", problems: ["the tester wrote no verdict.json"] };
@@ -61,8 +72,8 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
   }
   if (typeof v !== "object" || v === null || Array.isArray(v)) return { verdict: null, outcome: "FAIL", problems: ["verdict.json is not an object"] };
   const problems: string[] = [];
-  const kind = String(v.verdict ?? "");
-  if (!KINDS.has(kind)) problems.push(`unknown verdict ${JSON.stringify(kind)}`);
+  const written = String(v.verdict ?? "");
+  if (!KINDS.has(written)) problems.push(`unknown verdict ${JSON.stringify(written)}`);
   const entries = Array.isArray(v.checks) ? (v.checks as unknown[]) : [];
   const checks: Check[] = [];
   for (const e of entries) {
@@ -75,7 +86,8 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
     if (!RESULTS.has(result)) problems.push(`check result ${JSON.stringify(result)} is not pass, fail or blocked`);
     const proof = Array.isArray(c.proof) ? c.proof.map(String) : undefined;
     const fix = result === "blocked" && typeof c.fix === "string" && c.fix.trim() ? c.fix.trim() : undefined;
-    checks.push({ expect: String(c.expect ?? ""), observed: String(c.observed ?? ""), result: result as CheckResult, ...(proof ? { proof } : {}), ...(fix ? { fix } : {}) });
+    const base = result === "fail" && typeof c.pre_existing === "string" && c.pre_existing.trim() ? c.pre_existing.trim() : undefined;
+    checks.push({ expect: String(c.expect ?? ""), observed: String(c.observed ?? ""), result: result as CheckResult, ...(proof ? { proof } : {}), ...(fix ? { fix } : {}), ...(base ? { pre_existing: base } : {}) });
   }
   const goals: Goal[] = [];
   for (const e of Array.isArray(v.goals) ? (v.goals as unknown[]) : []) {
@@ -95,22 +107,25 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
   }
   for (const g of goals) if (!issues.some((ref) => sameRef(g.issue, ref))) problems.push(`goal for ${JSON.stringify(g.issue)}, which is no issue this PR resolves`);
   const proof = Array.isArray(v.proof) ? v.proof.map(String) : [];
-  const verdict: Verdict = { verdict: kind as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
-
   const missed = goals.some((g) => g.result === "missed");
   const blockedGoal = goals.some((g) => g.result === "blocked");
+  // A FAIL whose only failures are already on the base branch is what the other checks make it; the verdict keeps what the tester wrote.
+  let kind = written;
+  if (written === "FAIL" && !missed && !checks.some(failed) && checks.some(preExisting)) kind = checks.some((c) => c.result === "blocked") || blockedGoal ? "BLOCKED" : "PASS";
+  const verdict: Verdict = { verdict: written as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
+
   if (kind === "PASS") {
     if (!checks.length) problems.push("PASS without checks");
-    if (checks.some((c) => c.result !== "pass")) problems.push("PASS with a check that did not pass");
+    if (checks.some((c) => c.result !== "pass" && !preExisting(c))) problems.push("PASS with a check that did not pass");
     if (goals.some((g) => g.result !== "met")) problems.push("PASS with an issue goal that was not met");
     if (!proof.some((f) => IMAGE.test(f))) problems.push("PASS without a screenshot in proof");
   } else if (kind === "BLOCKED") {
     if (!checks.some((c) => c.result === "blocked") && !blockedGoal) problems.push("BLOCKED without a blocked check");
-    if (checks.some((c) => c.result === "fail")) problems.push("BLOCKED with a failed check");
+    if (checks.some(failed)) problems.push("BLOCKED with a failed check");
     if (missed) problems.push("BLOCKED with a missed issue goal");
     if (checks.some((c) => c.result === "blocked" && !c.observed.trim())) problems.push("blocked check without an observation");
   } else if (kind === "FAIL") {
-    if (!checks.some((c) => c.result === "fail") && !missed) problems.push("FAIL without a failed check");
+    if (!checks.some(failed) && !missed) problems.push("FAIL without a failed check");
   } else if (kind === "SKIP" && issues.length) {
     // An issue asks for a change; "nothing observable changed" cannot meet it.
     if (!goals.length || goals.some((g) => g.result !== "met")) problems.push("SKIP although the PR resolves an issue whose goal was not met");

@@ -36,6 +36,7 @@ function setup(gh?: unknown) {
       checks: [
         { expect: "Cart shows the item", observed: "It does", result: "pass", proof: ["cart.png"] },
         { expect: "Pay opens the payment page", observed: "Nothing happens on click", result: "fail", proof: ["pay.png"] },
+        { expect: "The cart badge counts items", observed: "It shows 0", result: "fail", pre_existing: "Badge.tsx is unchanged and reads the old count on main too" },
       ],
     },
   };
@@ -117,8 +118,11 @@ test("MCP: an agent reads the newest run of its PR: status, issues, review, scre
   assert.equal(r.status, "done");
   assert.equal(r.outcome, "FAIL");
   assert.equal(r.summary, "The pay button does nothing.");
-  assert.deepEqual(r.issues, [{ kind: "check_failed", text: "Pay opens the payment page", observed: "Nothing happens on click", proof: ["pay.png"] }]);
-  assert.equal(r.checks.length, 2);
+  assert.deepEqual(r.issues, [
+    { kind: "check_failed", text: "Pay opens the payment page", observed: "Nothing happens on click", proof: ["pay.png"] },
+    { kind: "pre_existing", text: "The cart badge counts items", observed: "It shows 0", base: "Badge.tsx is unchanged and reads the old count on main too" },
+  ]);
+  assert.equal(r.checks.length, 3);
   assert.deepEqual(r.files.map((f: { kind: string }) => f.kind), ["image", "image", "video", "data"]);
   assert.equal(r.files[2].url, `http://localhost:3000/proof/${"2".repeat(32)}/recording.mp4`);
 
@@ -128,7 +132,7 @@ test("MCP: an agent reads the newest run of its PR: status, issues, review, scre
   assert.match((await call(token, "get_review", { run_id: run })).content[0].text, /^Not posted on the pull request/, "no comment id: an ungated SKIP or a failed post");
   db.updateRun(run, { comment_id: 99 });
   const review = (await call(token, "get_review", { run_id: run })).content[0].text as string;
-  assert.match(review, /^### ❌ gespann: FAIL · 1\/2 checks passed/);
+  assert.match(review, /^### ❌ gespann: FAIL · 1\/3 checks passed · 1 already on `main`/);
   assert.match(review, /Pay opens the payment page/);
 
   const shot = await call(token, "get_run_file", { run_id: run, file: "pay.png" });

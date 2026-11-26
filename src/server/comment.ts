@@ -1,4 +1,4 @@
-import type { Check, Goal, Judged, VerdictKind } from "../verify/verdict.ts";
+import { preExisting, type Check, type Goal, type Judged, type VerdictKind } from "../verify/verdict.ts";
 
 export interface CommentInput {
   outcome: VerdictKind;
@@ -80,7 +80,8 @@ export function renderComment(c: CommentInput): string {
   const v = c.judged?.verdict ?? null;
   const checks = v?.checks ?? [];
   const passed = checks.filter((x) => x.result === "pass");
-  const open = checks.filter((x) => x.result !== "pass");
+  const onBase = checks.filter(preExisting);
+  const open = checks.filter((x) => x.result !== "pass" && !preExisting(x));
   const lines: string[] = [];
   if (c.conflict?.length) {
     const n = conflictNote(c.baseRef, c.conflict);
@@ -88,7 +89,7 @@ export function renderComment(c: CommentInput): string {
   } else if (!v) {
     lines.push("### ⚠️ gespann could not test this PR", "", `> ${cell(c.error ?? "The run produced no verdict.", 300)}`);
   } else {
-    const count = checks.length ? ` · ${passed.length}/${checks.length} checks passed` : "";
+    const count = checks.length ? ` · ${passed.length}/${checks.length} checks passed${onBase.length ? ` · ${onBase.length} already on \`${c.baseRef}\`` : ""}` : "";
     lines.push(`### ${ICON[c.outcome]} gespann: ${c.outcome}${count}`);
     if (v.summary.trim()) lines.push("", `> ${sentences(v.summary, 260)}`);
   }
@@ -96,6 +97,15 @@ export function renderComment(c: CommentInput): string {
   for (const p of c.judged?.problems ?? []) if (v) lines.push("", `⚠️ Verdict rejected: ${cell(p, 200)}`);
   if (v?.goals?.length) lines.push("", ...goalTable(v.goals));
   if (open.length) lines.push("", ...table(open));
+  if (onBase.length)
+    lines.push(
+      "",
+      `**Already on \`${c.baseRef}\`**: ${onBase.length === 1 ? "this check fails" : "these checks fail"} on the base branch the same way, so ${onBase.length === 1 ? "it does" : "they do"} not count against this PR.`,
+      "",
+      "| | Check | What the tester saw | Same on the base |",
+      "|:-:|---|---|---|",
+      ...onBase.map((x) => `| 🔁 | ${cell(x.expect, 80)} | ${cell(x.observed, 130)} | ${cell(x.pre_existing ?? "", 130)} |`),
+    );
   if (passed.length) lines.push("", `<details><summary>✅ ${passed.length} passed ${passed.length === 1 ? "check" : "checks"}</summary>`, "", ...table(passed), "", "</details>");
 
   // GitHub plays no video from another site, so the recording is a link, above the screenshots.
