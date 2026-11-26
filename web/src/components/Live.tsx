@@ -69,7 +69,7 @@ export function StageStrip({ progress, queued }: { progress: Progress | null; qu
           } else detail = queued && i === 0 ? "waiting for a sandbox" : "";
           return (
             <div key={s} className={cn("px-4 py-3", state === "now" && "bg-info/[0.08]")}>
-              <div className={cn("flex items-center gap-2 text-[15px] font-medium whitespace-nowrap", (state === "todo" || state === "skipped") && "text-muted-foreground")}>
+              <div className={cn("flex items-center gap-2 text-body font-medium whitespace-nowrap", (state === "todo" || state === "skipped") && "text-muted-foreground")}>
                 {state === "done" ? (
                   <Check className="size-4 shrink-0 text-ok" aria-label="done" />
                 ) : state === "failed" ? (
@@ -77,7 +77,7 @@ export function StageStrip({ progress, queued }: { progress: Progress | null; qu
                 ) : state === "now" ? <LiveDot /> : <WaitDot />}
                 {LABEL[s]}
               </div>
-              <div className={cn("mt-1 pl-6 text-[14px] text-muted-foreground lg:min-h-5", !detail && "hidden lg:block", state === "now" && "text-info")}>{detail}</div>
+              <div className={cn("mt-1 pl-6 text-small text-muted-foreground lg:min-h-5", !detail && "hidden lg:block", state === "now" && "text-info")}>{detail}</div>
               {state === "now" && s === "checks" && checks.length > 0 && (
                 <div className="mt-2.5 ml-6 h-[3px] overflow-hidden rounded-full bg-border" role="progressbar" aria-valuemin={0} aria-valuemax={checks.length} aria-valuenow={done}>
                   <div className="h-full rounded-full bg-info transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${(done / checks.length) * 100}%` }} />
@@ -88,7 +88,7 @@ export function StageStrip({ progress, queued }: { progress: Progress | null; qu
         })}
       </div>
       {firstTry && (
-        <p className="mt-2 max-w-3xl text-[13px] text-muted-foreground">
+        <p className="mt-2 max-w-3xl text-small text-muted-foreground">
           Second try. The first test took {firstTry} and was blocked by something the copy of the app lacked. Codex adds it, then the change is tested again.
         </p>
       )}
@@ -105,8 +105,8 @@ export function LiveChecks({ progress }: { progress: Progress }) {
   const testing = currentStage(progress) === "checks" ? current : -1;
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-[15px]">
-        <thead className="text-left text-[14px] text-muted-foreground">
+      <table className="w-full text-body">
+        <thead className="text-left text-small text-muted-foreground">
           <tr className="border-b border-border">
             <th className="w-10 px-4 py-2" />
             <th className="px-4 py-2 font-medium">Expected</th>
@@ -120,12 +120,12 @@ export function LiveChecks({ progress }: { progress: Progress }) {
             const observed = c.result ? (
               (c.observed ?? "")
             ) : now && progress.now.length ? (
-              <ol className="flex flex-col gap-1 text-[14px]">
+              <ol className="flex flex-col gap-1 text-small">
                 {progress.now.map((n, j) => {
                   const last = j === progress.now.length - 1;
                   return (
                     <li key={`${n.at}-${j}`} className={cn("flex gap-3", last && "text-foreground")}>
-                      <span className={cn("pt-px font-mono text-[13px]", last ? "text-info" : "text-muted-foreground")}>{clock(n.at)}</span>
+                      <span className={cn("pt-px font-mono text-small", last ? "text-info" : "text-muted-foreground")}>{clock(n.at)}</span>
                       {n.text}
                     </li>
                   );
@@ -146,14 +146,14 @@ export function LiveChecks({ progress }: { progress: Progress }) {
                 <td className={cn("px-4 py-3 sm:w-[40%]", c.result || now ? "font-medium" : "text-muted-foreground")}>
                   {c.expect}
                   {/* Phones: what the tester saw goes under the check, not in a column of its own. */}
-                  <div className="mt-1 text-[14px] font-normal text-muted-foreground sm:hidden">
+                  <div className="mt-1 text-small font-normal text-muted-foreground sm:hidden">
                     {observed}
-                    {c.result && c.at && <span className="ml-2 font-mono text-[13px]">{clock(c.at)}</span>}
+                    {c.result && c.at && <span className="ml-2 font-mono text-small">{clock(c.at)}</span>}
                   </div>
                 </td>
                 <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{observed}</td>
-                <td className="hidden px-4 py-3 text-right text-[14px] whitespace-nowrap sm:table-cell">
-                  {c.result && c.at ? <span className="font-mono text-[13px] text-muted-foreground">{clock(c.at)}</span> : now ? <span className="text-info">testing now</span> : null}
+                <td className="hidden px-4 py-3 text-right text-small whitespace-nowrap sm:table-cell">
+                  {c.result && c.at ? <span className="font-mono text-small text-muted-foreground">{clock(c.at)}</span> : now ? <span className="text-info">testing now</span> : null}
                 </td>
               </tr>
             );

@@ -25,13 +25,13 @@ function RunningTile({ b, over }: { b: RunningBox; over: boolean }) {
       to={`/projects/${b.project_id}/${b.kind === "setup" ? "setup" : "runs"}`}
       className={cn("flex h-[5.5rem] min-w-0 flex-col justify-between rounded-md border bg-info/10 px-2.5 py-2 hover:bg-info/15", over ? "border-dashed border-warn/70" : "border-info/50")}
     >
-      <span className="flex items-center gap-1.5 text-[12px] text-info">
+      <span className="flex items-center gap-1.5 text-small text-info">
         <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" aria-hidden="true" />
         <span className="tabular-nums">{duration(b.started, null)}</span>
       </span>
       <span className="min-w-0">
-        <span className="block truncate text-[13px] font-medium">{b.repo.split("/")[1] ?? b.repo}</span>
-        <span className="block truncate text-[12px] text-muted-foreground">{what(b)}</span>
+        <span className="block truncate text-body font-medium">{b.repo.split("/")[1] ?? b.repo}</span>
+        <span className="block truncate text-small text-muted-foreground">{what(b)}</span>
       </span>
     </Link>
   );
@@ -56,7 +56,7 @@ function Tiles({ data, busy, setLimit }: { data: Boxes & { host: number; limit: 
                 onClick={() => setLimit(on ? i : i + 1)}
                 aria-label={on ? (i === 0 ? "Free sandbox" : `Allow ${i} at once`) : `Allow ${i + 1} at once`}
                 className={cn(
-                  "group flex h-[5.5rem] w-full cursor-pointer flex-col justify-end rounded-md border px-2.5 py-2 text-left text-[12px] transition-colors disabled:cursor-default",
+                  "group flex h-[5.5rem] w-full cursor-pointer flex-col justify-end rounded-md border px-2.5 py-2 text-left text-small transition-colors disabled:cursor-default",
                   on ? "border-dashed border-border bg-card text-muted-foreground enabled:hover:border-bad/50" : "border-transparent bg-[repeating-linear-gradient(135deg,var(--muted)_0_6px,transparent_6px_12px)] text-muted-foreground/70 hover:border-border",
                 )}
               >
@@ -89,7 +89,7 @@ function Days({ days }: { days: Boxes["time"]["days"] }) {
   const label = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
   return (
     <div>
-      <div className="mb-1 h-4 text-[12px] text-muted-foreground" aria-live="polite">
+      <div className="mb-1 h-4 text-small text-muted-foreground" aria-live="polite">
         {shown ? `${label(shown.day)}: ${shown.seconds ? hours(shown.seconds) : "no sandbox time"}` : ""}
       </div>
       <div className="flex h-20 items-end gap-[2px]" onMouseLeave={() => setHover(null)}>
@@ -114,7 +114,7 @@ function Days({ days }: { days: Boxes["time"]["days"] }) {
           );
         })}
       </div>
-      <div className="mt-1 flex justify-between text-[11px] text-muted-foreground tabular-nums">
+      <div className="mt-1 flex justify-between text-label text-muted-foreground tabular-nums">
         <span>{label(days[0]?.day ?? today)}</span>
         <span>{label(days.at(-1)?.day ?? today)}</span>
       </div>
@@ -164,16 +164,16 @@ export function Sandboxes() {
       />
       <div className="space-y-4 px-4 py-4">
         {host === null || limit === null ? (
-          <p className="text-[13px] text-warn">This instance has no sandbox provider, so no job runs. Set SANDBOX_PROVIDER on the server.</p>
+          <p className="text-body text-warn">This instance has no sandbox provider, so no job runs. Set SANDBOX_PROVIDER on the server.</p>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-[13px] font-medium">At the same time</span>
+              <span className="text-body font-medium">At the same time</span>
               <div className="flex items-center rounded-md border border-border">
                 <Button variant="ghost" size="sm" className="rounded-r-none" disabled={busy || limit <= 1} onClick={() => void setLimit(limit - 1)} aria-label="One fewer at once">
                   <Minus className="size-3.5" />
                 </Button>
-                <output className="min-w-16 px-2 text-center text-[13px] tabular-nums" aria-live="polite">
+                <output className="min-w-16 px-2 text-center text-body tabular-nums" aria-live="polite">
                   <span className="font-semibold">{limit}</span>
                   <span className="text-muted-foreground"> of {host}</span>
                 </output>
@@ -181,13 +181,13 @@ export function Sandboxes() {
                   <Plus className="size-3.5" />
                 </Button>
               </div>
-              <span className="text-[12px] text-muted-foreground">The sandbox host has room for {host}.</span>
+              <span className="text-small text-muted-foreground">The sandbox host has room for {host}.</span>
               {queued > 0 && (
-                <span className="text-[12px] text-foreground">
+                <span className="text-small text-foreground">
                   {queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox.
                 </span>
               )}
-              {failed && <span className="text-[13px] text-bad">{failed}</span>}
+              {failed && <span className="text-body text-bad">{failed}</span>}
             </div>
             {host <= MAX_TILES ? (
               <Tiles data={{ ...data, host, limit }} busy={busy} setLimit={(n) => void setLimit(n)} />
@@ -202,15 +202,15 @@ export function Sandboxes() {
                 </ul>
               )
             )}
-            {running.length > limit && <p className="text-[12px] text-warn">{running.length - limit} more than your limit still run; they finish, and no new job starts until fewer than {limit} run.</p>}
+            {running.length > limit && <p className="text-small text-warn">{running.length - limit} more than your limit still run; they finish, and no new job starts until fewer than {limit} run.</p>}
           </>
         )}
       </div>
-      <div className="grid gap-6 border-t border-border px-4 py-4 md:grid-cols-[minmax(0,14rem)_1fr]">
+      <div className="grid gap-6 border-t border-border px-4 py-4 md:grid-cols-[minmax(0,18rem)_1fr]">
         <div>
-          <h3 className="text-[13px] font-medium">Sandbox time in {monthName}</h3>
+          <h3 className="text-body font-medium">Sandbox time in {monthName}</h3>
           <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">{hours(time.monthSeconds + live)}</p>
-          <p className="mt-1 text-[12px] text-muted-foreground">
+          <p className="mt-1 text-small text-muted-foreground">
             {time.jobs} {time.jobs === 1 ? "job" : "jobs"} this month, {hours(time.totalSeconds + live)} in total. Counted from the start to the end of each job, by calendar month in UTC.
           </p>
         </div>

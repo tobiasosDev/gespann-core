@@ -9,7 +9,7 @@ Acceptance testing for pull requests. For every PR, gespann starts a production-
 - Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
 - Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.
 - Every run comes with a video of the tester's screen, first on the run page and linked above the screenshots in the PR comment.
-- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only. Sign in once in the browser (OAuth) or use a token from Settings → Agent access:
+- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run. They can also rerun a PR, for example after a run failed on something outside the PR (at most 3 runs of the same commit); they cannot cancel or approve anything. Sign in once in the browser (OAuth) or use a token from Settings → Agent access:
 
   ```bash
   claude mcp add --transport http gespann https://app.gespann.app/mcp   # then /mcp → gespann → Authenticate

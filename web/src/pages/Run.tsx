@@ -66,15 +66,15 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
 
   return (
     <>
-      <div className="mb-1 text-[13px] text-muted-foreground">
+      <div className="mb-1 text-body text-muted-foreground">
         <Link to={`/projects/${r.project.id}/runs`} className="hover:text-foreground">
           {r.project.repo}
         </Link>{" "}
         / runs / {r.id}
       </div>
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">
-          <Mono className="text-xl text-muted-foreground">#{r.pr}</Mono> {r.title}
+        <h1 className="text-title font-semibold">
+          <Mono className="text-title text-muted-foreground">#{r.pr}</Mono> {r.title}
         </h1>
         <RunStatus run={r} />
         <div className="ml-auto flex gap-2">
@@ -106,7 +106,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           ["Started", <Mono key="s">{ago(r.started ?? r.created)}</Mono>],
         ].map(([k, val]) => (
           <div key={k as string} className="bg-card px-4 py-3">
-            <div className="text-[12px] text-muted-foreground">{k}</div>
+            <div className="text-small text-muted-foreground">{k}</div>
             <div className="mt-0.5">{val}</div>
           </div>
         ))}
@@ -114,9 +114,9 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
 
       {live && <StageStrip progress={r.status === "running" ? r.progress : null} queued={r.status === "queued"} />}
 
-      {v?.summary && <p className="mb-4 max-w-3xl text-[15px]">{v.summary}</p>}
+      {v?.summary && <p className="mb-4 max-w-3xl text-body">{v.summary}</p>}
       {conflict && (
-        <Card className="mb-4 max-w-3xl px-4 py-3 text-[13px]">
+        <Card className="mb-4 max-w-3xl px-4 py-3 text-body">
           <p className="font-medium">Not tested: this PR has merge conflicts with {r.base_ref}.</p>
           <p className="mt-1 text-muted-foreground">
             Conflicts in{" "}
@@ -134,7 +134,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
       {r.verdict?.problems.length ? (
         <Card className="mb-4 border-bad/40">
           <CardHeader title="Verdict rejected" description="The tester's verdict broke the rules, so the run counts as FAIL." />
-          <ul className="list-disc px-8 py-3 text-[13px] text-bad">
+          <ul className="list-disc px-8 py-3 text-body text-bad">
             {r.verdict.problems.map((p) => (
               <li key={p}>{p}</li>
             ))}
@@ -156,15 +156,15 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <a href={issueUrl(r.project.repo, g.issue)} target="_blank" rel="noreferrer" className="truncate font-mono text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                    <a href={issueUrl(r.project.repo, g.issue)} target="_blank" rel="noreferrer" className="truncate font-mono text-small text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
                       {g.issue}
                     </a>
                     <span className="ml-auto">
                       <Badge tone={GOAL_TONE[g.result]}>{g.result}</Badge>
                     </span>
                   </div>
-                  <p className="mt-0.5 text-[13px] font-medium">{g.goal}</p>
-                  {g.observed && <p className="mt-1 max-w-3xl text-[13px] text-muted-foreground">{g.observed}</p>}
+                  <p className="mt-0.5 text-body font-medium">{g.goal}</p>
+                  {g.observed && <p className="mt-1 max-w-3xl text-body text-muted-foreground">{g.observed}</p>}
                 </div>
               </li>
             ))}
@@ -188,8 +188,8 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
             <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued") : "No checks."}</Empty>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-[15px]">
-                <thead className="text-left text-[14px] text-muted-foreground">
+              <table className="w-full text-body">
+                <thead className="text-left text-small text-muted-foreground">
                   <tr className="border-b border-border">
                     <th className="w-10 px-4 py-2" />
                     <th className="px-4 py-2 font-medium">Expected</th>
@@ -204,7 +204,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
                       </td>
                       <td className="px-4 py-3 font-medium sm:w-[40%]">
                         {c.expect}
-                        <div className="mt-1 text-[14px] font-normal text-muted-foreground sm:hidden">{c.observed}</div>
+                        <div className="mt-1 text-small font-normal text-muted-foreground sm:hidden">{c.observed}</div>
                       </td>
                       <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{c.observed}</td>
                     </tr>
@@ -229,13 +229,13 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
         <CardHeader title="Log" />
         {live && !fullLog && logLines.length > 1 ? (
           <div className="flex items-center gap-4 p-4">
-            <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-muted-foreground">{logLines.at(-1)}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-small text-muted-foreground">{logLines.at(-1)}</span>
             <Button size="sm" variant="outline" onClick={() => setFullLog(true)}>
               Show all {logLines.length} lines
             </Button>
           </div>
         ) : (
-          <div className="p-4">{r.log ? <Log text={r.log} /> : <span className="text-[13px] text-muted-foreground">No log yet.</span>}</div>
+          <div className="p-4">{r.log ? <Log text={r.log} /> : <span className="text-body text-muted-foreground">No log yet.</span>}</div>
         )}
       </Card>
     </>

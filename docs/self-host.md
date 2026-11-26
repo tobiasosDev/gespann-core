@@ -207,7 +207,7 @@ The project sandbox stops after every job, and the Codex sign-in is only inside 
 
 ## Agent access (MCP)
 
-Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON responses, no sessions). An agent signs in with OAuth: it opens gespann in the browser, the user signs in with GitHub and allows it once. Agents without OAuth (CI, scripts) send a personal token from **Settings → Agent access** instead. Either way the agent sees the projects its user sees; `ADMIN_TOKEN` sees all of them. Only hashes of tokens are stored, and every sign-in and token can be revoked under **Settings → Agent access**. Which repositories a user can access is what GitHub reported at their last sign-in; access relies on that for 7 days, then the user signs in again (an OAuth agent sends them through the browser on its own). Every tool is read-only:
+Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON responses, no sessions). An agent signs in with OAuth: it opens gespann in the browser, the user signs in with GitHub and allows it once. Agents without OAuth (CI, scripts) send a personal token from **Settings → Agent access** instead. Either way the agent sees the projects its user sees; `ADMIN_TOKEN` sees all of them. Only hashes of tokens are stored, and every sign-in and token can be revoked under **Settings → Agent access**. Which repositories a user can access is what GitHub reported at their last sign-in; access relies on that for 7 days, then the user signs in again (an OAuth agent sends them through the browser on its own). Every tool only reads, except `rerun`; none cancels or approves anything:
 
 | Tool | Returns |
 |---|---|
@@ -217,6 +217,7 @@ Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON resp
 | `get_review` | the PR comment as Markdown |
 | `get_run_file` | a screenshot as an image; the recording as a link (MCP has no video content); `verdict.json` as text |
 | `get_run_log` | the end of the job log |
+| `rerun` | starts a new run of the PR at its current head, like *Rerun* on the run page; returns the queued or running run instead of starting one, refuses closed PRs and stops after 3 runs of the same head |
 
 ```bash
 claude mcp add --transport http gespann https://gespann.example.com/mcp   # then /mcp → gespann → Authenticate
