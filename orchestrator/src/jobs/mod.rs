@@ -164,7 +164,11 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
                 None => ctx.ui.await_checks(run.id, job.id).await?,
             };
             match step.as_str() {
-                "go" => ctx.db.step_put(job.id, "checks", "\"go\"")?,
+                "go" => {
+                    ctx.db.step_put(job.id, "checks", "\"go\"")?;
+                    // Passed its CI checks: no longer shown as waiting for them, also after a restart.
+                    ctx.db.with(|c| c.execute("update jobs set not_before = null where id = ?", [job.id]))?;
+                }
                 "later" => {
                     ctx.db.forget_deferred(job.id)?;
                     return Ok(Flow::Ended);

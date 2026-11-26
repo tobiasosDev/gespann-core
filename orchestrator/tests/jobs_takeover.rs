@@ -95,6 +95,9 @@ impl Sandboxes for FakeSandboxes {
             ok("{\"ok\":true,\"timeout\":30,\"prompt\":null}\n")
         } else if command.contains("test -f") && command.contains("state.json") {
             CommandResult { exit_code: Some(1), ..ok("") }
+        } else if command.contains("rev-parse --verify") {
+            // main moved on since GitHub's base commit of the PR.
+            ok(&format!("{}\n", "d".repeat(40)))
         } else if command.contains("rev-parse HEAD") {
             ok(&format!("{}\n", "c".repeat(40)))
         } else {
@@ -301,6 +304,9 @@ async fn a_run_taken_over_mid_test_attaches_to_its_tester_and_repeats_nothing() 
     let log = w.ctx.db.job_log(1).unwrap().unwrap_or_default();
     assert_eq!(log.matches("installing gespann").count(), 1, "the log does not claim a second install: {log}");
     assert_eq!(log.matches("the tester finished").count(), 1);
+    assert_eq!(log.matches("testing on main at dddddddddddd, newer than bbbbbbbbbbbb from GitHub").count(), 1, "{log}");
+    assert_eq!(w.ctx.db.run(1).unwrap().unwrap().base, "d".repeat(40), "the run records the base it was tested on");
+    assert_eq!(w.sb.started(&format!("--base {}", "d".repeat(40))), 2, "the copy and the verdict use main as it is now");
     assert_eq!(log.matches("picks the job up where it was").count(), 0, "this test takes over by hand, not through adopt_stale");
 
     let job = w.ctx.db.job(1).unwrap().unwrap();

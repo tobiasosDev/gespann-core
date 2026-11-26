@@ -141,8 +141,12 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run, legacy: bool
     let b = &b;
     let cancelled = || cx.stopped();
     let mut pr: Option<Context> = None;
+    let mut base = run.base.clone();
     match merge_and_read(cx, p, run, b).await {
-        Ok(c) => pr = Some(c),
+        Ok((c, tip)) => {
+            pr = Some(c);
+            base = tip;
+        }
         Err(e) => match e.downcast_ref::<MergeConflict>() {
             Some(MergeConflict(files)) => {
                 cx.log(&format!("✗ {}. Nothing was tested: the PR's agent brings the branch up to date, then gespann tests the new head.", conflict_title(&run.base_ref, files)));
@@ -157,6 +161,9 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run, legacy: bool
         },
     }
 
+    // The base the PR was merged onto: its branch as it is now, maybe newer than GitHub's.
+    let current = Run { base, ..run.clone() };
+    let run = &current;
     if legacy {
         down_leftovers(cx, b, run).await?;
     }
@@ -309,19 +316,32 @@ async fn stop(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
 
 /// The PR merged onto its base in the checkout, then its text and issues. Both once: after a
 /// takeover the checkout holds the running copy's build, and the tester was given this text.
-async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<Context> {
+async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<(Context, String)> {
     let sb = cx.sb();
-    cx.jr
+    let base: String = cx
+        .jr
         .step("merge", || async move {
             ensure_repo(cx, b, p).await?;
-            git(cx, b, p, &format!("-C {} fetch --quiet origin {} {}", b.repo, q(&run.head), q(&run.base)), 600).await?;
+            // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was
+            // at the last push, so a rerun after newer merges would otherwise test the PR without them.
+            let tracking = format!("refs/remotes/origin/{}", run.base_ref);
+            git(cx, b, p, &format!("-C {} fetch --quiet origin {} {}", b.repo, q(&run.head), q(&format!("+refs/heads/{}:{tracking}", run.base_ref))), 600).await?;
+            let read = sb.exec(&b.id, &format!("cd {} && git rev-parse --verify --quiet {}", b.repo, q(&format!("{tracking}^{{commit}}"))), 30).await?;
+            let tip = read.stdout.trim().to_string();
+            if read.exit_code != Some(0) || tip.len() != 40 || !tip.chars().all(|c| c.is_ascii_hexdigit()) {
+                bail!("could not read {} after fetching it: {}", run.base_ref, tail(&read.stdout, 300));
+            }
+            if tip != run.base {
+                cx.log(&format!("testing on {} at {}, newer than {} from GitHub", run.base_ref, &tip[..12], cut(&run.base, 12)));
+                cx.ctx.db.update_run(run.id, &[("base", text(tip.clone()))])?;
+            }
             let merge = sb
                 .exec(
                     &b.id,
                     // On a failed merge the files in conflict follow, one per line, and the merge is undone.
                     &format!(
                         "cd {} && git checkout --quiet --force --detach {} && git clean -fdq && {{ git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit {} 2>&1 || {{ s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/{UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }}; }}",
-                        b.repo, run.base, run.head
+                        b.repo, tip, run.head
                     ),
                     120,
                 )
@@ -333,10 +353,11 @@ async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<
                 }
                 bail!("PR head does not merge onto {}: {}", run.base_ref, tail(&merge.stdout, 500));
             }
-            Ok(())
+            Ok(tip)
         })
         .await?;
-    cx.jr
+    let c = cx
+        .jr
         .step("context", || async move {
             let c = cx.ctx.ui.context(run.id).await?;
             // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
@@ -350,7 +371,8 @@ async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<
             }
             Ok(c)
         })
-        .await
+        .await?;
+    Ok((c, base))
 }
 
 /// A run lost in a restart of the TypeScript worker may have left its copy up: finish tears it down
