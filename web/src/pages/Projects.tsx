@@ -3,6 +3,11 @@ import { ago, type ProjectRow, useResource } from "../api.ts";
 import { Button, Card, Empty, Mono } from "../components/ui.tsx";
 import { Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
 
+// One grid for the whole list: every row is a subgrid, so status, PR, verdict
+// and time line up in the same column from the first row to the last.
+// Phones: the repo takes its own line, the four cells sit below it, still aligned.
+const row = "col-span-full grid grid-cols-subgrid items-center gap-y-1.5 px-4";
+
 export function Projects() {
   const { data, error } = useResource<{ projects: ProjectRow[] }>("/projects", (d) => d.projects.some((p) => p.setup === "running" || p.last?.status === "running"));
   return (
@@ -16,22 +21,39 @@ export function Projects() {
       {error && <p className="mb-3 text-bad">{error}</p>}
       <Card>
         {data && data.projects.length === 0 && <Empty>No projects yet. Add a repository to start.</Empty>}
-        {data?.projects.map((p) => (
-          <Link key={p.id} to={`/projects/${p.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-3 last:border-0 hover:bg-accent">
-            <span className="min-w-0 flex-1 truncate font-medium">{p.repo}</span>
-            <ProjectStatus p={p} />
-            {p.last ? (
-              <span className="flex items-center gap-2 text-[13px] text-muted-foreground">
-                <GitPullRequest className="size-3.5" />
-                <Mono>#{p.last.pr}</Mono>
-                <RunStatus run={p.last} />
-                <span className="w-16 text-right">{ago(p.last.started ?? p.last.created)}</span>
-              </span>
-            ) : (
-              <span className="text-[13px] text-muted-foreground">no runs</span>
-            )}
-          </Link>
-        ))}
+        {data && data.projects.length > 0 && (
+          <div className="grid grid-cols-[auto_auto_auto_minmax(0,1fr)] gap-x-4 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] sm:gap-x-6">
+            <div className={`${row} hidden border-b border-border py-2 text-[12px] font-medium text-muted-foreground sm:grid`}>
+              <span>Repository</span>
+              <span>Status</span>
+              <span>Last PR</span>
+              <span>Verdict</span>
+              <span className="text-right">Tested</span>
+            </div>
+            {data.projects.map((p) => (
+              <Link key={p.id} to={`/projects/${p.id}`} className={`${row} border-b border-border py-3 last:border-0 hover:bg-accent`}>
+                <span className="col-span-full truncate font-medium sm:col-span-1">{p.repo}</span>
+                <span className="flex">
+                  <ProjectStatus p={p} />
+                </span>
+                {p.last ? (
+                  <>
+                    <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                      <GitPullRequest className="size-3.5" />
+                      <Mono className="tabular-nums">#{p.last.pr}</Mono>
+                    </span>
+                    <span className="flex">
+                      <RunStatus run={p.last} />
+                    </span>
+                    <span className="text-right text-[13px] whitespace-nowrap text-muted-foreground">{ago(p.last.started ?? p.last.created)}</span>
+                  </>
+                ) : (
+                  <span className="col-span-3 text-[13px] text-muted-foreground">no runs</span>
+                )}
+              </Link>
+            ))}
+          </div>
+        )}
       </Card>
     </>
   );
