@@ -1,10 +1,11 @@
 import { ExternalLink, RotateCw } from "lucide-react";
 import { useState } from "react";
-import { ago, api, duration, type Progress, type RunDetail } from "../api.ts";
+import { ago, api, duration, type Check, type Progress, type RunDetail } from "../api.ts";
 import { LiveChecks, RESULT_ICON, StageStrip, waitingText } from "../components/Live.tsx";
 import { navigate, useResource, useTick } from "../live.ts";
 import { ShotList } from "../components/Shots.tsx";
 import { Badge, Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
+import { cn } from "../cn.ts";
 import { Link, RunStatus } from "../nav.tsx";
 
 const GOAL = { met: RESULT_ICON.pass, missed: RESULT_ICON.fail, blocked: RESULT_ICON.blocked };
@@ -25,6 +26,21 @@ function liveSummary(p: Progress): string {
   const open = p.checks.filter((c) => !c.result).length;
   if (open) parts.push(`${open} to go`);
   return `The tester planned ${p.checks.length} checks after reading the change. ${parts.join(", ")}.`;
+}
+
+/** "7/8 passed, 1 fails the same way on main" */
+function checksSummary(checks: Check[], base: string): string {
+  const onBase = checks.filter((c) => c.result === "fail" && c.pre_existing).length;
+  return `${checks.filter((c) => c.result === "pass").length}/${checks.length} passed${onBase ? `, ${onBase} already on ${base} and not counted against the PR` : ""}`;
+}
+
+/** A failed check that fails the same way on the base branch. */
+function OnBase({ base, note, className }: { base: string; note: string; className?: string }) {
+  return (
+    <div className={cn("mt-2 text-small font-normal text-muted-foreground", className)}>
+      <Badge tone="warn">already on {base}</Badge> <span>{note}</span>
+    </div>
+  );
 }
 
 const runLive = (d: RunDetail) => d.status === "queued" || d.status === "running";
@@ -179,7 +195,7 @@ export function Run({ id }: { id: number }) {
         <Card className="mb-6">
           <CardHeader
             title="Checks"
-            description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : livePlan ? liveSummary(livePlan) : undefined}
+            description={v ? checksSummary(v.checks, r.base_ref) : livePlan ? liveSummary(livePlan) : undefined}
           />
           {(!v || v.checks.length === 0) && livePlan ? (
             <LiveChecks progress={livePlan} />
@@ -204,8 +220,12 @@ export function Run({ id }: { id: number }) {
                       <td className="px-4 py-3 font-medium sm:w-[40%]">
                         {c.expect}
                         <div className="mt-1 text-small font-normal text-muted-foreground sm:hidden">{c.observed}</div>
+                        {c.pre_existing && <OnBase base={r.base_ref} note={c.pre_existing} className="sm:hidden" />}
                       </td>
-                      <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{c.observed}</td>
+                      <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">
+                        {c.observed}
+                        {c.pre_existing && <OnBase base={r.base_ref} note={c.pre_existing} />}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -146,6 +146,8 @@ export interface Check {
   observed: string;
   result: "pass" | "fail" | "blocked";
   proof?: string[];
+  /** A failed check that fails the same way on the base branch: how the tester confirmed it. */
+  pre_existing?: string;
 }
 
 export interface Goal {
