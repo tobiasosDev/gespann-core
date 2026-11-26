@@ -248,6 +248,7 @@ export class Db {
       ["codex_account", "text"],
       ["repos_synced", "text"],
       ["max_jobs", "integer"],
+      ["job_cap", "integer"],
     ] as const) {
       if (!cols.has(name)) this.sql.exec(`alter table users add column ${name} ${def}`);
     }
@@ -470,6 +471,14 @@ export class Db {
 
   setMaxJobs(userId: number, max: number | null): void {
     this.run("update users set max_jobs = ? where id = ?", max, userId);
+  }
+
+  /** Writes the server module's cap per user (`users.job_cap`), which the orchestrator reads when it picks the next job. */
+  publishJobCaps(cap: (owner: { id: number; login: string }) => number | null): void {
+    for (const u of this.all<{ id: number; login: string; job_cap: number | null }>("select id, login, job_cap from users")) {
+      const c = cap(u);
+      if (c !== u.job_cap) this.run("update users set job_cap = ? where id = ?", c, u.id);
+    }
   }
 
   /** The user's jobs that hold a sandbox now, oldest first. */

@@ -115,7 +115,7 @@ create table if not exists users (
   id integer primary key, github_id integer unique not null, login text not null,
   name text, avatar text, created text not null,
   codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text,
-  repos_synced text, max_jobs integer);
+  repos_synced text, max_jobs integer, job_cap integer);
 create table if not exists projects (
   id integer primary key, owner_id integer not null references users(id), installation_id integer not null,
   repo text not null unique, repo_id integer not null, default_branch text not null,
@@ -252,6 +252,12 @@ fn ensure_own(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             if !e.to_string().contains("duplicate column") {
                 return Err(e);
             }
+        }
+    }
+    // The UI adds users.job_cap too; an orchestrator that opens the file first must not fail on it.
+    if let Err(e) = conn.execute_batch("alter table users add column job_cap integer") {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
         }
     }
     // job_procs from before `acked`: every process in it was started and confirmed.
@@ -417,6 +423,7 @@ impl Db {
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
          and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
+         and (u.job_cap is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.job_cap)
        order by j.id limit 1",
                 [now()],
                 job_row,
@@ -769,6 +776,20 @@ mod tests {
         assert_eq!(next(), None, "tobi's second job waits");
         db.end_job(j1, "done", None).unwrap();
         assert_eq!(next(), Some(j2));
+    }
+
+    #[test]
+    fn next_job_honours_the_server_modules_cap() {
+        let db = Db::memory().unwrap();
+        let (t, a, b) = owner(&db, 1, "tobi");
+        set(&db, "update users set job_cap = 1 where id = ?", [t]);
+        let j1 = db.enqueue(a, "suggest", None).unwrap();
+        let j2 = db.enqueue(b, "suggest", None).unwrap();
+        assert_eq!(db.next_job().unwrap().map(|j| j.id), Some(j1));
+        assert!(db.claim_job(j1, "me").unwrap());
+        assert!(db.next_job().unwrap().is_none(), "the plan allows one at a time");
+        set(&db, "update users set job_cap = null where id = ?", [t]);
+        assert_eq!(db.next_job().unwrap().map(|j| j.id), Some(j2));
     }
 
     #[test]

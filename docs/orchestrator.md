@@ -61,6 +61,10 @@ The orchestrator also writes `settings.orchestrator` = `{"kind","parallel","why"
 every 10 s. The UI reads it for the host size on Settings → Sandboxes, and treats the orchestrator as
 present (Codex sign-in possible) while `beat` is younger than 60 s.
 
+The server module's per-owner cap (`jobCap`, e.g. a plan's parallel tests) cannot be asked from the
+orchestrator: with `WORKER=external` the UI writes it to `users.job_cap` every 10 s, and the
+orchestrator starts no job of an owner who already runs that many.
+
 Codex sign-in with `WORKER=external`: the UI only sets the user's `codex_state` to `pending`
 (`codex_login` null). The orchestrator runs the sign-in for every pending user and writes
 `codex_login`, then `codex_auth` (sealed as in `src/server/codex.ts`) or `failed`. The UI does not fail

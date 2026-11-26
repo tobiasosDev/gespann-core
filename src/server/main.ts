@@ -3,7 +3,7 @@ import { createApp, githubApp } from "./app.ts";
 import { startLogin } from "./codex.ts";
 import { loadConfig } from "./config.ts";
 import { Db } from "./db.ts";
-import { loadServerModule } from "./extension.ts";
+import { capFor, loadServerModule } from "./extension.ts";
 import { Github } from "./github.ts";
 import { createPool, describePool } from "./provider.ts";
 import { startPrSync } from "./pulls.ts";
@@ -65,6 +65,12 @@ export async function serve(): Promise<void> {
   } else if (external) console.log(JSON.stringify({ level: "info", message: "worker: external (the orchestrator runs jobs)" }));
   else console.error(JSON.stringify({ level: "warn", message: "no sandbox provider (SANDBOX_PROVIDER): jobs stay queued" }));
   startPrSync({ db, github });
+  // The orchestrator cannot ask the server module: the caps go into the database (every 10 s, plans change rarely).
+  if (external) {
+    const publish = () => db.publishJobCaps((owner) => capFor(serverModule, owner)?.jobs ?? null);
+    publish();
+    setInterval(publish, 10_000).unref();
+  }
   if (config.mediaRetentionDays !== null) startMediaSweep({ db, github, dataDir: config.dataDir, days: config.mediaRetentionDays });
   listen({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" }, (info) => {
     console.log(JSON.stringify({ level: "info", message: `gespann listening on ${info.port}`, baseUrl: config.baseUrl }));

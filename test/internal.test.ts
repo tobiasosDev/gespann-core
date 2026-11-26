@@ -251,6 +251,16 @@ test("internal API: admit answers as the worker decides; ended tells the module 
   assert.equal(bills, 1);
 });
 
+test("WORKER=external: the server module's caps go into users.job_cap for the orchestrator", () => {
+  const { db, u } = setup();
+  const other = db.upsertUser({ github_id: 2, login: "eve", name: null, avatar: null });
+  db.publishJobCaps((owner) => (owner.login === "tobi" ? 2 : null));
+  const cap = (id: number) => (db.sql.prepare("select job_cap from users where id = ?").get(id) as { job_cap: number | null }).job_cap;
+  assert.deepEqual([cap(u.id), cap(other.id)], [2, null]);
+  db.publishJobCaps(() => null);
+  assert.equal(cap(u.id), null);
+});
+
 test("WORKER: builtin by default, external on request, anything else is refused", () => {
   assert.equal(loadConfig({}).worker, "builtin");
   assert.equal(loadConfig({ WORKER: "external" }).worker, "external");
