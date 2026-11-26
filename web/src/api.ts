@@ -132,11 +132,24 @@ export interface Goal {
   proof?: string[];
 }
 
+export const STAGES = ["sandbox", "copy", "read", "checks", "verdict"] as const;
+export type Stage = (typeof STAGES)[number];
+
+/** Live progress of a running run (src/verify/progress.ts). */
+export interface Progress {
+  at: Partial<Record<Stage, string>>;
+  attempt: number;
+  sandboxDone?: string;
+  checks: { expect: string; result: Check["result"] | null; active?: true; observed?: string; at?: string }[];
+  now: { at: string; text: string }[];
+}
+
 export interface RunDetail extends RunRow {
   project: { id: number; repo: string };
   verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[] } | null;
   files: string[];
   token: string;
+  progress: Progress | null;
   /** When the screenshots and recording were deleted after the PR closed. */
   media_cleared: string | null;
   log: string;

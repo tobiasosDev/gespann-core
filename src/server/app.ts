@@ -7,6 +7,7 @@ import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { triggered } from "../verify/plan.ts";
+import { parseProgress } from "../verify/progress.ts";
 import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
@@ -382,7 +383,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     if (!run) throw new HttpError(404, "run not found");
     const p = project(c, String(run.project_id));
     const job = db.jobs(p.id, 500).find((j) => j.run_id === run.id);
-    return c.json({ ...run, project: { id: p.id, repo: p.repo }, verdict: run.verdict ? JSON.parse(run.verdict) : null, files: JSON.parse(run.files), log: job?.log ?? "" });
+    return c.json({ ...run, project: { id: p.id, repo: p.repo }, verdict: run.verdict ? JSON.parse(run.verdict) : null, files: JSON.parse(run.files), progress: parseProgress(run.progress), log: job?.log ?? "" });
   });
 
   app.post("/api/runs/:id/rerun", async (c) => {

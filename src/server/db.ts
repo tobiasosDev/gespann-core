@@ -107,6 +107,8 @@ export interface Run {
   started: string | null;
   finished: string | null;
   error: string | null;
+  /** JSON: live progress while the run runs (see verify/progress.ts). */
+  progress: string | null;
   /** When the screenshots and recording were deleted after the PR closed; null while they are kept. */
   media_cleared: string | null;
 }
@@ -253,6 +255,7 @@ export class Db {
     }
     this.sql.exec("create unique index if not exists api_tokens_refresh on api_tokens(refresh_hash)");
     const rcols = new Set((this.sql.prepare("pragma table_info(runs)").all() as { name: string }[]).map((c) => c.name));
+    if (!rcols.has("progress")) this.sql.exec("alter table runs add column progress text");
     if (!rcols.has("media_cleared")) this.sql.exec("alter table runs add column media_cleared text");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");

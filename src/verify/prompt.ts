@@ -79,6 +79,7 @@ export function testerPrompt(t: TesterInput): string {
         ]
       : []),
     `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Before each action, state the result you expect.`,
+    `   People watch the run live. As soon as the plan stands, write it to ${t.work}/progress.json, exactly this shape: {"checks":[{"expect":"...","result":null}],"now":"what you are doing, in a few plain words"}. Rewrite the whole file as you go: set the "result" of the check you start to "running", update "now" with every new action (e.g. "Opening the settings page"), and when a check is done set its "result" ("pass", "fail" or "blocked") and a short "observed". It only shows progress; verdict.json stays the result.`,
     `3. Drive the change in the copy the way a user would, with the computer tools: open ${t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
     ...(t.testerNote ? [`   ${t.testerNote}`] : []),
     ...(sizes.length

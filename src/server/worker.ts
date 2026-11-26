@@ -5,6 +5,7 @@ import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verif
 import { screenFor, viewportsOf } from "../verify/viewports.ts";
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
 import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/similar.ts";
+import { emptyProgress, mergeTester, parseProgress, type Progress, type Stage, startStage } from "../verify/progress.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
@@ -356,6 +357,19 @@ function lastJson<T>(text: string): T | undefined {
 
 const CONCLUSION = { PASS: "success", SKIP: "neutral", BLOCKED: "neutral", FAIL: "failure" } as const;
 
+/** Changes the run's live progress. Never throws: progress is for the page, the run goes on without it. */
+function progressOf(d: Deps, runId: number): (change: (p: Progress) => Progress) => void {
+  return (change) => {
+    try {
+      const before = d.db.run_(runId)?.progress ?? null;
+      const after = JSON.stringify(change(parseProgress(before) ?? emptyProgress()));
+      if (after !== before) d.db.updateRun(runId, { progress: after });
+    } catch {
+      // The page goes without this update.
+    }
+  };
+}
+
 /**
  * One PR run: copy up, tester, verdict, copy down; then the check and the PR comment. When the tester
  * was blocked only by gaps in the copy (a site not built, a provider not faked), Codex fixes the copy
@@ -365,7 +379,8 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const gh = d.github();
   const runId = run.token.slice(0, 12);
   const runUrl = `${d.config.baseUrl}/runs/${run.id}`;
-  d.db.updateRun(run.id, { status: "running", started: new Date().toISOString() });
+  const started = new Date().toISOString();
+  d.db.updateRun(run.id, { status: "running", started, progress: JSON.stringify(startStage(emptyProgress(), "sandbox", started)) });
   const progress = (title: string, summary: string) =>
     run.check_run_id ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
   await progress("Testing the change", "An agent is testing this PR on a production-near copy.");
@@ -418,7 +433,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   let dir = `${b.gespann}/runs/${runId}`;
   let a: Attempt = { judged: null, outcome: "FAIL", clean: true };
   if (prText !== null) {
-    a = await attempt(d, job, p, run, b, runId, dir, prText, issues, log);
+    a = await attempt(d, job, p, run, b, runId, dir, prText, issues, log, 1);
     const gaps = copyGaps(a.judged);
     if (gaps.length && a.clean && !cancelled()) {
       for (const g of gaps) log(`blocked by the copy, not the change: ${g.expect} → ${g.fix}`);
@@ -431,6 +446,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
           log(`✗ could not take over the project's current recipe before the fix: ${(err as Error).message}. The result of the first test stands.`);
           return false;
         }
+        progressOf(d, run.id)((x) => startStage(x, "copy", new Date().toISOString(), 2));
         return repair(d, job, p, run, b, gaps, log);
       });
       if (fixed && !cancelled()) {
@@ -439,7 +455,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
         const again = run.token.slice(12, 24);
         const before = d.db.run_(run.id)?.error ?? null;
         d.db.updateRun(run.id, { error: null });
-        const second = await attempt(d, job, p, run, b, again, `${b.gespann}/runs/${again}`, prText, issues, log);
+        const second = await attempt(d, job, p, run, b, again, `${b.gespann}/runs/${again}`, prText, issues, log, 2);
         if (second.judged?.verdict) {
           a = second;
           dir = `${b.gespann}/runs/${again}`;
@@ -503,7 +519,14 @@ interface Attempt {
 }
 
 /** Copy up, tester, then always finish: verdict and teardown, even when the copy or the tester failed. */
-async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: string, dir: string, prText: string, issues: LinkedIssue[], log: (s: string) => void): Promise<Attempt> {
+async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: string, dir: string, prText: string, issues: LinkedIssue[], log: (s: string) => void, n: number): Promise<Attempt> {
+  const setProgress = progressOf(d, run.id);
+  const stage = (s: Stage) => setProgress((x) => startStage(x, s, new Date().toISOString(), n));
+  // What the tester wrote to progress.json, read while it works and once more when it is done.
+  const readTester = async () => {
+    const raw = await d.sandboxes.readFile(b.id, `${dir}/work/progress.json`).catch(() => null);
+    setProgress((x) => mergeTester(x, raw, new Date().toISOString()));
+  };
   try {
     // Fresh each time: a run that starts again after a restart must not show the lost attempt's proof.
     await d.sandboxes.exec(b.id, `rm -rf ${dir} && mkdir -p ${dir}/work ${dir}/out`, 30);
@@ -522,6 +545,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       await d.sandboxes.ensureRunning(b.id);
     }
     log("bringing the copy up");
+    stage("copy");
     const prep = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify prepare --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir}`), {
       timeoutMs: 60 * 60_000,
       isCancelled: () => d.db.job(job.id)?.status === "cancelled",
@@ -529,6 +553,8 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     const prepared = lastJson<{ ok: boolean; url?: string; error?: string }>(prep.tail);
     if (!prepared?.ok || !prepared.url) throw new Error(`the copy did not come up: ${prepared?.error ?? prep.tail.slice(-800)}`);
     log(`copy is up at ${prepared.url}`);
+    // The copy is up from here on, whatever happens before the tester starts.
+    stage("read");
 
     const current = d.db.project(p.id) ?? p;
     const recipe = parseRecipe(current.recipe ?? (await d.sandboxes.readFile(b.id, b.recipe)) ?? "");
@@ -568,8 +594,10 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
         runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
           timeoutMs: minutes * 60_000,
           isCancelled: () => d.db.job(job.id)?.status === "cancelled",
+          onTick: readTester,
         }),
       );
+      await readTester();
     } finally {
       if (recording) {
         await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
@@ -582,6 +610,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
   }
 
+  stage("verdict");
   const fin = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify finish --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir} --wait 600`), { timeoutMs: 30 * 60_000 }).catch((err: Error) => ({ tail: err.message, exitCode: null, timedOut: false }));
   const result = (await d.sandboxes.readFile(b.id, `${dir}/work/result.json`).catch(() => null)) ?? null;
   const teardownErrors = lastJson<{ teardownErrors?: string[] }>(fin.tail)?.teardownErrors ?? [];

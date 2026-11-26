@@ -1,16 +1,12 @@
-import { Check, ExternalLink, Minus, RotateCw, X } from "lucide-react";
+import { ExternalLink, RotateCw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { ago, api, duration, type RunDetail, useResource } from "../api.ts";
+import { ago, api, duration, type Progress, type RunDetail, useResource } from "../api.ts";
+import { LiveChecks, RESULT_ICON, StageStrip, useTick, waitingText } from "../components/Live.tsx";
 import { ShotList } from "../components/Shots.tsx";
 import { Badge, Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Link, navigate, RunStatus } from "../nav.tsx";
 
-const ICON = {
-  pass: <Check className="size-4 text-ok" />,
-  fail: <X className="size-4 text-bad" />,
-  blocked: <Minus className="size-4 text-warn" />,
-};
-const GOAL = { met: ICON.pass, missed: ICON.fail, blocked: ICON.blocked };
+const GOAL = { met: RESULT_ICON.pass, missed: RESULT_ICON.fail, blocked: RESULT_ICON.blocked };
 const GOAL_TONE = { met: "ok", missed: "bad", blocked: "warn" } as const;
 
 /** `#12` is an issue of the run's repository, `owner/repo#12` one of another. */
@@ -19,13 +15,26 @@ function issueUrl(repo: string, ref: string): string {
   return m ? `https://github.com/${m[1] ?? repo}/issues/${m[2]}` : `https://github.com/${repo}/issues`;
 }
 
+/** "2 passed, 1 failed, 1 is running" for the tester's plan while it works. */
+function liveSummary(p: Progress): string {
+  const n = (r: string) => p.checks.filter((c) => c.result === r).length;
+  const parts = [`${n("pass")} passed`];
+  if (n("fail")) parts.push(`${n("fail")} failed`);
+  if (n("blocked")) parts.push(`${n("blocked")} blocked`);
+  const open = p.checks.filter((c) => !c.result).length;
+  if (open) parts.push(`${open} to go`);
+  return `The tester planned ${p.checks.length} checks after reading the change. ${parts.join(", ")}.`;
+}
+
 export function Run({ id, onProject }: { id: number; onProject?: (project: number) => void }) {
   const { data: r, error } = useResource<RunDetail>(`/runs/${id}`, (d) => d.status === "queued" || d.status === "running");
   const [busy, setBusy] = useState(false);
+  const [fullLog, setFullLog] = useState(false);
   const projectId = r?.project.id;
   useEffect(() => {
     if (projectId) onProject?.(projectId);
   }, [projectId, onProject]);
+  useTick(r?.status === "running");
   if (error) return <p className="text-bad">{error}</p>;
   if (!r) return <p className="text-muted-foreground">Loading…</p>;
   const v = r.verdict?.verdict ?? null;
@@ -33,11 +42,26 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
   const images = r.files.filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
   const video = r.files.find((f) => /\.(mp4|webm)$/i.test(f));
   const live = r.status === "queued" || r.status === "running";
+  const livePlan = r.status === "running" && r.progress?.checks.length ? r.progress : null;
+  const logLines = r.log.split("\n").filter(Boolean);
   const shots = images.map((f) => {
     const check = v?.checks.find((c) => c.proof?.includes(f));
     const goal = check ? undefined : v?.goals?.find((g) => g.proof?.includes(f));
     return { src: src(f), caption: check?.expect ?? goal?.goal ?? f, result: check?.result ?? (goal ? ({ met: "pass", missed: "fail", blocked: "blocked" } as const)[goal.result] : undefined) };
   });
+
+  const recordingCard = (
+    <Card className="mb-6">
+      <CardHeader title="Recording" description={video ? "The tester's screen during the whole test." : undefined} />
+      {video ? (
+        <div className="p-4">
+          <video controls playsInline preload="metadata" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
+        </div>
+      ) : (
+        <Empty>{live ? "The recording appears when the tester is done." : r.media_cleared ? `The recording and screenshots were deleted ${ago(r.media_cleared)}, after the pull request closed.` : "This run has no recording. The log below says why."}</Empty>
+      )}
+    </Card>
+  );
 
   return (
     <>
@@ -87,6 +111,8 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
         ))}
       </Card>
 
+      {live && <StageStrip progress={r.status === "running" ? r.progress : null} queued={r.status === "queued"} />}
+
       {v?.summary && <p className="mb-4 max-w-3xl text-[15px]">{v.summary}</p>}
       {r.error && <Log text={r.error} className="mb-4 border-bad/40 text-bad" />}
       {r.verdict?.problems.length ? (
@@ -130,37 +156,39 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
         </Card>
       )}
 
-      <Card className="mb-6">
-        <CardHeader title="Recording" description={video ? "The tester's screen during the whole test." : undefined} />
-        {video ? (
-          <div className="p-4">
-            <video controls playsInline preload="metadata" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
-          </div>
-        ) : (
-          <Empty>{live ? "The recording appears when the tester is done." : r.media_cleared ? `The recording and screenshots were deleted ${ago(r.media_cleared)}, after the pull request closed.` : "This run has no recording. The log below says why."}</Empty>
-        )}
-      </Card>
+      {/* While the run runs, its live checks come first; the recording joins them when the tester is done. */}
+      {!live && recordingCard}
 
       <Card className="mb-6">
-        <CardHeader title="Checks" description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : undefined} />
-        {!v || v.checks.length === 0 ? (
-          <Empty>{live ? "The tester is working. Checks appear when it is done." : "No checks."}</Empty>
+        <CardHeader
+          title="Checks"
+          description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : livePlan ? liveSummary(livePlan) : undefined}
+        />
+        {(!v || v.checks.length === 0) && livePlan ? (
+          <LiveChecks progress={livePlan} />
+        ) : !v || v.checks.length === 0 ? (
+          <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued") : "No checks."}</Empty>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead className="text-left text-[12px] text-muted-foreground">
+            <table className="w-full text-[15px]">
+              <thead className="text-left text-[14px] text-muted-foreground">
                 <tr className="border-b border-border">
-                  <th className="w-8 px-4 py-2" />
+                  <th className="w-10 px-4 py-2" />
                   <th className="px-4 py-2 font-medium">Expected</th>
-                  <th className="px-4 py-2 font-medium">Observed</th>
+                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Observed</th>
                 </tr>
               </thead>
               <tbody>
                 {v.checks.map((c, i) => (
                   <tr key={i} className="border-b border-border align-top last:border-0">
-                    <td className="px-4 py-2.5">{ICON[c.result]}</td>
-                    <td className="px-4 py-2.5 font-medium">{c.expect}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{c.observed}</td>
+                    <td className="py-3 pr-0 pl-4 sm:pr-4">
+                      <span className="flex h-6 items-center">{RESULT_ICON[c.result]}</span>
+                    </td>
+                    <td className="px-4 py-3 font-medium sm:w-[40%]">
+                      {c.expect}
+                      <div className="mt-1 text-[14px] font-normal text-muted-foreground sm:hidden">{c.observed}</div>
+                    </td>
+                    <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{c.observed}</td>
                   </tr>
                 ))}
               </tbody>
@@ -168,6 +196,8 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           </div>
         )}
       </Card>
+
+      {live && recordingCard}
 
       {images.length > 0 && (
         <Card className="mb-6">
@@ -178,7 +208,16 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
 
       <Card>
         <CardHeader title="Log" />
-        <div className="p-4">{r.log ? <Log text={r.log} /> : <span className="text-[13px] text-muted-foreground">No log yet.</span>}</div>
+        {live && !fullLog && logLines.length > 1 ? (
+          <div className="flex items-center gap-4 p-4">
+            <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-muted-foreground">{logLines.at(-1)}</span>
+            <Button size="sm" variant="outline" onClick={() => setFullLog(true)}>
+              Show all {logLines.length} lines
+            </Button>
+          </div>
+        ) : (
+          <div className="p-4">{r.log ? <Log text={r.log} /> : <span className="text-[13px] text-muted-foreground">No log yet.</span>}</div>
+        )}
       </Card>
     </>
   );
