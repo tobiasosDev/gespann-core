@@ -1,5 +1,7 @@
 # Run gespann yourself
 
+> The supported way to use gespann is the hosted service at [app.gespann.app](https://app.gespann.app): sign in with GitHub and add a repository, nothing to run. This page is for running your own instance. You operate it yourself; there is no help with setup or operation, and bug reports are taken when they also happen on the hosted service.
+
 gespann is one Node process: web app, GitHub webhook and job worker. It keeps its data in SQLite under `DATA_DIR`. PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs on each user's own ChatGPT plan through Codex, so the instance pays no model costs.
 
 ## Run

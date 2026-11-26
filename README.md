@@ -2,14 +2,19 @@
 
 Acceptance testing for pull requests. For every PR, gespann starts a production-near copy of your app in a cloud sandbox, an agent on your own Codex plan clicks through the change like a tester, and the verdict with screenshots lands on the PR as the check `gespann/verify`.
 
-Hosted at [app.gespann.app](https://app.gespann.app): sign in with GitHub, connect your ChatGPT plan once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Run it yourself: [docs/self-host.md](docs/self-host.md).
+**Start at [app.gespann.app](https://app.gespann.app):** sign in with GitHub, connect your ChatGPT plan once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Nothing to install or run.
 
-- Sandboxes: per project, kept between jobs; PRs are tested side by side, as many at once as the sandbox host has room for (`MAX_PARALLEL_JOBS` overrides it); each user can run fewer at once and sees their running sandboxes and sandbox time per month in Settings. Docker (local or on a CI server), any Linux machine over SSH, or a provider module of your own, chosen by environment variables ([docs/self-host.md](docs/self-host.md#sandboxes)).
+- Sandboxes: one per project, kept between jobs, so later PRs start fast; PRs are tested side by side. Settings shows your running sandboxes and your sandbox time per month, and lets you run fewer jobs at once.
 - Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), so there is no model bill from gespann.
 - Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
 - Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.
-- Every run comes with a video of the tester's screen, first on the run page and linked above the screenshots in the PR comment (needs `ffmpeg` on the sandbox machine).
-- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only, after a one-time OAuth sign-in in the browser or with a token from Settings ([docs/self-host.md](docs/self-host.md#agent-access-mcp)).
+- Every run comes with a video of the tester's screen, first on the run page and linked above the screenshots in the PR comment.
+- Agents read results over MCP: status, issues, the review, screenshots and the recording of each run, read-only. Sign in once in the browser (OAuth) or use a token from Settings → Agent access:
+
+  ```bash
+  claude mcp add --transport http gespann https://app.gespann.app/mcp   # then /mcp → gespann → Authenticate
+  codex mcp add gespann --url https://app.gespann.app/mcp && codex mcp login gespann
+  ```
 - How pilots count results: [docs/measure.md](docs/measure.md).
 
 Everything is open source under Apache-2.0.
@@ -46,6 +51,12 @@ npm run check    # typecheck (server + web) and tests (node --test, Node ≥ 22.
 npm run build    # server to dist/, React app to dist/web
 DATA_DIR=.data node src/bin.ts serve   # http://localhost:3000
 ```
+
+## Run your own instance
+
+gespann is open source, so you can run it yourself: [docs/self-host.md](docs/self-host.md). You need a public HTTPS URL, your own GitHub App, a sandbox host with Docker or SSH access, and for UI checks a desktop with Chrome and `ffmpeg` on that host. You keep it updated and running.
+
+We support the hosted service only. Self-hosted instances get no help with setup or operation; bug reports are welcome when they also happen on [app.gespann.app](https://app.gespann.app).
 
 ## License
 
