@@ -151,7 +151,8 @@ where
         }
     }
     let release = || drop(refreshing.lock().expect("refresh guard").take());
-    let sb = ctx.sb.as_ref();
+    let sandboxes = ctx.sandboxes_for(owner_id)?;
+    let sb = sandboxes.as_ref();
     let file = auth_file(sb, sandbox_id);
     let before = before;
     let outcome = async {
@@ -196,7 +197,8 @@ where
 /// Codex step of the job runs any more, so whatever auth.json the sandbox has is the job's, also one
 /// written just before an orchestrator stopped. Scopes count as given back only once that worked.
 pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) -> Result<()> {
-    let sb = ctx.sb.as_ref();
+    let sandboxes = ctx.sandboxes_for(owner_id)?;
+    let sb = sandboxes.as_ref();
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
@@ -232,11 +234,20 @@ pub fn login_progress(tail: &str) -> serde_json::Value {
 
 /// `startLogin` without the UI: the device-code sign-in for a user whose `codex_state` is pending.
 pub async fn run_login(ctx: &Ctx, user_id: i64) -> Result<()> {
-    let sb = ctx.sb.as_ref();
+    let sandboxes = match ctx.sandboxes_for(user_id) {
+        Ok(sb) => sb,
+        Err(e) => {
+            let lines = format!("{e:#}");
+            ctx.db.set_codex(user_id, &[("codex_state", text("failed")), ("codex_login", text(json!({ "url": null, "code": null, "lines": lines }).to_string()))])?;
+            return Err(e);
+        }
+    };
+    let sb = sandboxes.as_ref();
     let mut id: Option<String> = None;
     let result = login(ctx, sb, user_id, &mut id).await;
     if let Err(e) = &result {
-        let lines = format!("{e:#}");
+        // Settings shows it to the user.
+        let lines = sb.public(&format!("{e:#}"));
         ctx.db.set_codex(user_id, &[("codex_state", text("failed")), ("codex_login", text(json!({ "url": null, "code": null, "lines": lines }).to_string()))])?;
     }
     // The sign-in sandbox never outlives the sign-in.

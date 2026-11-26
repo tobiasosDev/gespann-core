@@ -25,7 +25,7 @@ pub(crate) async fn setup(cx: &Cx<'_>, p: &Project, pre: &str, again: bool) -> R
     let res = run_setup(cx, p, pre, &mut b).await;
     if let Err(e) = &res {
         if !again {
-            let _ = db.update_project(p.id, &[("setup", text("failed")), ("setup_error", text(cut(&format!("{e:#}"), 4000)))]);
+            let _ = db.update_project(p.id, &[("setup", text("failed")), ("setup_error", text(cut(&cx.public(&format!("{e:#}")), 4000)))]);
         } else if let Some(b) = &b {
             // A recipe that failed its check must not count as set up: the next PR tries again.
             let _ = cx.sb().exec(&b.id, &format!("rm -f {}", b.recipe), 30).await;

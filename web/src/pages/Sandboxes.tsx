@@ -157,7 +157,9 @@ export function Sandboxes() {
         }
       />
       <div className="space-y-4 px-4 py-4">
-        {host === null || limit === null ? (
+        {data.noProvider ? (
+          <p className="text-body text-warn">No sandboxes are set up for your account on this instance, so your jobs wait. They start once its operator gives your account sandboxes.</p>
+        ) : host === null || limit === null ? (
           <p className="text-body text-warn">The service that runs jobs is not running right now, so your jobs wait. They start once it is back.</p>
         ) : (
           <>

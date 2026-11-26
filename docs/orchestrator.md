@@ -56,9 +56,12 @@ The orchestrator calls `UI_URL` (default `BASE_URL`) and retries with backoff wh
 | `GET /internal/runs/:id/context` | – | `{ "prText", "issues": [{ref,title,url,body}], "issuesMd", "unread": string \| null }` | PR title and body as the tester reads them (`# title\n\nbody\n`), the issues it resolves, `issuesText(issues)`, and the note when GitHub did not list them. |
 | `POST /internal/runs/:id/report` | `{ "jobId", "judged": Judged \| null, "files": string[] }` | `{}` | Gate, check and PR comment for the run as the database has it now (outcome, error, conflict). Lines for the job log go into `jobId`'s log. |
 
-The orchestrator also writes `settings.orchestrator` = `{"kind","parallel","why","instance","beat"}`
-every 10 s. The UI reads it for the host size on Settings → Sandboxes, and treats the orchestrator as
-present (Codex sign-in possible) while `beat` is younger than 60 s.
+The orchestrator also writes `settings.orchestrator` = `{"kind","parallel","why","providers","instance","beat"}`
+every 10 s. `kind`, `parallel` and `why` are the default provider's (`SANDBOX_PROVIDER`); `providers` lists
+every provider as `{"spec","kind","parallel","why","logins","default"}`, with the lower-case logins
+`SANDBOX_PROVIDER_BY_USER` gives it. The UI reads the number of the provider that serves a user for
+Settings → Sandboxes, and treats the orchestrator as present (Codex sign-in possible) while `beat` is
+younger than 60 s.
 
 The server module's per-owner cap (`jobCap`, e.g. a plan's parallel tests) cannot be asked from the
 orchestrator: the UI writes it to `users.job_cap` every 10 s, and the orchestrator starts no job of an
@@ -86,5 +89,6 @@ DATA_DIR=/data SESSION_SECRET=… BASE_URL=https://gespann.example.com SANDBOX_P
 ```
 
 It reads `DATA_DIR`, `SESSION_SECRET` and `BASE_URL` like `gespann serve`, the sandbox variables
-(`SANDBOX_PROVIDER` docker or ssh, `SANDBOX_*`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus
+(`SANDBOX_PROVIDER` docker, ssh or remote, `SANDBOX_PROVIDER_BY_USER`, `SANDBOX_*`, `SSH_*`,
+`SANDBOX_REMOTE_URL`, `SANDBOX_REMOTE_TOKEN`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus
 `UI_URL` and `HEALTH_PORT` (default 3001, `GET /healthz`). With Docker: [self-host.md](self-host.md#run).

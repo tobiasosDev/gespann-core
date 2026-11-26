@@ -422,19 +422,23 @@ impl Db {
     }
     /// The oldest queued job that may start now, by the rules of `nextJob` in TypeScript.
     pub fn next_job(&self) -> Result<Option<Job>> {
+        Ok(self.next_jobs(0, 1)?.into_iter().next().map(|(j, _)| j))
+    }
+    /// Up to `limit` queued jobs after job `after` that may start now, oldest first, each with its
+    /// project's owner: the worker pages through them for the first whose owner's provider has room.
+    pub fn next_jobs(&self, after: i64, limit: u32) -> Result<Vec<(Job, i64)>> {
         self.with(|c| {
-            c.query_row(
-                "select j.* from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
-         and (j.not_before is null or j.not_before <= ?)
+            let mut st = c.prepare(
+                "select j.*, p.owner_id as gespann_owner from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued' and j.id > ?3
+         and (j.not_before is null or j.not_before <= ?1)
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
          and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
          and (u.job_cap is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.job_cap)
-       order by j.id limit 1",
-                [now()],
-                job_row,
-            )
-            .optional()
+       order by j.id limit ?2",
+            )?;
+            let rows = st.query_map(rusqlite::params![now(), limit, after], |r| Ok((job_row(r)?, r.get::<_, i64>("gespann_owner")?)))?;
+            rows.collect()
         })
     }
     /// `endUnstarted`: ends a job that never touched a sandbox (its PR failed CI first); no sandbox time.

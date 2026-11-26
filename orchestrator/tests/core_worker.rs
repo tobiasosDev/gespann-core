@@ -12,6 +12,7 @@ use gespann_orchestrator::codex::{open, seal, with_codex};
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, text, Db};
 use gespann_orchestrator::journal::Journal;
+use gespann_orchestrator::sandbox::pool::Pool;
 use gespann_orchestrator::ui::Ui;
 use gespann_orchestrator::{worker, Ctx, Locks};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,7 +21,8 @@ const SECRET: &str = "a-session-secret-of-at-least-32-characters";
 
 fn ctx(sb: Arc<Fake>, ui: &str, max_parallel: Option<u32>) -> Arc<Ctx> {
     let cfg = Config { session_secret: SECRET.into(), max_parallel, ..Default::default() };
-    Arc::new(Ctx { db: Db::memory().unwrap(), sb, ui: Ui::new(ui, SECRET), cfg, locks: Locks::default() })
+    let pool = Pool::single(sb, worker::Parallel { jobs: 0, why: "test".into() });
+    Arc::new(Ctx { db: Db::memory().unwrap(), pool, ui: Ui::new(ui, SECRET), cfg, locks: Locks::default() })
 }
 
 fn user(db: &Db) -> (i64, i64) {
@@ -54,16 +56,15 @@ async fn ui_server() -> (String, Arc<Mutex<Vec<String>>>) {
 #[tokio::test]
 async fn parallel_jobs_from_config_or_host() {
     let sb = Arc::new(Fake::default());
-    let p = worker::parallel_jobs(&ctx(sb.clone(), "http://127.0.0.1:1", Some(3))).await;
+    let p = worker::parallel_jobs(Some(3), sb.as_ref()).await;
     assert_eq!((p.jobs, p.why.as_str()), (3, "MAX_PARALLEL_JOBS"));
-    let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
-    let p = worker::parallel_jobs(&c).await;
+    let p = worker::parallel_jobs(None, sb.as_ref()).await;
     assert_eq!((p.jobs, p.why.as_str()), (2, "default: the sandbox provider does not report its size"));
     *sb.capacity.lock().unwrap() = Some((16, 62.7));
-    let p = worker::parallel_jobs(&c).await;
+    let p = worker::parallel_jobs(None, sb.as_ref()).await;
     assert_eq!((p.jobs, p.why.as_str()), (4, "16 CPUs and 63 GB on the sandbox host, 4 CPUs and 8 GB per job"));
     *sb.capacity.lock().unwrap() = Some((0, 8.0));
-    let p = worker::parallel_jobs(&c).await;
+    let p = worker::parallel_jobs(None, sb.as_ref()).await;
     assert_eq!((p.jobs, p.why.as_str()), (2, "default: could not read the sandbox host's size (it reported 0 CPUs and 8 GB)"));
 }
 
@@ -101,7 +102,7 @@ async fn the_loop_signs_in_delivers_the_outbox_publishes_and_drains() {
     sb.finished.store(true, Ordering::SeqCst);
 
     let stop = tokio_util::sync::CancellationToken::new();
-    let task = tokio::spawn(worker::run(c.clone(), worker::Parallel { jobs: 0, why: "test".into() }, "me".into(), stop.clone()));
+    let task = tokio::spawn(worker::run(c.clone(), "me".into(), stop.clone()));
     let mut connected = false;
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(100)).await;

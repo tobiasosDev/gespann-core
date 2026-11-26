@@ -47,9 +47,10 @@ The orchestrator:
 
 | Variable | |
 |---|---|
-| `SANDBOX_PROVIDER` | `docker` or `ssh` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
+| `SANDBOX_PROVIDER` | `docker`, `ssh` or `remote` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
+| `SANDBOX_PROVIDER_BY_USER` | other providers for some users, e.g. `tobi=ssh,ops=ssh` ([Several providers](#several-providers)) |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
-| `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
+| `MAX_PARALLEL_JOBS` | how many jobs each sandbox provider runs at once ([Parallel jobs](#parallel-jobs)); default: computed from its host, or what a sandbox service allows |
 | `UI_URL` | where it reaches the UI (default `BASE_URL`) |
 | `HEALTH_PORT` | port of its `GET /healthz` (default 3001) |
 
@@ -57,13 +58,13 @@ Restarting or redeploying either service never loses a job. Every long step runs
 
 ## Sandboxes
 
-Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
+Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes. Some users can have their own provider ([Several providers](#several-providers)).
 
 ### Parallel jobs
 
-At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; when it cannot tell, gespann runs 2.
+At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; a sandbox service ([Remote](#remote)) says how many it allows; when none of them can tell, gespann runs 2.
 
-That number is shared by everyone. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number, or up to a server module's cap, see [Server module](#server-module)), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
+That number is shared by everyone on the same provider; with [several providers](#several-providers) each counts its own jobs. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to their provider's number, or up to a server module's cap, see [Server module](#server-module)), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
 
 Jobs of one project and one owner run side by side, each in its own sandbox with its own checkout. Only a project's setup runs alone. A new sandbox takes over the project's current recipe: after each setup and each fix of the copy, gespann keeps the recipe directory as `DATA_DIR/projects/<id>/recipe.tgz` and copies it into the project's other sandboxes before their next job. Its first job builds the app's images from scratch unless the host's Docker cache already has them.
 
@@ -73,8 +74,23 @@ All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign
 |---|---|---|
 | `docker` | a container from your image, on the local engine or a remote one (`DOCKER_HOST`) | a CI server that runs Docker; isolation per project |
 | `ssh` | a directory on a Linux machine you already run, used as `HOME` | a CI server without Docker, or one that already has your toolchain |
+| `remote` | whatever a sandbox service of yours makes (a cloud VM, a pod), reached over HTTP ([Remote](#remote)) | many jobs at once, beyond one machine |
 
 Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen. When a run cannot be recorded, the run page says so and the job log names the reason.
+
+### Several providers
+
+One instance can serve different users from different sandbox providers, e.g. the team's own CI server for the team and a sandbox service for everyone else:
+
+```bash
+-e SANDBOX_PROVIDER=remote -e SANDBOX_REMOTE_URL=http://sandboxes.internal/api -e SANDBOX_REMOTE_TOKEN=… \
+-e SANDBOX_PROVIDER_BY_USER="tobi=ssh,ops=ssh" \
+-e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)"
+```
+
+`SANDBOX_PROVIDER_BY_USER` maps GitHub logins (any case) to a provider, written as for `SANDBOX_PROVIDER`; comma-separated. A user it names gets that provider for their projects' sandboxes and their Codex sign-in; everyone else gets `SANDBOX_PROVIDER`. Without `SANDBOX_PROVIDER`, only the named users get sandboxes and the jobs of everyone else stay queued. Each provider is made once and runs its own number of jobs at once, so a full CI server never holds up the users of the sandbox service. Each of `docker`, `ssh` and `remote` reads its settings from the variables below, so each exists once per instance. The log names every provider, whom it serves and its number, e.g. `sandboxes: ssh (tobi, ops), parallel jobs: 7 (…)` and `sandboxes: cloud (everyone else), parallel jobs: 200 (the sandbox service allows 200 at once)`.
+
+When a user moves to another provider, their projects' next jobs get a new sandbox there, which takes over the project's current recipe ([Parallel jobs](#parallel-jobs)) and builds the app from scratch on its first job. Their sandboxes on the old provider stay until you delete them.
 
 ### Docker
 
@@ -115,6 +131,23 @@ The orchestrator image contains the `docker` CLI. For the local engine, mount it
 | `SANDBOX_ROOT` | directory on the host for the sandboxes (default `~/gespann-sandboxes`); letters, digits, `. _ - /` only |
 
 Each sandbox is a directory under `SANDBOX_ROOT`. Every command gespann runs there has it as `HOME`, so `~/.codex` and gespann's own install stay per sandbox. On a host with a screen (`DISPLAY` set and Xvfb installed), each sandbox gets its own virtual screen while it runs a job, so parallel testers never see each other's browser: gespann starts Xvfb on a free display and sets `DISPLAY` for everything in that sandbox, Codex's browser tool included when its config forwards `DISPLAY` (step 7). When a project picks screen sizes on its Setup page, the run's screen grows to fit the largest one, and the tester sets each size with its browser tool's resize (Playwright's MCP server has `browser_resize`). The SSH user's own `~/.codex/config.toml` is linked into every sandbox: give Codex its browser or computer-use tool there (e.g. an MCP server such as Playwright's on an Xvfb display), and export `DISPLAY` at the top of the user's `~/.bashrc` so `gespann shot` sees the same screen. All projects still share the machine's user, its processes and its Docker engine, and PR code runs with that user's rights: use a dedicated user on a machine that holds no secrets you would not hand to a PR. Recipes should name their Docker projects and ports after `$GESPANN_RUN` so two projects can run side by side. gespann starts no login shell: check with `ssh ci@ci.example.com 'command -v node npm git codex'` that the tools are on that `PATH`.
+
+### Remote
+
+A sandbox service you reach over HTTP: an adapter of your own that turns gespann's calls into a vendor's API (cloud VMs, a Kubernetes operator, a pool of machines). gespann sends one request per sandbox call; the protocol is in [remote-sandboxes.md](remote-sandboxes.md).
+
+```bash
+-e SANDBOX_PROVIDER=remote \
+-e SANDBOX_REMOTE_URL=http://sandboxes.internal/api \
+-e SANDBOX_REMOTE_TOKEN=$(openssl rand -hex 32)
+```
+
+| Variable | |
+|---|---|
+| `SANDBOX_REMOTE_URL` | the service's base URL (required) |
+| `SANDBOX_REMOTE_TOKEN` | bearer token on every request, at least 32 characters (required); the service checks it |
+
+At startup the orchestrator reads the service's `GET /info` (its name for the job logs, the sandboxes' home, how many jobs it allows at once, how often to poll) and waits up to 10 minutes for it. While the service does not accept connections or answers 503, each call tries again for up to 10 minutes, so a deploy of the service pauses running tests instead of failing them. Reach the service directly, not through a proxy that cuts long requests: starting a sandbox can take minutes.
 
 #### Prepare a Debian or Ubuntu host
 
