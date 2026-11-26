@@ -248,6 +248,11 @@ function Rail({ me, section, projects }: { me: Me; section: Section; projects: P
         <Link to="/settings" className={railClass(section.kind === "settings")} title="Settings" aria-label="Settings" aria-current={section.kind === "settings" ? "page" : undefined}>
           <Settings className="size-4" />
         </Link>
+        {me.links?.map((l) => (
+          <a key={l.href} href={l.href} className={railClass()} title={l.label} aria-label={l.label}>
+            <Link2 className="size-4" />
+          </a>
+        ))}
         <a href="https://github.com/tobiasosDev/gespann-core" target="_blank" rel="noreferrer" className={railClass()} title="Docs" aria-label="Docs">
           <BookOpen className="size-4" />
         </a>
