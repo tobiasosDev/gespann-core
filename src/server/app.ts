@@ -18,6 +18,7 @@ import { appManifest, convertManifest, Github, type PullRequest, verifySignature
 import type { ServerModule } from "./extension.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
+import { recordPrState } from "./pulls.ts";
 
 /** The built React app: dist/web, next to dist/server when built, or ../../dist/web from src. */
 const WEB = [new URL("../web/", import.meta.url), new URL("../../dist/web/", import.meta.url)].map((u) => fileURLToPath(u)).find((p) => existsSync(join(p, "index.html")));
@@ -326,6 +327,7 @@ export function createApp(d: AppDeps): Hono<Env> {
       viewport_presets: VIEWPORTS,
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
       runs: db.runs(p.id),
+      closed: db.closedPrs(p.id),
       jobs: db.jobs(p.id, 30).map((j) => ({ ...j, log: j.kind === "run" ? "" : j.log })),
     });
   });
@@ -546,16 +548,18 @@ async function onPullRequest(d: AppDeps, payload: Record<string, unknown>): Prom
   const event = payload.pull_request as PullRequest;
   const repo = payload.repository as { id: number };
   const sender = payload.sender as Sender | undefined;
-  if (action === "closed" && event) {
-    // Merged or closed: what still waits in the queue for this PR is skipped, not tested.
+  if ((action === "closed" || action === "reopened") && event) {
+    // Merged or closed: what still waits in the queue for this PR is skipped, not tested, and the
+    // PR leaves the open sections of the Runs page. Reopened: it comes back.
     const p = d.db.projectByRepoId(repo.id);
     // A late event for a PR reopened since must not cancel its new run: act on the PR as it is now.
     if (p)
       await withPrLock(p, event.number, async () => {
         const pr = await d.github().pull(p.installation_id, p.repo, event.number);
+        recordPrState(d.db, p.id, pr);
         if (pr.state !== "open") await skipClosedRuns(d, p, pr);
       });
-    return;
+    if (action === "closed") return;
   }
   if (!ACTIONS.has(action) || !event || event.state !== "open") return;
   if (event.head.repo?.full_name !== event.base.repo.full_name) return;

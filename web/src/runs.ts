@@ -12,18 +12,24 @@ export interface RunLike {
   conflict?: string | null;
 }
 
-/** Where a pull request stands, by its latest run that was not cancelled. */
-export type PrState = "running" | "attention" | "conflict" | "passing" | "cancelled";
+/**
+ * Where a pull request stands, by its latest run that was not cancelled. A merged or closed PR is
+ * `closed` whatever its last run said, unless a run of it still runs.
+ */
+export type PrState = "running" | "attention" | "error" | "conflict" | "passing" | "cancelled" | "closed";
 
-/** What one run ended as, for the history squares and the counts. */
-export type RunResult = "running" | "queued" | "pass" | "fail" | "blocked" | "skip" | "conflict" | "cancelled";
+/**
+ * What one run ended as, for the history squares and the counts. `error`: gespann broke off the run
+ * (server restart, the copy did not start, git failed) before the tester gave a verdict.
+ */
+export type RunResult = "running" | "queued" | "pass" | "fail" | "blocked" | "skip" | "conflict" | "error" | "cancelled";
 
 export function result(r: Pick<RunLike, "status" | "outcome" | "conflict">): RunResult {
   if (r.status === "running") return "running";
   if (r.status === "queued") return "queued";
   if (r.status === "cancelled") return "cancelled";
   if (r.conflict) return "conflict";
-  if (r.status === "failed") return "fail";
+  if (r.status === "failed") return "error";
   if (r.outcome === "PASS") return "pass";
   if (r.outcome === "BLOCKED") return "blocked";
   if (r.outcome === "SKIP") return "skip";
@@ -38,10 +44,31 @@ export interface PrGroup<R extends RunLike> {
   /** The run the row stands for: the newest one that was not cancelled, else the newest. */
   latest: R;
   state: PrState;
+  /** Set when the PR is merged or closed. */
+  closed?: "merged" | "closed";
 }
 
+/** A merged or closed PR, as the server reports it. */
+export interface ClosedPr {
+  pr: number;
+  merged: boolean;
+}
+
+const STATE: Record<RunResult, PrState> = {
+  running: "running",
+  queued: "running",
+  cancelled: "cancelled",
+  conflict: "conflict",
+  error: "error",
+  pass: "passing",
+  skip: "passing",
+  fail: "attention",
+  blocked: "attention",
+};
+
 /** One group per PR, in the order of each PR's newest run. `runs` must come newest first. */
-export function groupByPr<R extends RunLike>(runs: R[]): PrGroup<R>[] {
+export function groupByPr<R extends RunLike>(runs: R[], closed: ClosedPr[] = []): PrGroup<R>[] {
+  const ended = new Map(closed.map((c) => [c.pr, c.merged ? ("merged" as const) : ("closed" as const)]));
   const by = new Map<number, R[]>();
   for (const r of runs) {
     const list = by.get(r.pr);
@@ -50,10 +77,10 @@ export function groupByPr<R extends RunLike>(runs: R[]): PrGroup<R>[] {
   }
   return [...by.entries()].map(([pr, list]) => {
     const latest = list.find((r) => r.status !== "cancelled") ?? (list[0] as R);
-    const res = result(latest);
-    const state: PrState =
-      res === "running" || res === "queued" ? "running" : res === "cancelled" ? "cancelled" : res === "conflict" ? "conflict" : res === "pass" || res === "skip" ? "passing" : "attention";
-    return { pr, title: list.find((r) => r.title)?.title ?? null, runs: list, latest, state };
+    const own = STATE[result(latest)];
+    const end = ended.get(pr);
+    const state: PrState = end && own !== "running" ? "closed" : own;
+    return { pr, title: list.find((r) => r.title)?.title ?? null, runs: list, latest, state, ...(end ? { closed: end } : {}) };
   });
 }
 
@@ -73,7 +100,7 @@ export function usualSeconds(runs: RunLike[]): number | null {
 
 /** How many of the runs ended which way; the parts add up to runs.length. */
 export function counts(runs: RunLike[]): Record<RunResult, number> {
-  const c: Record<RunResult, number> = { running: 0, queued: 0, pass: 0, fail: 0, blocked: 0, skip: 0, conflict: 0, cancelled: 0 };
+  const c: Record<RunResult, number> = { running: 0, queued: 0, pass: 0, fail: 0, blocked: 0, skip: 0, conflict: 0, error: 0, cancelled: 0 };
   for (const r of runs) c[result(r)]++;
   return c;
 }
