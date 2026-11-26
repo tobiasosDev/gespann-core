@@ -61,8 +61,9 @@ pub(crate) async fn ensure_sandbox(cx: &Cx<'_>, p: &Project, key: &str) -> Resul
     }
     let slot = match slot {
         Some(s) => {
+            // Once: after a takeover the job only gets its slot back.
             if db.slots(p.id)?.len() > 1 {
-                cx.log(&format!("using sandbox {}", s.sandbox_id));
+                cx.note(&format!("{key}.slot"), &format!("using sandbox {}", s.sandbox_id)).await;
             }
             s
         }
@@ -117,11 +118,17 @@ async fn install_gespann(cx: &Cx<'_>, b: &Sbx, key: &str) -> Result<()> {
     if r.exit_code != Some(0) {
         bail!("gespann install failed: {}", r.tail);
     }
-    for line in r.tail.split('\n') {
-        if let Some(rest) = line.strip_prefix("gespann: ") {
-            cx.log(rest);
-        }
-    }
+    // Once: a takeover gets the stored result, and its log must not claim gespann was installed again.
+    let lines: Vec<&str> = r.tail.split('\n').filter_map(|l| l.strip_prefix("gespann: ")).collect();
+    let _ = cx
+        .jr
+        .step(&format!("{key}.log"), || async {
+            for line in &lines {
+                cx.log(line);
+            }
+            Ok(())
+        })
+        .await;
     Ok(())
 }
 

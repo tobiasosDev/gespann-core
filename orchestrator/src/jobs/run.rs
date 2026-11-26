@@ -428,7 +428,7 @@ async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &
     };
     let r: Value = serde_json::from_str(&result)?;
     let outcome = r["outcome"].as_str().unwrap_or("FAIL").to_string();
-    cx.log(&format!("verdict: {outcome}"));
+    cx.note(&k("log.verdict"), &format!("verdict: {outcome}")).await;
     Ok(Attempt { judged: Some(r["judged"].clone()).filter(|j| !j.is_null()), outcome, clean })
 }
 
@@ -564,13 +564,14 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
             .await?;
     }
     let tester = tester?;
-    cx.log(&if cx.stopped() {
+    cx.note(&k("log.done"), &if cx.stopped() {
         "the tester was stopped".to_string()
     } else if tester.timed_out {
         format!("the tester ran out of time ({} min)", js_num(minutes))
     } else {
         format!("the tester finished (exit {})", js_code(tester.exit_code))
-    });
+    })
+    .await;
     Ok(())
 }
 

@@ -126,6 +126,8 @@ impl Sandboxes for FakeSandboxes {
                 exited("copy coming up\n{\"ok\":true,\"url\":\"http://127.0.0.1:4000/\",\"run\":\"r\"}\n")
             } else if command.contains("verify finish") {
                 exited("{\"outcome\":\"PASS\",\"teardownErrors\":[]}\n")
+            } else if command.contains("npm prefix -g") {
+                exited("gespann: installing gespann main in the sandbox\n")
             } else {
                 exited("")
             })
@@ -296,6 +298,10 @@ async fn a_run_taken_over_mid_test_attaches_to_its_tester_and_repeats_nothing() 
     assert_eq!(w.sb.executed("merge --quiet"), 1, "the PR was merged into the checkout once");
     assert_eq!(w.sb.executed("gespann verify prompt tester"), 1, "the prompt was written once");
     assert_eq!(w.sb.state(|s| s.recordings), 1, "one recording");
+    let log = w.ctx.db.job_log(1).unwrap().unwrap_or_default();
+    assert_eq!(log.matches("installing gespann").count(), 1, "the log does not claim a second install: {log}");
+    assert_eq!(log.matches("the tester finished").count(), 1);
+    assert_eq!(log.matches("picks the job up where it was").count(), 0, "this test takes over by hand, not through adopt_stale");
 
     let job = w.ctx.db.job(1).unwrap().unwrap();
     assert_eq!(job.status, "done");
