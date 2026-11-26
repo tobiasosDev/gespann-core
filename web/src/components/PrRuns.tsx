@@ -74,8 +74,10 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
     // Running PRs sit in the side panel on wide screens and in a strip above the table below that.
     <tbody className={state === "running" ? "hidden panel:table-row-group" : undefined}>
       <tr className="border-b border-border">
-        <th colSpan={7} scope="colgroup" className="px-3 pt-4 pb-2 text-left font-semibold sm:px-4">
-          {TITLE[state]} <span className="ml-1.5 font-normal text-muted-foreground">{SECTION[state](groups.length)}</span>
+        {/* Phones: the explanation goes small under the title, so the title stays one line that is easy to spot while scrolling. */}
+        <th colSpan={7} scope="colgroup" className="pt-6 pr-3 pb-2 pl-4 text-left font-semibold sm:px-4 sm:pt-4">
+          {TITLE[state]}{" "}
+          <span className="mt-0.5 block text-small font-normal text-muted-foreground sm:mt-0 sm:ml-1.5 sm:inline sm:text-body">{SECTION[state](groups.length)}</span>
         </th>
       </tr>
       {groups.map((g) => (
@@ -83,16 +85,21 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
           <td className="hidden px-4 py-2.5 sm:table-cell">
             <RunStatus run={g.latest} />
           </td>
-          <td className="px-3 py-2.5 break-words sm:w-full sm:max-w-0 sm:truncate sm:px-4">
+          <td className="relative py-3 pr-3 pl-4 break-words sm:static sm:w-full sm:max-w-0 sm:truncate sm:px-4 sm:py-2.5">
+            {/* Phones: a stripe in the result's color instead of a badge, the title first, then one quiet line in plain text. */}
+            <span aria-hidden="true" className={cn("absolute inset-y-3 left-0 w-1 rounded-r-full sm:hidden", LOOK[result(g.latest)].bar, state === "closed" && "opacity-40")} />
             {/* The title is the row's link, so keyboard users reach every row at every width. */}
-            {/* On phones the status sits above the title, so the title gets the width. */}
-            <span className="mb-1 block sm:hidden">
-              <RunStatus run={g.latest} />
-            </span>
-            <Link to={`/runs/${g.latest.id}`} className="hover:underline" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
-              <Mono className="text-muted-foreground">#{g.pr}</Mono> {g.title}
+            <Link to={`/runs/${g.latest.id}`} className="block leading-snug hover:underline sm:inline sm:leading-normal" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
+              <Mono className="hidden text-muted-foreground sm:inline">#{g.pr} </Mono>
+              {g.title}
             </Link>
-            {state === "closed" && g.closed && <span className="ml-2 text-small">{g.closed}</span>}
+            <span className="mt-1 flex items-baseline gap-3 text-small text-muted-foreground sm:hidden">
+              <span className={cn("font-medium", LOOK[result(g.latest)].text)}>{LOOK[result(g.latest)].label}</span>
+              <span className="tabular-nums">#{g.pr}</span>
+              {state === "closed" && g.closed && <span>{g.closed}</span>}
+              <span className="ml-auto whitespace-nowrap">{ago(g.latest.started ?? g.latest.created)}</span>
+            </span>
+            {state === "closed" && g.closed && <span className="ml-2 hidden text-small sm:inline">{g.closed}</span>}
           </td>
           <td className="hidden px-4 py-2.5 sm:table-cell">
             <History runs={g.runs} />
@@ -102,7 +109,7 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
             <Mono>{g.latest.head.slice(0, 7)}</Mono>
           </td>
           <td className="hidden px-4 py-2.5 text-right font-mono text-small whitespace-nowrap text-muted-foreground md:table-cell">{duration(g.latest.started, g.latest.finished)}</td>
-          <td className="px-3 py-2.5 text-right align-top whitespace-nowrap text-muted-foreground sm:px-4 sm:align-middle">{ago(g.latest.started ?? g.latest.created)}</td>
+          <td className="hidden px-4 py-2.5 text-right whitespace-nowrap text-muted-foreground sm:table-cell">{ago(g.latest.started ?? g.latest.created)}</td>
           <td className="hidden py-2.5 pr-3 text-right text-muted-foreground sm:table-cell" aria-hidden="true">
             <ChevronRight className="inline size-4" />
           </td>
@@ -130,27 +137,29 @@ export function PrRuns({ runs, closed, header }: { runs: RunRow[]; closed: Close
           {live.map((r) => (
             <div key={r.id} className="grid grid-cols-[auto_1fr_auto] items-center gap-x-4 gap-y-2 border-b border-border px-4 py-3 panel:hidden md:grid-cols-[auto_minmax(0,1fr)_16rem_auto]">
               <RunStatus run={r} />
-              <Link to={`/runs/${r.id}`} className="truncate hover:underline">
+              {/* Phones: status and button share the first line, the title wraps on its own line below. */}
+              <Link to={`/runs/${r.id}`} className="order-1 col-span-3 leading-snug hover:underline md:order-none md:col-span-1 md:truncate">
                 <Mono className="text-muted-foreground">#{r.pr}</Mono> {r.title}
               </Link>
               <div className="order-last col-span-3 md:order-none md:col-span-1">
                 <Progress run={r} usual={usual} />
               </div>
-              <Button size="sm" variant="outline" className="md:order-last" onClick={() => navigate(`/runs/${r.id}`)}>
+              <Button size="sm" variant="outline" className="col-start-3 md:order-last md:col-start-auto" onClick={() => navigate(`/runs/${r.id}`)}>
                 Open run
               </Button>
             </div>
           ))}
           <div className="overflow-x-auto">
             <table className="w-full text-body">
-              <thead className="text-left text-small whitespace-nowrap text-muted-foreground">
+              {/* Column names help only beside columns; phones show each row as two lines. */}
+              <thead className="hidden text-left text-small whitespace-nowrap text-muted-foreground sm:table-header-group">
                 <tr className="border-b border-border">
                   <th className="hidden w-28 px-4 py-2 font-medium sm:table-cell">Latest</th>
-                  <th className="px-3 py-2 font-medium sm:px-4">Pull request</th>
+                  <th className="px-4 py-2 font-medium">Pull request</th>
                   <th className="hidden w-36 px-4 py-2 font-medium sm:table-cell">Runs, oldest first</th>
                   <th className="hidden w-24 px-4 py-2 font-medium 2xl:table-cell">Commit</th>
                   <th className="hidden w-24 px-4 py-2 text-right font-medium md:table-cell">Took</th>
-                  <th className="px-3 py-2 text-right font-medium sm:w-24 sm:px-4">When</th>
+                  <th className="w-24 px-4 py-2 text-right font-medium">When</th>
                   <th className="hidden w-9 sm:table-cell" />
                 </tr>
               </thead>
@@ -180,6 +189,8 @@ const LEGEND: { key: RunResult; label: string; bar: string; text: string }[] = [
   { key: "queued", label: "Queued", bar: "bg-muted-foreground/30", text: "text-muted-foreground" },
   { key: "cancelled", label: "Cancelled", bar: "bg-muted-foreground/20", text: "text-muted-foreground" },
 ];
+
+const LOOK = Object.fromEntries(LEGEND.map((l) => [l.key, l])) as Record<RunResult, (typeof LEGEND)[number]>;
 
 /** Wide screens only: what runs right now and how the recent runs ended. */
 export function RunsPanel({ runs, repo }: { runs: RunRow[]; repo: string }) {

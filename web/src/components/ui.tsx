@@ -52,8 +52,9 @@ export function Card({ className, ...p }: ComponentProps<"div">) {
 
 export function CardHeader({ title, description, action }: { title: ReactNode; description?: ReactNode; action?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
-      <div>
+    // On phones an action too wide to sit beside the text moves under it instead of squeezing the text into a column.
+    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-border px-4 py-3">
+      <div className="min-w-0 flex-1 basis-56">
         <h2 className="text-body font-semibold">{title}</h2>
         {description && <p className="mt-0.5 text-body text-muted-foreground">{description}</p>}
       </div>

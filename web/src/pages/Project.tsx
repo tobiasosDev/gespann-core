@@ -346,14 +346,14 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                     description="Each pull request once, with all its runs. Select a row to open its latest run."
                     action={
                       <form
-                        className="flex items-center gap-2"
+                        className="flex w-full items-center gap-2 sm:w-auto"
                         onSubmit={async (e) => {
                           e.preventDefault();
                           const r = await post("/runs", { pr: Number(pr) });
                           if (r.runId) navigate(`/runs/${r.runId}`);
                         }}
                       >
-                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" className="w-20 font-mono" disabled={setup !== "done"} />
+                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" inputMode="numeric" className="min-w-0 flex-1 font-mono sm:w-20 sm:flex-none" disabled={setup !== "done"} />
                         <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
                           <Play className="size-3.5" /> Test PR
                         </Button>
