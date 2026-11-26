@@ -25,6 +25,7 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
 | `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
+| `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `DATA_DIR` | default `/data` in the image |
 
 Restarting or redeploying the server never loses a job. A job whose server stops (a deploy, a crash) goes back into the queue about a minute later and starts again from the beginning. Before that, gespann stops the commands it left running in the sandbox and takes a copy that was still up down. While the old server keeps running during a rolling deploy, the job stays with it. A job lost in three restarts fails instead of starting again.
