@@ -66,6 +66,30 @@ export interface ServerModule {
   admit?(job: ModuleJob): Promise<string | null> | string | null;
   /** After a job ended and gave its sandbox back. Errors are logged, never fail the job. */
   jobEnded?(end: ModuleJobEnd): Promise<void> | void;
+  /**
+   * At most this many jobs of the owner's projects run at once; null for no cap. Asked while the worker
+   * picks the next job, so it must answer right away (no network). A job over the cap waits in the queue.
+   */
+  jobCap?(owner: ModuleUser): JobCap | null;
+}
+
+export interface JobCap {
+  jobs: number;
+  /** Shown next to the limit in Settings → Sandboxes, e.g. "your plan". */
+  reason: string;
+}
+
+/** The module's cap for an owner; null when it has none or answers with something unusable. */
+export function capFor(module: ServerModule | null | undefined, owner: ModuleUser): JobCap | null {
+  if (!module?.jobCap) return null;
+  try {
+    const c = module.jobCap(owner);
+    if (!c || !Number.isInteger(c.jobs) || c.jobs < 0) return null;
+    return { jobs: c.jobs, reason: String(c.reason ?? "") };
+  } catch (err) {
+    console.error(JSON.stringify({ level: "error", at: `${module.name} jobCap`, owner: owner.login, message: err instanceof Error ? err.message : String(err) }));
+    return null;
+  }
 }
 
 /** A module named by `SERVER_MODULE` default-exports this. It gets the server's environment. */

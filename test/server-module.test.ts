@@ -9,7 +9,7 @@ import { Db } from "../src/server/db.ts";
 import { loadServerModule, type ModuleJobEnd, type ServerModule } from "../src/server/extension.ts";
 import type { Github } from "../src/server/github.ts";
 import type { Sandboxes } from "../src/server/sandbox.ts";
-import { processJob } from "../src/server/worker.ts";
+import { processJob, startWorker } from "../src/server/worker.ts";
 
 test("SERVER_MODULE loads a module file that gets the environment; none without the variable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "gespann-module-"));
@@ -136,4 +136,20 @@ test("the module's Settings cards come from /api/settings/sections for the signe
   const r = await broken.request("/api/settings/sections", { headers: cookie });
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), { sections: [], error: "plans could not load: store is down" });
+});
+
+test("the worker asks the module's cap: a job of an owner at the cap stays queued", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-module-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "tobi", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  const asked: string[] = [];
+  const module: ServerModule = { name: "plans", jobCap: (o) => (asked.push(o.login), { jobs: 0, reason: "no plan" }) };
+  const sandboxes = new Proxy({}, { get: () => () => { throw new Error("no sandbox in this test"); } }) as Sandboxes;
+  const job = db.enqueue(p, "suggest");
+  const stop = startWorker({ db, sandboxes, github: () => ({}) as Github, config, module }, 4);
+  await new Promise((r) => setTimeout(r, 50));
+  stop();
+  assert.deepEqual(asked, ["tobi"]);
+  assert.equal(db.job(job)?.status, "queued");
 });

@@ -134,7 +134,10 @@ export function Sandboxes() {
       await reload();
     }
   };
-  const { host, limit, running, queued, waitingForChecks, time } = data;
+  const { host: hostRoom, cap, limit, running, queued, waitingForChecks, time } = data;
+  // The most you can choose: the host's room, or less when the server module caps your jobs.
+  const host = cap !== null && hostRoom !== null ? Math.min(cap.jobs, hostRoom) : hostRoom;
+  const capText = cap ? `${cap.reason ? `${cap.reason[0]?.toUpperCase()}${cap.reason.slice(1)}` : "This instance"} allows ${cap.jobs} at once.` : "";
   const monthName = new Date(`${time.month}-01T00:00:00Z`).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   // The server counts running jobs up to its answer; the seconds since then are added here.
   const live = (running.length * Math.max(0, Date.now() - loadedAt)) / 1000;
@@ -172,7 +175,7 @@ export function Sandboxes() {
                   <Plus className="size-3.5" />
                 </Button>
               </div>
-              <span className="text-small text-muted-foreground">The sandbox host has room for {host}.</span>
+              <span className="text-small text-muted-foreground">{cap && cap.jobs <= (hostRoom ?? 0) ? capText : `${capText} The sandbox host has room for ${hostRoom}.`.trim()}</span>
               {queued > 0 && (
                 <span className="text-small text-foreground">
                   {queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox.

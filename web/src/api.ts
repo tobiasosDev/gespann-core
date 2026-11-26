@@ -61,6 +61,8 @@ export interface RunningBox {
 export interface Boxes {
   /** Jobs the sandbox host runs at once for everyone; null when the instance has no sandboxes. */
   host: number | null;
+  /** A cap the server module sets for your jobs (e.g. your plan's), with its reason; null for none. */
+  cap: { jobs: number; reason: string } | null;
   /** Jobs of your projects that may run at once. */
   limit: number | null;
   /** Your own limit; null when you take what the host allows. */
