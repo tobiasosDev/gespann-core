@@ -67,6 +67,13 @@ The server module's per-owner cap (`jobCap`, e.g. a plan's parallel tests) canno
 orchestrator: the UI writes it to `users.job_cap` every 10 s, and the orchestrator starts no job of an
 owner who already runs that many.
 
+Agent provider: `users.agent` is `codex` (the ChatGPT plan) or `openrouter`. The UI checks an OpenRouter key with
+OpenRouter and stores it sealed in `users.openrouter_key` (same scheme as `codex_auth`), with `openrouter_model` and its
+`openrouter_context`. Each job decides its agent once (journal step `agent`, so a takeover keeps it) and runs every
+Codex step through `with_agent`: the Codex sign-in, or the OpenRouter key in the sandbox for the length of the step
+(see `orchestrator/src/codex.rs`). `AGENT_READY` (in both `db.ts` and `db.rs`) says whether an owner's agent can run;
+setup, suggest and the automatic first setup wait for it.
+
 Codex sign-in: the UI only sets the user's `codex_state` to `pending` (`codex_login` null). The
 orchestrator runs the sign-in for every pending user and writes `codex_login`, then `codex_auth`
 (AES-256-GCM with a key from `SESSION_SECRET`, see `orchestrator/src/codex.rs`) or `failed`. The UI does

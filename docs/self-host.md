@@ -2,7 +2,7 @@
 
 > The supported way to use gespann is the hosted service at [app.gespann.app](https://app.gespann.app): sign in with GitHub and add a repository, nothing to run. This page is for running your own instance. You operate it yourself; there is no help with setup or operation, and bug reports are taken when they also happen on the hosted service.
 
-gespann is two services that share one SQLite database and its files under `DATA_DIR` (one volume, one host): the **UI** (`gespann serve`, Node: web app, MCP, GitHub webhook, everything that talks to GitHub) and the **orchestrator** (Rust: the job queue, sandboxes and every job step). A deploy of the UI leaves running tests alone. How they talk to each other: [orchestrator.md](orchestrator.md). PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs on each user's own ChatGPT plan through Codex, so the instance pays no model costs.
+gespann is two services that share one SQLite database and its files under `DATA_DIR` (one volume, one host): the **UI** (`gespann serve`, Node: web app, MCP, GitHub webhook, everything that talks to GitHub) and the **orchestrator** (Rust: the job queue, sandboxes and every job step). A deploy of the UI leaves running tests alone. How they talk to each other: [orchestrator.md](orchestrator.md). PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs through Codex on each user's own ChatGPT plan or on OpenRouter with the user's own API key, so the instance pays no model costs.
 
 ## Run
 
@@ -31,7 +31,7 @@ Both services:
 | Variable | |
 |---|---|
 | `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
-| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins and signs the orchestrator's calls to the UI, so keep it stable |
+| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins and OpenRouter keys and signs the orchestrator's calls to the UI, so keep it stable |
 | `DATA_DIR` | default `/data` in the images |
 
 The UI (`gespann serve`):
@@ -76,7 +76,7 @@ All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign
 | `ssh` | a directory on a Linux machine you already run, used as `HOME` | a CI server without Docker, or one that already has your toolchain |
 | `remote` | whatever a sandbox service of yours makes (a cloud VM, a pod), reached over HTTP ([Remote](#remote)) | many jobs at once, beyond one machine |
 
-Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen. When a run cannot be recorded, the run page says so and the job log names the reason.
+Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH` (for OpenRouter a version with the Responses API for custom providers; tested with 0.172), plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen. When a run cannot be recorded, the run page says so and the job log names the reason.
 
 ### Several providers
 
@@ -251,11 +251,13 @@ Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub Ap
 
 ## How a project works
 
-1. A user signs in with GitHub and connects Codex once in **Settings** (`codex login --device-auth` in a short-lived sandbox). gespann keeps the resulting `auth.json` encrypted and deletes the sandbox.
+1. A user signs in with GitHub and picks the agent's model provider once in **Settings**:
+   - **ChatGPT plan**: `codex login --device-auth` in a short-lived sandbox. gespann keeps the resulting `auth.json` encrypted and deletes the sandbox.
+   - **OpenRouter**: the user pastes their own API key (checked with OpenRouter, then kept encrypted) and picks a model; the list shows OpenRouter's models that call tools and read images. Every Codex step then runs `codex exec` with OpenRouter as its model provider (`wire_api = "responses"`). The key is written into the sandbox (`~/.gespann-openrouter-key`, mode 600) just before a Codex step, read into `OPENROUTER_API_KEY` and deleted before Codex starts, and `shell_environment_policy.exclude` keeps it out of the commands Codex runs. Like the Codex sign-in, it is still within reach of code running as the sandbox's user while Codex runs (Codex's process environment), so gespann tests only branches of the repo itself, never forks. Codex knows only OpenAI's models; gespann passes the model's context size from OpenRouter so Codex compacts in time. The user pays OpenRouter per token.
 2. Adding a repository starts the setup: in the project's own sandbox, Codex reads the repo and writes `verify.yml` (see [recipe.md](recipe.md)), the scripts it calls, `NOTES.md` and `CHECKS.md`. gespann then starts and stops the copy once without Codex to check the recipe.
 3. **Start** turns on PR testing. Each matching PR (not from forks) gets the check `gespann/verify`: the sandbox merges the PR onto its base branch as it is when the run starts (not the older base commit GitHub reports for the PR), brings the copy up, Codex tests it with the sandbox's computer-use tools, and the verdict, screenshots and a recording land on the run page and in a PR comment. A PR that does not merge onto its base is not tested: the run shows *conflict* in grey instead of a verdict, the check stays neutral, and the PR comment and the MCP issue `merge_conflict` name the files and tell the PR's agent to update the branch. gespann never resolves conflicts itself; a push that matches the triggers is tested again, otherwise *Rerun* tests the PR's new head. Without a conflict a PR needs no rebase to catch up with its base: *Rerun* tests the same head on top of the newest base. A PR has one test at a time: a push of a new head stops the test of the old one, and a second start for the head already queued or running (a second webhook, *Rerun*, the MCP tool) joins that run instead of starting another.
 
-The project sandbox stops after every job, and the Codex sign-in is only inside it while a job runs.
+The project sandbox stops after every job, and the Codex sign-in or OpenRouter key is only inside it while a job runs.
 
 ## Agent access (MCP)
 

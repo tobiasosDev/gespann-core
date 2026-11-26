@@ -1,6 +1,16 @@
-//! One Codex sign-in per user: made in a short-lived login sandbox,
-//! kept sealed in the database, written into a project sandbox only for the length of a Codex step and
-//! read back afterwards, because Codex refreshes it in place.
+//! The model behind Codex, per user: their ChatGPT plan or OpenRouter with their own API key.
+//!
+//! ChatGPT: one Codex sign-in per user, made in a short-lived login sandbox, kept sealed in the
+//! database, written into a project sandbox only for the length of a Codex step and read back
+//! afterwards, because Codex refreshes it in place.
+//!
+//! OpenRouter: the same Codex CLI with OpenRouter as its model provider (Responses API). The sealed key
+//! is written into the sandbox just before a Codex step; the step's shell reads it into
+//! `OPENROUTER_API_KEY` and deletes the file before Codex starts, and `shell_environment_policy.exclude`
+//! keeps the variable out of the commands Codex runs (Codex passes its whole environment to them
+//! otherwise). Like the Codex sign-in, the key is still within reach of code running as the sandbox's
+//! user while Codex runs (its process environment), which is why only branches of the repo itself are
+//! tested, never forks.
 
 use std::future::Future;
 use std::sync::{Mutex, OnceLock};
@@ -14,6 +24,7 @@ use base64::engine::DecodePaddingMode;
 use base64::Engine;
 use futures::future::BoxFuture;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -21,8 +32,105 @@ use rusqlite::types::Value;
 
 use crate::db::{opt_text, text};
 use crate::journal::Journal;
+use crate::sandbox::scripts::q;
 use crate::sandbox::{run_long, CreateOpts, Purpose, Sandboxes, WaitOpts};
 use crate::Ctx;
+
+/// Who runs the model for a job's Codex steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    /// The owner's ChatGPT plan (`codex login`).
+    Codex,
+    /// OpenRouter with the owner's own API key.
+    Openrouter,
+}
+
+/// The agent of a job, decided once when the job first needs it (the journal keeps it for a takeover).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Agent {
+    pub provider: Provider,
+    /// None: Codex's default (OpenRouter has none; a job without a model does not start Codex).
+    pub model: Option<String>,
+    /// The OpenRouter model's context size, when OpenRouter named it: Codex knows only OpenAI's models.
+    #[serde(default)]
+    pub context: Option<i64>,
+}
+
+/// Where the OpenRouter key lies in the sandbox's home while a Codex step runs.
+pub const OPENROUTER_KEY_FILE: &str = ".gespann-openrouter-key";
+const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+
+impl Agent {
+    /// What goes before `codex` (its environment) and the arguments of `codex exec` for this agent's model.
+    pub fn codex_args(&self) -> (String, String) {
+        let mut args = self.model.as_deref().filter(|m| !m.is_empty()).map(|m| format!(" -m {}", q(m))).unwrap_or_default();
+        if self.provider == Provider::Codex {
+            return (String::new(), args);
+        }
+        let provider = format!(
+            r#"model_providers.openrouter={{name="OpenRouter",base_url="{OPENROUTER_BASE_URL}",env_key="OPENROUTER_API_KEY",wire_api="responses",http_headers={{"HTTP-Referer"="https://gespann.app","X-Title"="gespann"}}}}"#
+        );
+        args.push_str(&format!(" -c model_provider=openrouter -c {} -c {}", q(&provider), q(r#"shell_environment_policy.exclude=["OPENROUTER_API_KEY"]"#)));
+        if let Some(n) = self.context.filter(|n| *n > 0) {
+            args.push_str(&format!(" -c model_context_window={n} -c model_auto_compact_token_limit={}", n * 8 / 10));
+        }
+        // The key file goes as soon as the shell has read it, before Codex or any PR code runs; without
+        // a key read and its file gone, Codex does not start.
+        let f = format!(r#""$HOME/{OPENROUTER_KEY_FILE}""#);
+        (format!(r#"_k="$(cat {f})" && rm -f {f} && test -n "$_k" && OPENROUTER_API_KEY="$_k" "#), args)
+    }
+}
+
+/// Runs `f` (a Codex step) with what the job's agent needs in the sandbox: the owner's Codex sign-in
+/// (`with_codex`) or their OpenRouter key.
+pub async fn with_agent<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, f: F) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    match agent.provider {
+        Provider::Codex => with_codex(ctx, j, key, owner_id, sandbox_id, f).await,
+        Provider::Openrouter => with_openrouter(ctx, j, key, owner_id, sandbox_id, agent, f).await,
+    }
+}
+
+async fn with_openrouter<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, f: F) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    // A step that finished (a takeover replays it) needs no key: its result is stored.
+    let done = format!("{key}.done");
+    if j.step_done(&done)? {
+        return f().await;
+    }
+    if agent.model.as_deref().unwrap_or("").is_empty() {
+        bail!("Choose an OpenRouter model in Settings first: the agent runs on your OpenRouter key.");
+    }
+    let sealed = ctx.db.agent(owner_id)?.and_then(|a| a.openrouter_key).ok_or_else(|| anyhow!("Add your OpenRouter key in Settings first: the agent runs on your OpenRouter key."))?;
+    let api_key = open(&ctx.cfg.session_secret, &sealed)?;
+    let sandboxes = ctx.sandboxes_for(owner_id)?;
+    let sb = sandboxes.as_ref();
+    let file = format!("{}/{OPENROUTER_KEY_FILE}", sb.home(sandbox_id));
+    // Written once per step under the journal: the step's command deletes it when it starts, and a
+    // takeover attaches to that command instead of writing the key again.
+    let outcome = async {
+        j.step(&format!("{key}.key"), || async {
+            sb.exec(sandbox_id, &format!("umask 077 && : > {}", q(&file)), 30).await?;
+            sb.write_file(sandbox_id, &file, api_key.as_bytes()).await?;
+            Ok(true)
+        })
+        .await?;
+        f().await
+    }
+    .await;
+    let _ = sb.exec(sandbox_id, &format!("rm -f {}", q(&file)), 30).await;
+    if outcome.is_ok() {
+        j.step(&done, || async { Ok(true) }).await?;
+    }
+    outcome
+}
 
 /// Codex refreshes its sign-in once it is this old; each refresh token works once.
 pub const REFRESH_AFTER_MS: i64 = 8 * 86_400_000;
@@ -202,9 +310,9 @@ pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) 
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
-    let rm = sb.exec(sandbox_id, "rm -f ~/.codex/auth.json", 30).await?;
+    let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE}"), 30).await?;
     if rm.exit_code != Some(0) {
-        anyhow::bail!("could not remove the Codex sign-in from the sandbox: {}", rm.stderr.trim());
+        anyhow::bail!("could not remove the agent's sign-in from the sandbox: {}", rm.stderr.trim());
     }
     for auth in ctx.db.step_keys(j.job_id, ".auth")? {
         let done = format!("{}.done", auth.trim_end_matches(".auth"));
@@ -322,6 +430,28 @@ mod tests {
         assert!(refresh_due("{}", now), "unknown: due");
         assert!(refresh_due("not json", now));
         assert_eq!(refreshed_at(r#"{"last_refresh":"2026-11-26T12:00:00.123456789Z"}"#), now + 123);
+    }
+
+    #[test]
+    fn codex_args_per_provider() {
+        let codex = Agent { provider: Provider::Codex, model: Some("gpt-6.2-sol".into()), context: None };
+        assert_eq!(codex.codex_args(), (String::new(), " -m 'gpt-6.2-sol'".to_string()));
+        assert_eq!(Agent { provider: Provider::Codex, model: None, context: None }.codex_args().1, "");
+        let or = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
+        let (env, args) = or.codex_args();
+        assert_eq!(
+            env,
+            r#"_k="$(cat "$HOME/.gespann-openrouter-key")" && rm -f "$HOME/.gespann-openrouter-key" && test -n "$_k" && OPENROUTER_API_KEY="$_k" "#,
+            "the key never appears on a command line, and its file goes before Codex starts"
+        );
+        assert!(args.starts_with(r#" -m 'anthropic/claude-x' -c model_provider=openrouter -c 'model_providers.openrouter={name="OpenRouter""#), "{args}");
+        assert!(args.contains(r#"env_key="OPENROUTER_API_KEY",wire_api="responses""#), "{args}");
+        assert!(args.contains(r#" -c 'shell_environment_policy.exclude=["OPENROUTER_API_KEY"]'"#), "the commands Codex runs never see the key: {args}");
+        assert!(args.ends_with(" -c model_context_window=200000 -c model_auto_compact_token_limit=160000"), "{args}");
+        let round: Agent = serde_json::from_str(&serde_json::to_string(&or).unwrap()).unwrap();
+        assert_eq!(round, or);
+        let old: Agent = serde_json::from_str(r#"{"provider":"codex","model":null}"#).unwrap();
+        assert_eq!(old.provider, Provider::Codex);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! The queue loop's parts that need no job steps: host size, takeover of a stale job, Codex sign-in,
-//! outbox, `settings.orchestrator`, and the drain on shutdown. Also `with_codex` around a Codex step.
+//! outbox, `settings.orchestrator`, and the drain on shutdown. Also `with_codex` and `with_agent` around a Codex step.
 
 mod core_fake;
 
@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_fake::Fake;
-use gespann_orchestrator::codex::{open, seal, with_codex};
+use gespann_orchestrator::codex::{open, seal, with_agent, with_codex, Agent, Provider};
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, text, Db};
 use gespann_orchestrator::journal::Journal;
@@ -163,4 +163,50 @@ async fn with_codex_writes_once_and_keeps_the_refreshed_sign_in() {
     c.db.set_codex(u, &[("codex_auth", rusqlite::types::Value::Null)]).unwrap();
     let err = with_codex(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", || async { Ok(()) }).await.unwrap_err();
     assert!(err.to_string().starts_with("Connect Codex in Settings first"));
+}
+
+#[tokio::test]
+async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_step_runs() {
+    let sb = Arc::new(Fake::default());
+    let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
+    let (u, _) = user(&c.db);
+    let agent = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: None };
+    let j = Journal::new(c.db.clone(), 9);
+    let err = with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap_err();
+    assert!(err.to_string().starts_with("Add your OpenRouter key in Settings first"), "{err}");
+    let none = Agent { model: None, ..agent.clone() };
+    let err = with_agent(&c, &j, "a1.tester", u, "box", &none, || async { Ok(()) }).await.unwrap_err();
+    assert!(err.to_string().starts_with("Choose an OpenRouter model in Settings first"), "{err}");
+    c.db.set_codex(u, &[("agent", text("openrouter")), ("openrouter_key", text(seal(SECRET, "sk-or-v1-secret")))]).unwrap();
+    let file = "/home/user/.gespann-openrouter-key";
+    let got = with_agent(&c, &j, "a1.tester", u, "box", &agent, || async {
+        assert_eq!(sb.file(file).as_deref(), Some("sk-or-v1-secret"), "the key is in the sandbox while the step runs");
+        assert_eq!(sb.file("/home/user/.codex/auth.json"), None, "no Codex sign-in");
+        Ok(7)
+    })
+    .await
+    .unwrap();
+    assert_eq!(got, 7);
+    assert_eq!(sb.file(file), None, "removed after the step");
+    assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains("sk-or-v1-secret")), "the key never appears in a command");
+    // A takeover after the step finished replays it without writing the key again.
+    let writes = sb.writes.lock().unwrap().len();
+    with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap();
+    assert_eq!(sb.writes.lock().unwrap().len(), writes);
+    // A takeover while Codex still runs: its command deleted the key file at its start, and the key
+    // is not written again for the process the takeover attaches to.
+    let jt = Journal::new(c.db.clone(), 11);
+    let _ = with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async { anyhow::bail!("orchestrator stopped") as anyhow::Result<()> }).await;
+    let writes = sb.writes.lock().unwrap().len();
+    with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async {
+        assert_eq!(sb.file(file), None, "no key file while the attached Codex runs");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(sb.writes.lock().unwrap().len(), writes, "not written again on a takeover");
+    // A failed step removes the key too.
+    let err = with_agent(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", &agent, || async { anyhow::bail!("codex failed") as anyhow::Result<()> }).await.unwrap_err();
+    assert_eq!(err.to_string(), "codex failed");
+    assert_eq!(sb.file(file), None);
 }

@@ -1,11 +1,11 @@
 # gespann
 
-Acceptance testing for pull requests. For every PR, gespann starts a production-near copy of your app in a cloud sandbox, an agent on your own Codex plan clicks through the change like a tester, and the verdict with screenshots lands on the PR as the check `gespann/verify`.
+Acceptance testing for pull requests. For every PR, gespann starts a production-near copy of your app in a cloud sandbox, an agent on your own ChatGPT plan or OpenRouter key clicks through the change like a tester, and the verdict with screenshots lands on the PR as the check `gespann/verify`.
 
-**Start at [app.gespann.app](https://app.gespann.app):** sign in with GitHub, connect your ChatGPT plan once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Nothing to install or run.
+**Start at [app.gespann.app](https://app.gespann.app):** sign in with GitHub, connect your ChatGPT plan or an OpenRouter key once in Settings, add a repository. Codex prepares the environment by itself; then every pull request is tested. Nothing to install or run.
 
 - Sandboxes: one per project, kept between jobs, so later PRs start fast; PRs are tested side by side. Settings shows your running sandboxes and your sandbox time per month, and lets you run fewer jobs at once.
-- Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), so there is no model bill from gespann.
+- Model: Codex on each user's own ChatGPT plan (`codex login --device-auth`), or Codex on any OpenRouter model that calls tools and reads images, with the user's own OpenRouter API key. Either way there is no model bill from gespann.
 - Environment: a recipe ([docs/recipe.md](docs/recipe.md)) that Codex writes once per repo; `gespann verify prepare|finish` runs it.
 - Gaps heal themselves: when the tester is blocked only because the copy lacks something (a site not built, a provider not faked), Codex adds it to the recipe, the copy is checked, and the test runs once more. The PR gets the second result. A fix that does not work is rolled back.
 - Every run comes with a video of the tester's screen, first on the run page and linked above the screenshots in the PR comment.

@@ -39,7 +39,18 @@ export interface CodexModel {
   note?: string;
 }
 
+/** Who runs the model behind the tester: the user's ChatGPT plan, or OpenRouter with their own key. */
+export type AgentProvider = "codex" | "openrouter";
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  context: number | null;
+}
+
 export interface Settings {
+  agent: AgentProvider;
+  openrouter: { connected: boolean; label: string | null; model: string | null };
   codex: {
     state: CodexState;
     account: string | null;
@@ -141,6 +152,10 @@ export interface ProjectDetail extends ProjectRow {
   codex: CodexState;
   codex_account: string | null;
   codex_model: string | null;
+  /** The owner's provider, and whether the agent can run on it (Codex connected, or an OpenRouter key and model). */
+  agent: AgentProvider;
+  agent_ready: boolean;
+  openrouter_model: string | null;
   own: boolean;
   criteria: string;
   default_checks: string;

@@ -1,6 +1,6 @@
 import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { ago, api, type Settings, type Tokens } from "../api.ts";
+import { type AgentProvider, ago, api, type OpenRouterModel, type Settings, type Tokens } from "../api.ts";
 import { ModuleSections } from "../components/ModuleSections.tsx";
 import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono, Select } from "../components/ui.tsx";
@@ -112,6 +112,132 @@ function AgentAccess() {
   );
 }
 
+/** Who runs the model behind the tester, for all the user's projects. */
+function AgentChoice({ agent, onChange, busy }: { agent: AgentProvider; onChange: (a: AgentProvider) => void; busy: boolean }) {
+  const options: { id: AgentProvider; title: string; text: string }[] = [
+    { id: "codex", title: "ChatGPT plan", text: "Codex on your Plus, Pro or Team plan. No extra model bill." },
+    { id: "openrouter", title: "OpenRouter", text: "Codex on any OpenRouter model with your own API key. OpenRouter bills you per token." },
+  ];
+  return (
+    <Card>
+      <CardHeader title="Agent" description="The tester, the environment setup and the fixes all run in Codex. Choose who runs its model; it applies to all your projects." />
+      <div role="radiogroup" aria-label="Agent provider" className="grid gap-3 px-4 py-4 sm:grid-cols-2">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={agent === o.id}
+            disabled={busy}
+            onClick={() => agent !== o.id && onChange(o.id)}
+            className={`rounded-md border px-3 py-2.5 text-left transition-colors disabled:opacity-60 ${agent === o.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+          >
+            <span className="flex items-center gap-2 text-body font-medium">
+              {agent === o.id && <Check className="size-4 text-primary" />}
+              {o.title}
+            </span>
+            <span className="mt-0.5 block text-small text-muted-foreground">{o.text}</span>
+          </button>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/** The user's own OpenRouter key and model. */
+function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promise<void> }) {
+  const o = data.openrouter;
+  const models = useResource<{ models: OpenRouterModel[] }>("/settings/openrouter/models");
+  const [key, setKey] = useState("");
+  const [modelDraft, setModelDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const model = modelDraft ?? o.model ?? "";
+  const list = models.data?.models ?? [];
+  const run = async (fn: () => Promise<unknown>, setError: (e: string | null) => void) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+      await reload();
+    }
+  };
+  return (
+    <Card className="mt-6">
+      <CardHeader
+        title="OpenRouter"
+        description="Codex runs on OpenRouter with your own API key, for all your projects. gespann keeps the key encrypted and hands it to the agent only while a job runs, outside the commands the agent runs."
+        action={o.connected && o.model ? <Badge tone="ok">ready</Badge> : o.connected ? <Badge tone="warn">pick a model</Badge> : <Badge>not connected</Badge>}
+      />
+      <div className="space-y-3 px-4 py-4">
+        {o.connected ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Check className="size-4 text-ok" />
+            <Mono>{o.label ?? "OpenRouter key"}</Mono>
+            <Button size="sm" variant="danger" className="ml-auto" disabled={busy} onClick={() => void run(() => api("/settings/openrouter/logout", {}), setKeyError)}>
+              Remove key
+            </Button>
+          </div>
+        ) : (
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (await run(() => api("/settings/openrouter/key", { key: key.trim() }), setKeyError)) setKey("");
+            }}
+          >
+            <Input type="password" aria-label="OpenRouter API key" autoComplete="off" className="max-w-sm font-mono" placeholder="sk-or-v1-…" value={key} onChange={(e) => setKey(e.target.value)} />
+            <Button type="submit" size="sm" disabled={busy || !key.trim()}>
+              {busy ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> : null} Connect
+            </Button>
+            <LinkButton href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer" size="sm" variant="ghost">
+              Create a key <ExternalLink className="size-3.5" />
+            </LinkButton>
+          </form>
+        )}
+        {keyError && <p className="text-body text-bad">{keyError}</p>}
+      </div>
+      <div className="space-y-2 border-t border-border px-4 py-4">
+        <form
+          className="flex flex-wrap items-center gap-3"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (await run(() => api("/settings/openrouter/model", { model: model.trim() }), setModelError)) setModelDraft(null);
+          }}
+        >
+          <label htmlFor="openrouter-model" className="text-body font-medium">
+            Model
+          </label>
+          <Input id="openrouter-model" list="openrouter-models" className="max-w-sm font-mono" placeholder="vendor/model, e.g. anthropic/…" value={model} onChange={(e) => setModelDraft(e.target.value)} maxLength={160} />
+          <datalist id="openrouter-models">
+            {list.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+                {m.context ? ` · ${Math.round(m.context / 1000)}k context` : ""}
+              </option>
+            ))}
+          </datalist>
+          <Button type="submit" size="sm" disabled={busy || model.trim() === (o.model ?? "")}>
+            Save
+          </Button>
+        </form>
+        {modelError && <p className="text-body text-bad">{modelError}</p>}
+        {models.error && <p className="text-small text-warn">Could not load OpenRouter's models: {models.error}. You can still type a model id.</p>}
+        <p className="text-small text-muted-foreground">
+          Required. The list shows the {list.length || ""} models that call tools and read screenshots, which the tester needs. Used for all your projects unless a project sets its own model in Setup.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const { data, error, reload } = useResource<Settings>("/settings", codexPending, 3000);
   const [busy, setBusy] = useState(false);
@@ -154,7 +280,11 @@ export function SettingsPage() {
     <>
       <h1 className="mb-4 text-title font-semibold">Settings</h1>
       <ModuleSections />
-      <Card>
+      <AgentChoice agent={data.agent} busy={busy} onChange={(agent) => void act("/settings/agent", { agent })} />
+      {data.agent === "openrouter" ? (
+        <OpenRouterCard data={data} reload={reload} />
+      ) : (
+      <Card className="mt-6">
         <CardHeader
           title="Codex"
           description="The tester runs on your own ChatGPT plan (Plus, Pro or Team), for all your projects. gespann keeps the sign-in encrypted and puts it into a project's sandbox only while a job runs."
@@ -294,6 +424,7 @@ export function SettingsPage() {
           </p>
         </div>
       </Card>
+      )}
       <Sandboxes />
       <AgentAccess />
     </>

@@ -4,6 +4,11 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export type CodexState = "none" | "pending" | "connected" | "failed";
+/** Who runs the agent for a user's projects: Codex on their ChatGPT plan, or Codex on OpenRouter with their own key. */
+export type AgentProvider = "codex" | "openrouter";
+
+/** SQL over `users`: the agent can run, on the provider the user chose. The orchestrator's db.rs has the same. */
+export const AGENT_READY = "(case when agent = 'openrouter' then openrouter_key is not null and openrouter_model is not null else codex_state = 'connected' end)";
 export type SetupState = "none" | "queued" | "running" | "ready" | "failed";
 export type JobKind = "login" | "setup" | "run" | "suggest";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -247,8 +252,19 @@ export class Db {
       ["repos_synced", "text"],
       ["max_jobs", "integer"],
       ["job_cap", "integer"],
+      ["agent", "text not null default 'codex'"],
+      ["openrouter_key", "text"],
+      ["openrouter_label", "text"],
+      ["openrouter_model", "text"],
+      ["openrouter_context", "integer"],
     ] as const) {
-      if (!cols.has(name)) this.sql.exec(`alter table users add column ${name} ${def}`);
+      if (cols.has(name)) continue;
+      try {
+        this.sql.exec(`alter table users add column ${name} ${def}`);
+      } catch (err) {
+        // The orchestrator adds the same columns and may have done so since `table_info` was read.
+        if (!String((err as Error).message).includes("duplicate column")) throw err;
+      }
     }
     const pcols = new Set((this.sql.prepare("pragma table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
@@ -295,6 +311,27 @@ export class Db {
     const keys = Object.keys(fields);
     if (!keys.length) return;
     this.run(`update users set ${keys.map((k) => `${k} = ?`).join(", ")} where id = ?`, ...keys.map((k) => (fields as Record<string, string | null>)[k] ?? null), userId);
+  }
+
+  /** The user's agent provider and their OpenRouter connection, without the key. */
+  agent(userId: number): { agent: AgentProvider; openrouter: boolean; openrouter_label: string | null; openrouter_model: string | null; openrouter_context: number | null; ready: boolean } | undefined {
+    const r = this.one<{ agent: string; has_key: number; openrouter_label: string | null; openrouter_model: string | null; openrouter_context: number | null; ready: number }>(
+      `select agent, openrouter_key is not null as has_key, openrouter_label, openrouter_model, openrouter_context, ${AGENT_READY} as ready from users where id = ?`,
+      userId,
+    );
+    if (!r) return undefined;
+    return { agent: r.agent === "openrouter" ? "openrouter" : "codex", openrouter: !!r.has_key, openrouter_label: r.openrouter_label, openrouter_model: r.openrouter_model, openrouter_context: r.openrouter_context, ready: !!r.ready };
+  }
+
+  setAgent(userId: number, fields: Partial<{ agent: AgentProvider; openrouter_key: string | null; openrouter_label: string | null; openrouter_model: string | null; openrouter_context: number | null }>): void {
+    const keys = Object.keys(fields);
+    if (!keys.length) return;
+    this.run(`update users set ${keys.map((k) => `${k} = ?`).join(", ")} where id = ?`, ...keys.map((k) => (fields as Record<string, string | number | null>)[k] ?? null), userId);
+  }
+
+  /** The agent of the user's projects can run: Codex connected, or an OpenRouter key and model. */
+  agentReady(userId: number): boolean {
+    return this.agent(userId)?.ready ?? false;
   }
 
   private one<T>(q: string, ...p: (string | number | null)[]): T | undefined {
@@ -407,9 +444,9 @@ export class Db {
     this.run(`update projects set ${keys.map((k) => `${k} = ?`).join(", ")} where id = ?`, ...values, id);
   }
 
-  /** Queues the one-time setup for projects that never had one: it needs nothing from the user but Codex. */
+  /** Queues the one-time setup for projects that never had one: it needs nothing from the user but a ready agent. */
   autoSetup(ownerId: number): void {
-    if (this.codex(ownerId)?.codex_state !== "connected") return;
+    if (!this.agentReady(ownerId)) return;
     for (const p of this.all<Project>("select * from projects where owner_id = ? and setup = 'none'", ownerId)) {
       this.updateProject(p.id, { setup: "queued", setup_error: null });
       this.enqueue(p.id, "setup");

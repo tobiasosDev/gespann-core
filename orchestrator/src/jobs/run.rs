@@ -12,11 +12,11 @@ use rusqlite::types::Value as Sql;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::boxes::{codex_exec, ensure_repo, ensure_sandbox, git, js_code, js_num, last_json, long, model_for, recipe_check, stop_sandbox, sync_recipe, with_env, write_prompt, Sbx};
+use super::boxes::{agent_for, codex_exec, ensure_repo, ensure_sandbox, git, js_code, js_num, last_json, long, recipe_check, stop_sandbox, sync_recipe, with_env, write_prompt, Sbx};
 use super::repair::repair;
 use super::setup::{setup, Finished};
 use super::{cut, never, tail, Cx};
-use crate::codex::with_codex;
+use crate::codex::with_agent;
 use crate::db::{now, opt_text, text, Db, Project, Run};
 use crate::journal::Long;
 use crate::sandbox::scripts::{finish_recording_script, q};
@@ -591,10 +591,10 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let progress_file = format!("{dir}/work/progress.json");
     let progress_file = &progress_file;
     let tick = |_tail: String| read_tester(cx, b, run.id, progress_file).boxed();
-    let model = model_for(cx, p);
-    let command = codex_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), model.as_deref(), "medium");
+    let agent = agent_for(cx, p).await?;
+    let command = codex_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), &agent, "medium");
     let tester_key = k("tester");
-    let tester = with_codex(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, || {
+    let tester = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || {
         cx.jr.long(sb, &b.id, &tester_key, &command, Long { timeout: Duration::from_secs_f64(minutes * 60.0), cancelled: &cancelled, on_tick: Some(&tick) })
     })
     .await;
