@@ -93,6 +93,8 @@ test("judge: every linked issue needs a goal, and a missed goal fails the PR", (
   assert.equal(judge(v("SKIP", [met], []), () => true, ["#12"]).outcome, "SKIP", "a CI-only issue can be met from the diff");
   assert.ok(judge(v("FAIL", [{ ...missed, proof: ["gone.png"] }]), (f) => f !== "gone.png", ["#12"]).problems.some((p) => /gone\.png/.test(p)));
   assert.ok(judge(v("PASS", [{ ...met, goal: " " }]), () => true, ["#12"]).problems.includes("goal without the issue's goal"));
+  assert.ok(judge(v("FAIL", [met, { ...missed, issue: "#99" }]), () => true, ["#12"]).problems.includes('goal for "#99", which is no issue this PR resolves'), "an invented issue cannot fail the PR");
+  assert.ok(judge(v("FAIL", [met, missed]), () => true, ["#12"]).problems.includes("issue #12 judged 2 times"));
   assert.equal(judge(v("PASS", []), () => true).outcome, "PASS", "without linked issues nothing changes");
 });
 

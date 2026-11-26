@@ -89,7 +89,11 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
     const proof = Array.isArray(g.proof) ? g.proof.map(String) : undefined;
     goals.push({ issue: String(g.issue ?? ""), goal: String(g.goal ?? ""), observed: String(g.observed ?? ""), result: result as GoalResult, ...(proof ? { proof } : {}) });
   }
-  for (const ref of issues) if (!goals.some((g) => sameRef(g.issue, ref))) problems.push(`no goal judged for issue ${ref}`);
+  for (const ref of issues) {
+    const n = goals.filter((g) => sameRef(g.issue, ref)).length;
+    if (n !== 1) problems.push(n ? `issue ${ref} judged ${n} times` : `no goal judged for issue ${ref}`);
+  }
+  for (const g of goals) if (!issues.some((ref) => sameRef(g.issue, ref))) problems.push(`goal for ${JSON.stringify(g.issue)}, which is no issue this PR resolves`);
   const proof = Array.isArray(v.proof) ? v.proof.map(String) : [];
   const verdict: Verdict = { verdict: kind as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
 
