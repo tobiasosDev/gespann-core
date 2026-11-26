@@ -105,9 +105,10 @@ test("the server module's cap holds an owner's next job in the queue; owners wit
   db.endJob(j1, "done");
   assert.equal(db.nextJob(cap)?.id, j2);
   // The own limit and the cap both hold; the lower one wins.
+  assert.ok(db.claimJob(j2));
   db.setMaxJobs(e.u.id, 1);
   db.enqueue(e.a, "suggest");
-  assert.equal(db.nextJob(() => 5)?.id, j2, "eve runs 2 with her own limit at 1");
+  assert.equal(db.nextJob(() => 5), undefined, "eve runs 2 with her own limit at 1; a cap of 5 does not lift it");
   assert.ok(asked.includes("eve"));
 });
 

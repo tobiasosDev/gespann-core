@@ -136,6 +136,7 @@ test("the module's Settings cards come from /api/settings/sections for the signe
   const r = await broken.request("/api/settings/sections", { headers: cookie });
   assert.equal(r.status, 200);
   assert.deepEqual(await r.json(), { sections: [], error: "plans could not load: store is down" });
+});
 
 test("the worker asks the module's cap: a job of an owner at the cap stays queued", async () => {
   const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-module-")) });
