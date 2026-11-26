@@ -21,9 +21,9 @@ function Step({ n, title, state, summary, action, children }: { n: number; title
     <div className="border-b border-border last:border-0">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
         <StepIcon state={state} />
-        <span className="w-4 font-mono text-[12px] text-muted-foreground">{n}</span>
+        <span className="w-4 font-mono text-small text-muted-foreground">{n}</span>
         <span className="w-44 font-medium">{title}</span>
-        <span className="min-w-0 flex-1 text-[13px] text-muted-foreground">{summary}</span>
+        <span className="min-w-0 flex-1 text-body text-muted-foreground">{summary}</span>
         {action}
       </div>
       {children && <div className="px-4 pb-4 pl-[3.75rem]">{children}</div>}
@@ -75,12 +75,12 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold">{p.repo}</h1>
+        <h1 className="text-title font-semibold">{p.repo}</h1>
         <ProjectStatus p={p} />
         <a className="text-muted-foreground hover:text-foreground" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer" aria-label="Open on GitHub">
           <ExternalLink className="size-4" />
         </a>
-        <span className="ml-auto flex items-center gap-3 font-mono text-[12px] text-muted-foreground">
+        <span className="ml-auto flex items-center gap-3 font-mono text-small text-muted-foreground">
           <span>branch {p.default_branch}</span>
           {p.sandbox_id && <span>sandbox {p.sandbox_id}</span>}
         </span>
@@ -139,7 +139,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
         >
           {p.suggestion && !editing && (
             <div className="mb-3 rounded-md border border-info/40 bg-info/5 p-3">
-              <div className="mb-2 flex items-center gap-2 text-[13px] font-medium text-info">
+              <div className="mb-2 flex items-center gap-2 text-body font-medium text-info">
                 <Sparkles className="size-3.5" /> Suggested by Codex
               </div>
               <Log text={p.suggestion} className="max-h-52" />
@@ -211,7 +211,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               }
             }}
           />
-          {chosen.length > 1 && <p className="mt-2 text-[13px] text-muted-foreground">Each size beyond the first adds about half the run time.</p>}
+          {chosen.length > 1 && <p className="mt-2 text-body text-muted-foreground">Each size beyond the first adds about half the run time.</p>}
         </Step>
 
         <Step
@@ -240,25 +240,25 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               {p.setup_error && <Log text={p.setup_error} className="border-bad/40 text-bad" />}
               {setupJob?.log && (
                 <details open={setup === "running"}>
-                  <summary className="cursor-pointer text-[13px] text-muted-foreground">Setup log</summary>
+                  <summary className="cursor-pointer text-body text-muted-foreground">Setup log</summary>
                   <Log text={setupJob.log} className="mt-2" />
                 </details>
               )}
               {p.proof && (
                 <details>
-                  <summary className="cursor-pointer text-[13px] text-muted-foreground">Screenshot after setup</summary>
+                  <summary className="cursor-pointer text-body text-muted-foreground">Screenshot after setup</summary>
                   <ShotList shots={[{ src: `/api/projects/${p.id}/setup-proof.png`, caption: "The app on the copy after setup" }]} className="mt-2 max-w-xl" />
                 </details>
               )}
               {p.notes && (
                 <details>
-                  <summary className="cursor-pointer text-[13px] text-muted-foreground">NOTES.md</summary>
+                  <summary className="cursor-pointer text-body text-muted-foreground">NOTES.md</summary>
                   <Log text={p.notes} className="mt-2" />
                 </details>
               )}
               {p.recipe && (
                 <details>
-                  <summary className="cursor-pointer text-[13px] text-muted-foreground">verify.yml</summary>
+                  <summary className="cursor-pointer text-body text-muted-foreground">verify.yml</summary>
                   <Log text={p.recipe} className="mt-2" />
                 </details>
               )}
@@ -289,7 +289,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             </Button>
           }
         >
-          <p className="mt-2 text-[13px] text-muted-foreground">
+          <p className="mt-2 text-body text-muted-foreground">
             A PR with the label <Mono>gespann</Mono> stays a draft, which GitHub cannot merge, until its current commit passes. To merge anyway, comment <Mono>/gespann approve</Mono>, click Ready for review, or remove the label. Turning the gate off releases every PR it holds.
           </p>
         </Step>
@@ -297,12 +297,12 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
 
       {p.jobs.some((j) => j.kind !== "run") && (
         <details className="mt-6">
-          <summary className="cursor-pointer text-[13px] text-muted-foreground">Jobs</summary>
+          <summary className="cursor-pointer text-body text-muted-foreground">Jobs</summary>
           <Card className="mt-2">
             {p.jobs
               .filter((j) => j.kind !== "run")
               .map((j) => (
-                <div key={j.id} className="flex items-center gap-3 border-b border-border px-4 py-2 text-[13px] last:border-0">
+                <div key={j.id} className="flex items-center gap-3 border-b border-border px-4 py-2 text-body last:border-0">
                   <Mono className="w-10 text-muted-foreground">#{j.id}</Mono>
                   <span className="w-14">{j.kind}</span>
                   <JobStatus job={j} />
@@ -320,7 +320,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             <Card className="mb-6 border-info/40">
               <div className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <Wrench className="size-4 text-info" />
-                <span className="min-w-0 flex-1 text-[13px]">Pull requests can be tested once the setup is done. It runs once per repository.</span>
+                <span className="min-w-0 flex-1 text-body">Pull requests can be tested once the setup is done. It runs once per repository.</span>
                 <Button size="sm" onClick={() => navigate(`/projects/${p.id}/setup`)}>
                   Go to setup
                 </Button>
@@ -330,7 +330,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             !p.active && (
               <Card className="mb-6 border-warn/40">
                 <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-                  <span className="min-w-0 flex-1 text-[13px]">New pull requests are not tested automatically while testing is paused.</span>
+                  <span className="min-w-0 flex-1 text-body">New pull requests are not tested automatically while testing is paused.</span>
                   <Button size="sm" disabled={busy} onClick={() => post("/active", { active: true })}>
                     Start testing
                   </Button>

@@ -24,7 +24,7 @@ const DOT_LABEL: Record<Dot, string> = { ok: "active", info: "preparing", bad: "
 
 function rowClass(active?: boolean, indent?: boolean) {
   return cn(
-    "relative flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left text-[13px] transition-colors",
+    "relative flex h-9 w-full items-center gap-2.5 rounded-md px-2 text-left text-body transition-colors",
     indent && "ml-3.5 w-[calc(100%-0.875rem)] pl-3",
     active ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
   );
@@ -93,7 +93,7 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mb-1 flex items-center justify-between px-2">
-          <Link to="/projects" className={cn("text-[12px] font-medium", section.kind === "projects" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
+          <Link to="/projects" className={cn("text-small font-medium", section.kind === "projects" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
             Projects
           </Link>
           <Link to="/projects/new" className={cn("rounded p-0.5 hover:bg-accent", section.kind === "new" ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
@@ -101,7 +101,7 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
           </Link>
         </div>
         {projects?.length === 0 && (
-          <Link to="/projects/new" className="block px-2 py-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+          <Link to="/projects/new" className="block px-2 py-1.5 text-body text-muted-foreground hover:text-foreground">
             Add your first repository
           </Link>
         )}
@@ -118,7 +118,7 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
                     <FolderGit2 className="size-4" />
                   </span>
                   <span className="min-w-0 flex-1 truncate">
-                    <span className="text-muted-foreground">{owner}/</span>
+                    <span className="text-small text-muted-foreground">{owner}/</span>
                     <span className={here ? "text-foreground" : undefined}>{name}</span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1">
@@ -157,7 +157,7 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
         {me.user && (
           <div className="flex items-center gap-2.5 px-2 pt-2">
             {me.user.avatar ? <img src={me.user.avatar} alt="" className="size-5 rounded-full" /> : <span className="size-5 rounded-full bg-muted" />}
-            <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground">{me.user.login}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-small text-muted-foreground">{me.user.login}</span>
             <button
               className="cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               title="Sign out"
@@ -216,7 +216,7 @@ function Rail({ me, section, projects }: { me: Me; section: Section; projects: P
             <Fragment key={p.id}>
               <Link
                 to={`/projects/${p.id}`}
-                className={cn(railClass(here), "border font-mono text-[12px]", here ? "border-foreground/25" : "border-border")}
+                className={cn(railClass(here), "border font-mono text-small", here ? "border-foreground/25" : "border-border")}
                 title={`${p.repo}, ${DOT_LABEL[projectDot(p)]}`}
                 aria-label={p.repo}
                 aria-current={here && tab === null ? "page" : undefined}
