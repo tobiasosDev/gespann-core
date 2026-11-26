@@ -425,7 +425,18 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   let unread: string | null = null;
   try {
     await ensureRepo(d, b, p);
-    await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(run.base)}`);
+    // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was at
+    // the last push, so a rerun after newer merges would otherwise test the PR without them.
+    const tracking = `refs/remotes/origin/${run.base_ref}`;
+    await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(`+refs/heads/${run.base_ref}:${tracking}`)}`);
+    const read = await d.sandboxes.exec(b.id, `cd ${b.repo} && git rev-parse --verify --quiet ${q(`${tracking}^{commit}`)}`, 30);
+    const tip = read.stdout.trim();
+    if (read.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(tip)) throw new Error(`could not read ${run.base_ref} after fetching it: ${read.stdout.slice(-300)}`);
+    if (tip !== run.base) {
+      log(`testing on ${run.base_ref} at ${tip.slice(0, 12)}, newer than ${run.base.slice(0, 12)} from GitHub`);
+      d.db.updateRun(run.id, { base: tip });
+      run = { ...run, base: tip };
+    }
     const merge = await d.sandboxes.exec(
       b.id,
       // On a failed merge the files in conflict follow, one per line, and the merge is undone.

@@ -216,6 +216,8 @@ class FakeSandboxes implements Sandboxes {
     this.commands.push(command);
     if (command.startsWith("rm -f ")) this.files.delete(command.slice(6));
     const missing = command.startsWith("test -d") || (command.startsWith("test -f ") && !this.files.has(command.slice(8)));
+    // The base branch's tip after the run's fetch.
+    if (command.includes("git rev-parse --verify --quiet 'refs/remotes/origin/")) return { exitCode: 0, stdout: `${"b".repeat(40)}\n`, stderr: "" };
     return { exitCode: missing ? 1 : 0, stdout: command.includes("rev-parse HEAD 2>/dev/null") ? "" : "ok", stderr: "" };
   }
   /** What the stand-in for Codex's setup writes as the recipe. */
@@ -463,6 +465,7 @@ test("worker: a PR that does not merge onto its base is not tested: no FAIL, a n
   sh("git checkout -q -b pr && echo pr > café.tsx && git commit -qam pr && git checkout -q main && echo main > café.tsx && git commit -qam main");
   const base = sh("git rev-parse main");
   const head = sh("git rev-parse pr");
+  sh("git update-ref refs/remotes/origin/main main");
   const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
   const db = new Db(":memory:");
   const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
@@ -471,7 +474,7 @@ test("worker: a PR that does not merge onto its base is not tested: no FAIL, a n
   class Git extends FakeSandboxes {
     override async exec(id: string, command: string) {
       // The merge runs for real, in the repository above instead of the sandbox's.
-      if (command.includes("merge --quiet --no-edit")) {
+      if (command.startsWith("cd /srv/fresh/repo && git rev-parse") || command.includes("merge --quiet --no-edit")) {
         this.commands.push(command);
         const r = spawnSync("sh", ["-c", command.replace("cd /srv/fresh/repo", `cd ${repo}`)], { encoding: "utf8" });
         return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
@@ -514,6 +517,81 @@ test("worker: a PR that does not merge onto its base is not tested: no FAIL, a n
   assert.equal(comments.length, 1);
   assert.match(comments[0] ?? "", /Merge main into the PR branch \(or rebase onto it\), resolve the conflicts in `café\.tsx` and push/);
   assert.match(db.job(job.id)?.log ?? "", /merge conflicts with main in `café\.tsx`\. Nothing was tested/);
+});
+
+test("worker: a run tests the PR on its base branch as it is now, not on the older base commit GitHub reported", async () => {
+  // GitHub's base commit of a PR stays at the last push; main got another commit since.
+  const repo = mkdtempSync(join(tmpdir(), "gespann-base-"));
+  const sh = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: repo, encoding: "utf8" }).stdout.trim();
+  sh("git init -q -b main && git config user.email t@t && git config user.name t && echo a > a.ts && git add . && git commit -qm base");
+  const stale = sh("git rev-parse main");
+  sh("git checkout -q -b pr && echo pr > pr.ts && git add . && git commit -qm pr && git checkout -q main && echo later > later.ts && git add . && git commit -qm later");
+  const now = sh("git rev-parse main");
+  const head = sh("git rev-parse pr");
+  // What the sandbox's fetch of main leaves behind.
+  sh("git update-ref refs/remotes/origin/main main");
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe: "version: 1" });
+  class Git extends FakeSandboxes {
+    override async exec(id: string, command: string) {
+      if (command.startsWith("cd /srv/fresh/repo && git rev-parse") || command.includes("merge --quiet --no-edit")) {
+        this.commands.push(command);
+        const r = spawnSync("sh", ["-c", command.replace("cd /srv/fresh/repo", `cd ${repo}`)], { encoding: "utf8" });
+        return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+      }
+      return super.exec(id, command);
+    }
+    override async download(_id: string, path: string) {
+      return Buffer.from(path.endsWith("project.tgz") ? "TGZ" : "");
+    }
+  }
+  const sb = new Git();
+  sb.files.set("/srv/fresh/gespann/project/verify.yml", "version: 1");
+  const github = {
+    installationToken: async () => "tok",
+    otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }),
+    pull: async () => ({ number: 4, title: "t", body: "", state: "open", head: { sha: head }, labels: [] }),
+    linkedIssues: async () => [],
+    updateCheck: async () => undefined,
+    comment: async () => 77,
+  } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head, base: stale, base_ref: "main", token: "0".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+
+  assert.match(sb.commands.join("\n"), /fetch --quiet origin .*'\+refs\/heads\/main:refs\/remotes\/origin\/main'/, "the sandbox fetches main as it is now");
+  assert.equal(db.run_(run)?.base, now, "the run records the base it was tested on");
+  assert.equal(spawnSync("git", ["merge-base", "--is-ancestor", now, "HEAD"], { cwd: repo }).status, 0, "the tested checkout has main's newer commit");
+  assert.equal(spawnSync("git", ["merge-base", "--is-ancestor", head, "HEAD"], { cwd: repo }).status, 0, "and the PR");
+  assert.match(sb.commands.join("\n"), new RegExp(`gespann verify prepare .*--base ${now}`), "the tester diffs against that base");
+  assert.match(db.job(job.id)?.log ?? "", new RegExp(`testing on main at ${now.slice(0, 12)}, newer than ${stale.slice(0, 12)} from GitHub`));
+});
+
+test("worker: a run whose base branch cannot be read after the fetch fails instead of testing an old base", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe: "version: 1" });
+  class NoTip extends FakeSandboxes {
+    override async exec(id: string, command: string) {
+      if (command.includes("git rev-parse --verify --quiet")) return (this.commands.push(command), { exitCode: 1, stdout: "", stderr: "" });
+      return super.exec(id, command);
+    }
+  }
+  const sb = new NoTip();
+  sb.files.set("/srv/fresh/gespann/project/verify.yml", "version: 1");
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ number: 4, title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [], updateCheck: async () => undefined, comment: async () => 77 } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.match(db.run_(run)?.error ?? "", /could not read main after fetching it/);
+  assert.doesNotMatch(sb.commands.join("\n"), /merge --quiet --no-edit|gespann verify prepare/, "nothing merged or tested on the old base");
 });
 
 test("parallel: two PR runs of one project run at once in two sandboxes; the new one takes over the recipe as the project's bundle", async () => {

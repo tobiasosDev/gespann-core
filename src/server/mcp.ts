@@ -36,7 +36,7 @@ export const MAX_RUNS_PER_HEAD = 3;
 
 const INSTRUCTIONS =
   "gespann tests pull requests in a production-near copy of the app and writes a verdict (PASS, FAIL, BLOCKED, SKIP) with checks, screenshots and a recording. " +
-  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. rerun tests the PR's current head again, e.g. after a run failed on something outside the PR or after you pushed a fix that did not start a run; it does nothing while a run of the PR is queued or running, and stops after " +
+  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. Otherwise do not rebase or merge the base just to catch up: every run merges the PR into its base branch as it is when the run starts. When the base got changes after a PASS that may affect the PR, use rerun. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. rerun tests the PR's current head again, e.g. after a run failed on something outside the PR or after you pushed a fix that did not start a run; it does nothing while a run of the PR is queued or running, and stops after " +
   `${MAX_RUNS_PER_HEAD} runs of the same head. No tool cancels or approves anything.`;
 
 class ToolError extends Error {}
@@ -271,7 +271,7 @@ const TOOLS: Tool[] = [
   {
     name: "rerun",
     title: "Rerun",
-    description: `Tests the pull request of a run again, at the PR's current head (not the run's old head), like Rerun on the run page. Use it when a run failed or was blocked by something outside the PR, or when you pushed and no run started. Does nothing while a run of the PR is queued or running (returns that run), refuses closed PRs and stops after ${MAX_RUNS_PER_HEAD} runs of the same head. Give run_id, or repo and pr. Follow the new run with get_run.`,
+    description: `Tests the pull request of a run again, at the PR's current head (not the run's old head) merged into its base branch as it is now, like Rerun on the run page. Use it when a run failed or was blocked by something outside the PR, when you pushed and no run started, or when the base branch changed since a PASS (instead of a rebase). Does nothing while a run of the PR is queued or running (returns that run), refuses closed PRs and stops after ${MAX_RUNS_PER_HEAD} runs of the same head. Give run_id, or repo and pr. Follow the new run with get_run.`,
     inputSchema: { type: "object", properties: { run_id: { type: "integer" }, repo: { type: "string", description: "owner/repo or project id" }, pr: { type: "integer", minimum: 1 } }, additionalProperties: false },
     writes: true,
     call: async (a, v, d) => {
