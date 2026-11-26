@@ -53,7 +53,7 @@ The orchestrator:
 | `UI_URL` | where it reaches the UI (default `BASE_URL`) |
 | `HEALTH_PORT` | port of its `GET /healthz` (default 3001) |
 
-Restarting or redeploying either service never loses a job. Every long step runs as a background process in the sandbox; when the orchestrator stops (a deploy, a crash), the next one picks each job up where it was and attaches to what still runs. While the UI is down, the orchestrator waits for it. A job taken over more than ten times fails instead of starting again.
+Restarting or redeploying either service never loses a job. Every long step runs as a background process in the sandbox; when the orchestrator stops (a deploy, a crash), the next one picks each job up where it was and attaches to what still runs. While the UI is down, the orchestrator waits for it, up to 20 minutes per call; a longer outage fails the job. A job taken over more than ten times fails instead of starting again.
 
 ## Sandboxes
 

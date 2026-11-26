@@ -17,7 +17,7 @@ the job up where it was (see [Picking a job up again](#picking-a-job-up-again)).
 The recipe runner inside the sandbox (`gespann verify prepare|finish`, prompts, recipe checks) stays the
 TypeScript CLI that the orchestrator installs into every sandbox at `GESPANN_REF`.
 
-The UI runs no jobs itself: without the orchestrator, jobs stay queued and Codex sign-in waits.
+The UI runs no jobs itself: without the orchestrator, jobs stay queued and Settings refuses a Codex sign-in until it runs again.
 
 ## Picking a job up again
 

@@ -106,7 +106,7 @@ async fn check(cx: &Cx<'_>, run: &Run, key: &str, title: &str, summary: &str) {
         .await;
 }
 
-pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run, legacy: bool) -> Result<()> {
+pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()> {
     let (ctx, db) = (cx.ctx, &cx.ctx.db);
     cx.jr
         .step("started", || async move {
@@ -164,9 +164,6 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run, legacy: bool
     // The base the PR was merged onto: its branch as it is now, maybe newer than GitHub's.
     let current = Run { base, ..run.clone() };
     let run = &current;
-    if legacy {
-        down_leftovers(cx, b, run).await?;
-    }
     let (first, again) = gespann_ids(run);
     let mut dir = format!("{}/runs/{first}", b.gespann);
     let mut a = Attempt::failed(true);
@@ -369,34 +366,6 @@ async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<
     let (base, c): (Result<String>, Result<Context>) = tokio::join!(merge_fut, context_fut);
     let base = base?;
     Ok((c?, base))
-}
-
-/// A run lost before it stored a step may have left its copy up: finish tears it down
-/// before the run starts again. Which copies are up is decided once: later the attempt's own copy is up.
-async fn down_leftovers(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
-    let sb = cx.sb();
-    let left: Vec<String> = cx
-        .jr
-        .step("leftovers", || async move {
-            let (first, again) = gespann_ids(run);
-            let mut left = vec![];
-            for id in [first, again] {
-                if sb.exec(&b.id, &format!("test -f {}/runs/{id}/work/state.json", b.gespann), 30).await?.exit_code == Some(0) {
-                    left.push(id);
-                }
-            }
-            Ok(left)
-        })
-        .await?;
-    for id in left {
-        cx.log("taking down the copy that the attempt before the restart left up");
-        let dir = format!("{}/runs/{id}", b.gespann);
-        let command = with_env(b, &format!("cd {} && gespann verify finish --recipe {} --pr {} --head {} --base {} --run {id} --dir {dir} --wait 0", b.repo, b.recipe, run.pr, run.head, run.base));
-        if let Err(e) = long(cx, b, &format!("leftovers.{id}"), &command, Duration::from_secs(20 * 60), &never).await {
-            cx.log(&format!("could not take the old copy down: {e:#}"));
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

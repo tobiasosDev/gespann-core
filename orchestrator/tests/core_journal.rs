@@ -28,7 +28,6 @@ fn futures_are_send() {
 #[tokio::test]
 async fn step_runs_once() {
     let j = Journal::new(Db::memory().unwrap(), 7);
-    assert!(j.is_empty().unwrap());
     let runs = AtomicU64::new(0);
     let f = || async {
         runs.fetch_add(1, Ordering::SeqCst);
@@ -38,7 +37,6 @@ async fn step_runs_once() {
     let again: Vec<String> = j.step("s", || async { anyhow::bail!("must not run") }).await.unwrap();
     assert_eq!(again, vec!["a"]);
     assert_eq!(runs.load(Ordering::SeqCst), 1);
-    assert!(!j.is_empty().unwrap());
     // An error is not stored: the step runs again.
     assert!(j.step::<i32, _, _>("e", || async { anyhow::bail!("no") }).await.is_err());
     assert_eq!(j.step("e", || async { Ok(3) }).await.unwrap(), 3);

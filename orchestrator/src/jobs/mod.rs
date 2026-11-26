@@ -110,10 +110,6 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
     if job.restarts > worker::MAX_TAKEOVERS {
         return Err(anyhow!("the orchestrator restarted during this job {} times; it does not start again", job.restarts));
     }
-    // A job an attempt left before it stored anything: a run takes down the copy it may have left up.
-    // Decided once and kept, so later takeovers decide the same.
-    let was_empty = cx.jr.is_empty()?;
-    let legacy = cx.jr.step("takeover", || async move { Ok(was_empty && job.restarts > 0) }).await?;
     match job.kind.as_str() {
         "login" => Err(anyhow!("Codex sign-in moved to Settings")),
         "setup" => {
@@ -177,7 +173,7 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
             if let Some(err) = refused {
                 return Err(err);
             }
-            run::verify_run(cx, p, &run, legacy).await?;
+            run::verify_run(cx, p, &run).await?;
             Ok(Flow::Done)
         }
     }

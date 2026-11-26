@@ -39,11 +39,6 @@ impl Journal {
         self
     }
 
-    /// True when the job has no stored step yet (a fresh job, or one an attempt left before its first step).
-    pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.db.step_count(self.job_id)? == 0)
-    }
-
     /// True when `key` has a stored result.
     pub fn step_done(&self, key: &str) -> Result<bool> {
         Ok(self.db.step_get(self.job_id, key)?.is_some())
