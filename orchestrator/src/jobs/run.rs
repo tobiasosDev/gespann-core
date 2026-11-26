@@ -22,7 +22,7 @@ use crate::journal::Long;
 use crate::sandbox::scripts::{finish_recording_script, q};
 use crate::sandbox::LongResult;
 use crate::ui::Context;
-use crate::verify::{copy_gaps, empty_progress, merge_tester, parse_progress, same_screens, parse_thumbs, screen_for, start_stage, thumb_command, viewports_of, with_aliases, Progress, Stage, Viewport};
+use crate::verify::{combine, copy_gaps, empty_progress, merge_tester, parse_progress, same_screens, parse_thumbs, screen_for, start_stage, thumb_command, viewports_of, with_aliases, Progress, Stage, Viewport, FIRST};
 
 /// Marks the files in conflict in the output of a failed merge.
 const UNMERGED: &str = "gespann-unmerged: ";
@@ -50,6 +50,38 @@ fn conflict_title(base_ref: &str, files: &[String]) -> String {
 fn gespann_ids(run: &Run) -> (String, String) {
     let part = |from: usize| run.token.chars().skip(from).take(12).collect::<String>();
     (part(0), part(12))
+}
+
+/// Copies the first test's screenshots that the combined result keeps next to the second test's
+/// proof, and writes the combined verdict there. False when that failed: the sandbox then keeps
+/// both attempts' proof instead of dropping it after collection.
+async fn keep_first(cx: &Cx<'_>, b: &Sbx, from: &str, to: &str, carried: &[String], judged: &Value) -> bool {
+    let sb = cx.sb();
+    let safe = |f: &&String| !f.is_empty() && f.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    let mut ok = carried.iter().all(|f| safe(&f));
+    let copy: Vec<String> = carried
+        .iter()
+        .filter(safe)
+        .map(|f| format!("cp -f {} {} 2>&1 || fail=1", q(&format!("{from}/{f}")), q(&format!("{to}/{FIRST}{f}"))))
+        .collect();
+    if !copy.is_empty() {
+        match sb.exec(&b.id, &format!("fail=0; {}; exit $fail", copy.join("; ")), 120).await {
+            Ok(r) if r.exit_code == Some(0) => {}
+            Ok(r) => {
+                cx.log(&format!("✗ some screenshots of the first test were not kept: {}", cut(r.stdout.trim(), 400)));
+                ok = false;
+            }
+            Err(e) => {
+                cx.log(&format!("✗ some screenshots of the first test were not kept: {e:#}"));
+                ok = false;
+            }
+        }
+    }
+    if let Err(e) = sb.write_file(&b.id, &format!("{to}/verdict.json"), format!("{:#}\n", judged["verdict"]).as_bytes()).await {
+        cx.log(&format!("✗ could not write the combined verdict.json: {e:#}"));
+        ok = false;
+    }
+    ok
 }
 
 pub(crate) struct Attempt {
@@ -167,6 +199,8 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
     let (first, again) = gespann_ids(run);
     let mut dir = format!("{}/runs/{first}", b.gespann);
     let mut a = Attempt::failed(true);
+    // False when the first test's proof could not be put next to the second's: then nothing is dropped.
+    let mut kept = true;
     if let Some(pr) = pr.as_ref().filter(|_| !cancelled()) {
         a = attempt(cx, p, run, b, &first, &dir, pr, 1).await?;
         let gaps = copy_gaps(a.judged.as_ref());
@@ -211,7 +245,16 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
                     .await?;
                 let second = attempt(cx, p, run, b, &again, &again_dir, pr, 2).await?;
                 if has_verdict(second.judged.as_ref()) {
+                    // A failure the first test found stays in the result, with its screenshots.
+                    let combined = a.judged.as_ref().zip(second.judged.as_ref()).and_then(|(f, s)| combine(f, s));
                     a = second;
+                    if let Some((judged, carried)) = combined {
+                        cx.log(&format!("verdict: FAIL, the second test ended {} but the first one found a fault in the change", a.outcome));
+                        let (from, to, files, verdict) = (&format!("{dir}/out"), &format!("{again_dir}/out"), &carried, &judged);
+                        // Once: after a takeover the sandbox's proof may already be gone.
+                        kept = cx.jr.step("a2.keep", || async move { Ok(keep_first(cx, b, from, to, files, verdict).await) }).await?;
+                        a = Attempt { judged: Some(judged), outcome: "FAIL".into(), clean: a.clean };
+                    }
                     dir = again_dir;
                 } else {
                     cx.log("the second test produced no verdict; the result of the first test stands");
@@ -235,7 +278,7 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
     if cancelled() {
         return stop(cx, b, run).await;
     }
-    if col.complete {
+    if col.complete && kept {
         drop_proof(cx, b, run).await?;
     }
     let judged = a.judged.map(|j| with_aliases(&j, &col.alias));
