@@ -22,8 +22,9 @@ function Step({ n, title, state, summary, action, children }: { n: number; title
       <div className="flex flex-wrap items-center gap-3 px-4 py-3">
         <StepIcon state={state} />
         <span className="w-4 font-mono text-small text-muted-foreground">{n}</span>
-        <span className="w-44 font-medium">{title}</span>
-        <span className="min-w-0 flex-1 text-body text-muted-foreground">{summary}</span>
+        <span className="flex-1 font-medium whitespace-nowrap sm:w-44 sm:flex-none sm:whitespace-normal">{title}</span>
+        {/* Phones: the summary takes its own line under the title instead of a narrow column beside it. */}
+        <span className="order-last min-w-0 basis-full pl-14 text-body break-words text-muted-foreground sm:order-none sm:basis-0 sm:flex-1 sm:pl-0">{summary}</span>
         {action}
       </div>
       {children && <div className="px-4 pb-4 pl-[3.75rem]">{children}</div>}
