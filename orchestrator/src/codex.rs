@@ -110,7 +110,8 @@ where
     }
     let sealed = ctx.db.agent(owner_id)?.and_then(|a| a.openrouter_key).ok_or_else(|| anyhow!("Add your OpenRouter key in Settings first: the agent runs on your OpenRouter key."))?;
     let api_key = open(&ctx.cfg.session_secret, &sealed)?;
-    let sb = ctx.sb.as_ref();
+    let sandboxes = ctx.sandboxes_for(owner_id)?;
+    let sb = sandboxes.as_ref();
     let file = format!("{}/{OPENROUTER_KEY_FILE}", sb.home(sandbox_id));
     // Written once per step under the journal: the step's command deletes it when it starts, and a
     // takeover attaches to that command instead of writing the key again.
