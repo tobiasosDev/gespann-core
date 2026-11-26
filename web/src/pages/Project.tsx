@@ -2,6 +2,7 @@ import { Check, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from 
 import { useEffect, useState, type ReactNode } from "react";
 import { ago, api, type ProjectDetail, useResource } from "../api.ts";
 import { PrRuns, RunsPanel } from "../components/PrRuns.tsx";
+import { ScreenSizes } from "../components/ScreenSizes.tsx";
 import { ShotList } from "../components/Shots.tsx";
 import { Button, Card, CardHeader, Input, Log, Mono, Textarea } from "../components/ui.tsx";
 import { JobStatus, navigate, ProjectStatus } from "../nav.tsx";
@@ -40,6 +41,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const [editing, setEditing] = useState(false);
   const [pr, setPr] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Shown at once on a click; the server's list takes over again after the save. */
+  const [sizes, setSizes] = useState<string[] | null>(null);
   useEffect(() => {
     if (p && !editing) {
       setCriteria(p.criteria);
@@ -67,6 +70,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const crit: StepState = "done";
   const setup: StepState = p.setup === "ready" ? "done" : p.setup === "running" || p.setup === "queued" ? "running" : p.setup === "failed" ? "failed" : "todo";
   const start: StepState = p.active ? "done" : "todo";
+  const chosen = sizes ?? p.viewports;
 
   return (
     <>
@@ -183,6 +187,35 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
 
         <Step
           n={3}
+          title="Screen sizes"
+          state="done"
+          summary={
+            chosen.length === 0
+              ? "The browser's own size, 1440 × 900. Pick the sizes your users have."
+              : `Every check runs at ${chosen.length === 1 ? "one size" : `${chosen.length} sizes`}: ${p.viewport_presets
+                  .filter((v) => chosen.includes(v.id))
+                  .map((v) => v.name)
+                  .join(", ")}.`
+          }
+        >
+          <ScreenSizes
+            presets={p.viewport_presets}
+            selected={chosen}
+            disabled={sizes !== null}
+            onChange={async (next) => {
+              setSizes(next);
+              try {
+                await post("/viewports", { viewports: next });
+              } finally {
+                setSizes(null);
+              }
+            }}
+          />
+          {chosen.length > 1 && <p className="mt-2 text-[13px] text-muted-foreground">Each size beyond the first adds about half the run time.</p>}
+        </Step>
+
+        <Step
+          n={4}
           title="Environment"
           state={setup}
           summary={
@@ -234,7 +267,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
         </Step>
 
         <Step
-          n={4}
+          n={5}
           title="Test pull requests"
           state={start}
           summary={p.active ? "On: every matching PR gets the check gespann/verify and a comment." : "Off."}
@@ -246,7 +279,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
         />
 
         <Step
-          n={5}
+          n={6}
           title="Merge gate"
           state={p.gate ? "done" : "todo"}
           summary={p.gate ? "On: PRs with the label gespann cannot be merged until they pass." : "Off: results are reported, merging stays free."}

@@ -9,6 +9,7 @@ import { html } from "hono/html";
 import { triggered } from "../verify/plan.ts";
 import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
+import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
@@ -297,6 +298,8 @@ export function createApp(d: AppDeps): Hono<Env> {
       codex_account: owner?.codex_account ?? null,
       own: p.owner_id === me(c).id,
       default_checks: DEFAULT_CHECKS,
+      viewports: viewportsOf(p.viewports).map((v) => v.id),
+      viewport_presets: VIEWPORTS,
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
       runs: db.runs(p.id),
       jobs: db.jobs(p.id, 30).map((j) => ({ ...j, log: j.kind === "run" ? "" : j.log })),
@@ -323,6 +326,16 @@ export function createApp(d: AppDeps): Hono<Env> {
     const model = String(body.model ?? "").trim();
     if (model && !/^[A-Za-z0-9._:-]{1,80}$/.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
     db.updateProject(p.id, { criteria: String(body.criteria ?? "").slice(0, 8000), model: model || null, suggestion: null });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/projects/:id/viewports", async (c) => {
+    const p = project(c);
+    const body = await c.req.json<{ viewports?: unknown }>();
+    if (!Array.isArray(body.viewports)) throw new HttpError(400, "viewports: a list of screen sizes");
+    const unknown = body.viewports.filter((id) => !VIEWPORTS.some((v) => v.id === id));
+    if (unknown.length) throw new HttpError(400, `viewports: unknown size ${unknown.map(String).join(", ")}`);
+    db.updateProject(p.id, { viewports: viewportsOf(body.viewports.join(",")).map((v) => v.id).join(",") });
     return c.json({ ok: true });
   });
 

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verify/prompt.ts";
+import { screenFor, viewportsOf } from "../verify/viewports.ts";
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
 import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/similar.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
@@ -510,6 +511,16 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     const recipe = parseRecipe(current.recipe ?? (await d.sandboxes.readFile(b.id, b.recipe)) ?? "");
     const addendum = recipe.prompt ? ((await d.sandboxes.readFile(b.id, `${b.project}/${recipe.prompt}`)) ?? (await d.sandboxes.readFile(b.id, `${b.repo}/${recipe.prompt}`)) ?? "") : "";
     const notes = (await d.sandboxes.readFile(b.id, `${b.project}/NOTES.md`)) ?? "";
+    const viewports = viewportsOf(current.viewports);
+    const screen = screenFor(viewports);
+    if (screen) {
+      // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
+      await d.sandboxes.writeFile(b.id, `${d.sandboxes.home(b.id)}/.gespann-screen`, `${screen}\n`);
+      await d.sandboxes.ensureRunning(b.id);
+    }
+    // Every further screen size repeats the checks: half the recipe's time more for each.
+    const minutes = Math.round(recipe.timeout * (1 + Math.max(0, viewports.length - 1) / 2));
+    if (viewports.length) log(`screen sizes to test: ${viewports.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ")}`);
     const prompt = testerPrompt({
       testerNote: d.sandboxes.testerNote,
       repo: p.repo,
@@ -523,6 +534,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       recipe,
       addendum: [notes, addendum].filter(Boolean).join("\n\n"),
       issues: issues.map((i) => i.ref),
+      viewports,
     });
     await d.sandboxes.writeFile(b.id, `${dir}/work/prompt.txt`, prompt);
     const rec = `${dir}/out/recording.mp4`;
@@ -538,7 +550,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     try {
       tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
         runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
-          timeoutMs: recipe.timeout * 60_000,
+          timeoutMs: minutes * 60_000,
           isCancelled: () => d.db.job(job.id)?.status === "cancelled",
         }),
       );
@@ -549,7 +561,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
         await d.sandboxes.exec(b.id, `test -s ${rec} && ffmpeg -loglevel error -y -i ${rec} -c copy -movflags +faststart ${rec}.tmp.mp4 && mv ${rec}.tmp.mp4 ${rec}; rm -f ${rec}.tmp.mp4`, 300).catch(() => undefined);
       }
     }
-    log(tester.timedOut ? `the tester ran out of time (${recipe.timeout} min)` : `the tester finished (exit ${tester.exitCode})`);
+    log(tester.timedOut ? `the tester ran out of time (${minutes} min)` : `the tester finished (exit ${tester.exitCode})`);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });

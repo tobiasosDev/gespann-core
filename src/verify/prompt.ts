@@ -1,4 +1,5 @@
 import type { Recipe } from "./recipe.ts";
+import type { Viewport } from "./viewports.ts";
 
 /**
  * What every PR is checked for when the team wrote nothing else. Distilled from the acceptance job that
@@ -28,12 +29,16 @@ export interface TesterInput {
   testerNote?: string | undefined;
   /** Refs of the issues the PR resolves (`#12`); their text is in `work/issues.md`. */
   issues?: string[];
+  /** Screen sizes the team wants every check run at; empty: the browser's own size. */
+  viewports?: Viewport[];
 }
 
 /** The generic tester prompt. Project knowledge comes from the criteria, the recipe and its addendum. */
 export function testerPrompt(t: TesterInput): string {
   const r = t.recipe;
   const issues = t.issues ?? [];
+  const sizes = t.viewports ?? [];
+  const sizeList = sizes.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ");
   const parts: string[] = [];
   parts.push(
     `You are the independent tester for pull request #${t.pr} of ${t.repo}, head ${t.head}, merged onto base ${t.base}. You did not write this change. You test it the way a careful human tester would, and you report what you saw.`,
@@ -76,7 +81,12 @@ export function testerPrompt(t: TesterInput): string {
     `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Before each action, state the result you expect.`,
     `3. Drive the change in the copy the way a user would, with the computer tools: open ${t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
     ...(t.testerNote ? [`   ${t.testerNote}`] : []),
-    `4. Save one screenshot per check with \`gespann shot ${t.out}/<short-name>.png\`, at the moment that proves its result, with the changed part in view. No screenshots of steps in between. Never save the same screen twice: when two checks end on the same screen (the same dialog with another option selected counts as the same screen), both name the same file in proof. A reviewer reads every picture, so fewer and clearer is better.`,
+    ...(sizes.length
+      ? [
+          `   The team wants the app tested at ${sizes.length === 1 ? "this screen size" : "these screen sizes"}: ${sizeList}. Run every check of your plan at each size, one size after the other: set the browser's viewport to exactly that width and height first (the browser tool's resize, e.g. browser_resize), reload the page, and confirm with \`window.innerWidth\` and \`window.innerHeight\` that the page sees that size. Look for what breaks only at that size: content cut off or overlapping, horizontal scrolling, a menu that cannot be opened, buttons out of reach or too small to tap.`,
+        ]
+      : []),
+    `4. Save one screenshot per check with \`gespann shot ${t.out}/<short-name>.png\`, at the moment that proves its result, with the changed part in view.${sizes.length > 1 ? " Each check gets one screenshot per size, the size in the name (e.g. `checkout-small-phone.png`)." : ""} No screenshots of steps in between. Never save the same screen twice: when two checks end on the same screen (the same dialog with another option selected counts as the same screen), both name the same file in proof. A reviewer reads every picture, so fewer and clearer is better.`,
     `5. Write ${t.out}/verdict.json, exactly this shape:`,
     `   {"verdict":"PASS"|"FAIL"|"BLOCKED"|"SKIP","summary":"one or two sentences","checks":[{"expect":"...","observed":"...","result":"pass"|"fail"|"blocked","proof":["file.png"],"fix":"only for blocked checks, see below"}],${issues.length ? '"goals":[{"issue":"#12","goal":"what the issue asks for, one sentence","observed":"what the PR achieves of it","result":"met"|"missed"|"blocked","proof":["file.png"]}],' : ""}"proof":["file names in ${t.out}"]}`,
     ...(issues.length
@@ -84,6 +94,7 @@ export function testerPrompt(t: TesterInput): string {
           `   One goal per issue (${issues.join(", ")}), judged against the issue's description. met: what the issue asks for works in the copy. missed: it does not, or the PR does only part of it, or it does something else; say in observed what is missing. blocked: the copy cannot show it (same rule as a blocked check). A missed goal is a FAIL even when every check passed; PASS needs every goal met.`,
         ]
       : []),
+    ...(sizes.length > 1 ? [`   One check per size: start \`expect\` with the size in brackets, e.g. "[${sizes[0]?.name} ${sizes[0]?.width}x${sizes[0]?.height}] ...". A check that works at one size and fails at another is a fail.`] : []),
     "   PASS only if every check passed and you saved proof. A check is blocked when the copy cannot produce the state it needs (no recorded answer, missing payment or webhook credentials, no device), with what it lacks as the observation. Any other check you could not run is a fail. BLOCKED when no check failed and at least one is blocked; FAIL when any check failed.",
     "   Tell a broken change from an incomplete copy. When something is missing because the copy does not build or start it (a site or app of the repo not built, a worker not running, no seed data, no local fake for a payment, mail or webhook provider), that is not a fault of the change: the check is blocked, and `fix` says in one sentence what the copy has to add, e.g. \"build and serve the landing site from apps/landing\". gespann then fixes the copy and runs the test again. Leave `fix` out when the copy cannot provide it at all (a real device, a real third-party account).",
     "",
