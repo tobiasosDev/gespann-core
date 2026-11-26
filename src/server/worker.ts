@@ -449,6 +449,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   let judged = a.judged;
   const outcome = a.outcome;
   const { files, alias } = await collect(d, b, run, `${dir}/out`, log);
+  await dropRunDirs(d, b, run, a.clean);
   if (judged) judged = withAliases(judged, alias);
   // A verdict without the issue goals says why, on the run page and over MCP.
   if (unread && judged?.verdict) {
@@ -459,6 +460,15 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   d.db.updateRun(run.id, { status: error && !judged?.verdict ? "failed" : "done", outcome, verdict: judged ? JSON.stringify(judged) : null, files: JSON.stringify(files), finished: new Date().toISOString() });
   await stopSandbox(d, b);
   await report(d, p, { ...run, outcome, error }, judged, files, log);
+}
+
+/**
+ * The server now has the proof: the run's folders in the sandbox go, of both attempts. After an
+ * unclean teardown the work folder stays, its state.json says what is still up.
+ */
+async function dropRunDirs(d: Deps, b: Box, run: Run, clean: boolean): Promise<void> {
+  const dirs = [run.token.slice(0, 12), run.token.slice(12, 24)].map((id) => `${b.gespann}/runs/${id}`);
+  await d.sandboxes.exec(b.id, `rm -rf ${dirs.map((x) => (clean ? x : `${x}/out`)).join(" ")}`, 120).catch(() => undefined);
 }
 
 /** A run lost in a restart may have left its copy up: finish tears it down before the run starts again. */

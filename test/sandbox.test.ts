@@ -347,6 +347,8 @@ test("restart: lost jobs go back into the queue with their run and setup, stop w
   assert.match(cmds, /gespann verify finish .* --run 000000000000 --dir \/srv\/fresh\/gespann\/runs\/000000000000 --wait 0/);
   assert.ok(cmds.indexOf("--wait 0") < cmds.indexOf("verify prepare"), "down first, then up");
   assert.match(cmds, /rm -rf \/srv\/fresh\/gespann\/runs\/000000000000 && mkdir -p/, "the lost attempt's proof is gone");
+  const drop = cmds.lastIndexOf("rm -rf /srv/fresh/gespann/runs/000000000000 /srv/fresh/gespann/runs/000000000000");
+  assert.ok(drop > cmds.lastIndexOf("-size -104857601c"), "once the proof is on the server, the run's folders in the sandbox go");
 
   // A job the server keeps losing (it may be what crashes it) stops starting again.
   for (let i = 0; i < 2; i++) {
