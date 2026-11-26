@@ -134,6 +134,7 @@ export function runComment(baseUrl: string, run: Run, judged: Judged | null, fil
     head: run.head,
     baseRef: run.base_ref,
     gate,
+    conflict: run.conflict ? (JSON.parse(run.conflict) as string[]) : null,
   });
 }
 

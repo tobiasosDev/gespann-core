@@ -8,18 +8,21 @@ export interface RunLike {
   outcome: "PASS" | "FAIL" | "BLOCKED" | "SKIP" | null;
   started: string | null;
   finished: string | null;
+  /** Set when the PR does not merge onto its base: nothing was tested. */
+  conflict?: string | null;
 }
 
 /** Where a pull request stands, by its latest run that was not cancelled. */
-export type PrState = "running" | "attention" | "passing" | "cancelled";
+export type PrState = "running" | "attention" | "conflict" | "passing" | "cancelled";
 
 /** What one run ended as, for the history squares and the counts. */
-export type RunResult = "running" | "queued" | "pass" | "fail" | "blocked" | "skip" | "cancelled";
+export type RunResult = "running" | "queued" | "pass" | "fail" | "blocked" | "skip" | "conflict" | "cancelled";
 
-export function result(r: Pick<RunLike, "status" | "outcome">): RunResult {
+export function result(r: Pick<RunLike, "status" | "outcome" | "conflict">): RunResult {
   if (r.status === "running") return "running";
   if (r.status === "queued") return "queued";
   if (r.status === "cancelled") return "cancelled";
+  if (r.conflict) return "conflict";
   if (r.status === "failed") return "fail";
   if (r.outcome === "PASS") return "pass";
   if (r.outcome === "BLOCKED") return "blocked";
@@ -49,7 +52,7 @@ export function groupByPr<R extends RunLike>(runs: R[]): PrGroup<R>[] {
     const latest = list.find((r) => r.status !== "cancelled") ?? (list[0] as R);
     const res = result(latest);
     const state: PrState =
-      res === "running" || res === "queued" ? "running" : res === "cancelled" ? "cancelled" : res === "pass" || res === "skip" ? "passing" : "attention";
+      res === "running" || res === "queued" ? "running" : res === "cancelled" ? "cancelled" : res === "conflict" ? "conflict" : res === "pass" || res === "skip" ? "passing" : "attention";
     return { pr, title: list.find((r) => r.title)?.title ?? null, runs: list, latest, state };
   });
 }
@@ -70,7 +73,7 @@ export function usualSeconds(runs: RunLike[]): number | null {
 
 /** How many of the runs ended which way; the parts add up to runs.length. */
 export function counts(runs: RunLike[]): Record<RunResult, number> {
-  const c: Record<RunResult, number> = { running: 0, queued: 0, pass: 0, fail: 0, blocked: 0, skip: 0, cancelled: 0 };
+  const c: Record<RunResult, number> = { running: 0, queued: 0, pass: 0, fail: 0, blocked: 0, skip: 0, conflict: 0, cancelled: 0 };
   for (const r of runs) c[result(r)]++;
   return c;
 }

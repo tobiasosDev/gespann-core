@@ -44,6 +44,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
   const live = r.status === "queued" || r.status === "running";
   const livePlan = r.status === "running" && r.progress?.checks.length ? r.progress : null;
   const logLines = r.log.split("\n").filter(Boolean);
+  const conflict = r.conflict ? (JSON.parse(r.conflict) as string[]) : null;
   const shots = images.map((f) => {
     const check = v?.checks.find((c) => c.proof?.includes(f));
     const goal = check ? undefined : v?.goals?.find((g) => g.proof?.includes(f));
@@ -114,6 +115,21 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
       {live && <StageStrip progress={r.status === "running" ? r.progress : null} queued={r.status === "queued"} />}
 
       {v?.summary && <p className="mb-4 max-w-3xl text-[15px]">{v.summary}</p>}
+      {conflict && (
+        <Card className="mb-4 max-w-3xl px-4 py-3 text-[13px]">
+          <p className="font-medium">Not tested: this PR has merge conflicts with {r.base_ref}.</p>
+          <p className="mt-1 text-muted-foreground">
+            Conflicts in{" "}
+            {conflict.map((f, i) => (
+              <span key={f}>
+                {i > 0 && ", "}
+                <Mono>{f}</Mono>
+              </span>
+            ))}
+            . Resolving them is up to the PR's author or coding agent; gespann says so on the pull request and over MCP. Once the branch is updated and pushed, gespann tests the new head; if no run starts (a draft, or a PR outside the recipe's triggers), use Rerun.
+          </p>
+        </Card>
+      )}
       {r.error && <Log text={r.error} className="mb-4 border-bad/40 text-bad" />}
       {r.verdict?.problems.length ? (
         <Card className="mb-4 border-bad/40">
@@ -157,45 +173,48 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
       )}
 
       {/* While the run runs, its live checks come first; the recording joins them when the tester is done. */}
-      {!live && recordingCard}
+      {/* A run with merge conflicts tested nothing: no recording or checks to show. */}
+      {!live && !conflict && recordingCard}
 
-      <Card className="mb-6">
-        <CardHeader
-          title="Checks"
-          description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : livePlan ? liveSummary(livePlan) : undefined}
-        />
-        {(!v || v.checks.length === 0) && livePlan ? (
-          <LiveChecks progress={livePlan} />
-        ) : !v || v.checks.length === 0 ? (
-          <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued") : "No checks."}</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[15px]">
-              <thead className="text-left text-[14px] text-muted-foreground">
-                <tr className="border-b border-border">
-                  <th className="w-10 px-4 py-2" />
-                  <th className="px-4 py-2 font-medium">Expected</th>
-                  <th className="hidden px-4 py-2 font-medium sm:table-cell">Observed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {v.checks.map((c, i) => (
-                  <tr key={i} className="border-b border-border align-top last:border-0">
-                    <td className="py-3 pr-0 pl-4 sm:pr-4">
-                      <span className="flex h-6 items-center">{RESULT_ICON[c.result]}</span>
-                    </td>
-                    <td className="px-4 py-3 font-medium sm:w-[40%]">
-                      {c.expect}
-                      <div className="mt-1 text-[14px] font-normal text-muted-foreground sm:hidden">{c.observed}</div>
-                    </td>
-                    <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{c.observed}</td>
+      {!conflict && (
+        <Card className="mb-6">
+          <CardHeader
+            title="Checks"
+            description={v ? `${v.checks.filter((c) => c.result === "pass").length}/${v.checks.length} passed` : livePlan ? liveSummary(livePlan) : undefined}
+          />
+          {(!v || v.checks.length === 0) && livePlan ? (
+            <LiveChecks progress={livePlan} />
+          ) : !v || v.checks.length === 0 ? (
+            <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued") : "No checks."}</Empty>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[15px]">
+                <thead className="text-left text-[14px] text-muted-foreground">
+                  <tr className="border-b border-border">
+                    <th className="w-10 px-4 py-2" />
+                    <th className="px-4 py-2 font-medium">Expected</th>
+                    <th className="hidden px-4 py-2 font-medium sm:table-cell">Observed</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody>
+                  {v.checks.map((c, i) => (
+                    <tr key={i} className="border-b border-border align-top last:border-0">
+                      <td className="py-3 pr-0 pl-4 sm:pr-4">
+                        <span className="flex h-6 items-center">{RESULT_ICON[c.result]}</span>
+                      </td>
+                      <td className="px-4 py-3 font-medium sm:w-[40%]">
+                        {c.expect}
+                        <div className="mt-1 text-[14px] font-normal text-muted-foreground sm:hidden">{c.observed}</div>
+                      </td>
+                      <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{c.observed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
 
       {live && recordingCard}
 

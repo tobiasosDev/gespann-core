@@ -13,12 +13,32 @@ export interface CommentInput {
   baseRef: string;
   /** The merge gate's line, empty when the PR is not gated. */
   gate?: string;
+  /** Files in conflict when the head does not merge onto the base: the PR was not tested. */
+  conflict?: string[] | null;
 }
 
 const ICON: Record<VerdictKind, string> = { PASS: "✅", FAIL: "❌", BLOCKED: "⛔", SKIP: "⏭️" };
 const MARK: Record<Check["result"], string> = { pass: "✅", fail: "❌", blocked: "⛔" };
 const GOAL: Record<Goal["result"], string> = { met: "✅ met", missed: "❌ missed", blocked: "⛔ blocked" };
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+
+/** The conflicting files for one line of text, at most five by name. */
+function fileList(files: string[]): string {
+  const named = files.slice(0, 5).map((f) => `\`${f}\``).join(", ");
+  return files.length > 5 ? `${named} and ${files.length - 5} more` : named;
+}
+
+/**
+ * A PR whose head does not merge onto its base is not tested. Resolving the conflict is the job of
+ * the PR's author or coding agent, not gespann's: this says what to do, for the check, the comment
+ * and the MCP issue.
+ */
+export function conflictNote(baseRef: string, files: string[]): { title: string; fix: string } {
+  return {
+    title: `Not tested: the PR has merge conflicts with ${baseRef} in ${fileList(files)}`,
+    fix: `Merge ${baseRef} into the PR branch (or rebase onto it), resolve the conflicts in ${fileList(files)} and push. gespann tests the new head when the push starts a run; if none starts (a draft, or a PR outside the recipe's triggers), use Rerun on the run page.`,
+  };
+}
 
 /** One line of table text: no pipes or line breaks, cut at a word. */
 export function cell(text: string, max: number): string {
@@ -62,7 +82,10 @@ export function renderComment(c: CommentInput): string {
   const passed = checks.filter((x) => x.result === "pass");
   const open = checks.filter((x) => x.result !== "pass");
   const lines: string[] = [];
-  if (!v) {
+  if (c.conflict?.length) {
+    const n = conflictNote(c.baseRef, c.conflict);
+    lines.push("### 🔀 gespann: not tested, merge conflict", "", `> ${n.title}.`, "", n.fix);
+  } else if (!v) {
     lines.push("### ⚠️ gespann could not test this PR", "", `> ${cell(c.error ?? "The run produced no verdict.", 300)}`);
   } else {
     const count = checks.length ? ` · ${passed.length}/${checks.length} checks passed` : "";
@@ -89,6 +112,7 @@ export function renderComment(c: CommentInput): string {
     }
     lines.push("</table>", "", "</details>");
   }
-  lines.push("", `<sub>\`${c.head.slice(0, 7)}\` merged onto \`${c.baseRef}\` · [Full run](${c.runUrl}) · gespann</sub>`);
+  const merged = c.conflict?.length ? "does not merge onto" : "merged onto";
+  lines.push("", `<sub>\`${c.head.slice(0, 7)}\` ${merged} \`${c.baseRef}\` · [Full run](${c.runUrl}) · gespann</sub>`);
   return lines.join("\n");
 }

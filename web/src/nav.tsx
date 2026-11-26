@@ -47,10 +47,12 @@ export function Logo() {
 
 const OUTCOME_TONE: Record<Outcome, "ok" | "bad" | "warn" | "muted"> = { PASS: "ok", FAIL: "bad", BLOCKED: "warn", SKIP: "muted" };
 
-export function RunStatus({ run }: { run: Pick<RunRow, "status" | "outcome"> }) {
+export function RunStatus({ run }: { run: Pick<RunRow, "status" | "outcome" | "conflict"> }) {
   if (run.status === "queued") return <Badge>queued</Badge>;
   if (run.status === "running") return <Badge tone="info" dot>running</Badge>;
   if (run.status === "cancelled") return <Badge>cancelled</Badge>;
+  // Not tested: the PR does not merge onto its base. Grey, the PR's agent updates the branch.
+  if (run.conflict) return <Badge>conflict</Badge>;
   const o = run.outcome ?? "FAIL";
   return <Badge tone={OUTCOME_TONE[o]}>{o}</Badge>;
 }

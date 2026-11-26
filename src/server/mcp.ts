@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { Judged } from "../verify/verdict.ts";
+import { conflictNote } from "./comment.ts";
 import type { Db, Project, Run } from "./db.ts";
 import { runComment } from "./gate.ts";
 
@@ -28,7 +29,7 @@ const MAX_INLINE_IMAGE = 4 * 1024 * 1024;
 
 const INSTRUCTIONS =
   "gespann tests pull requests in a production-near copy of the app and writes a verdict (PASS, FAIL, BLOCKED, SKIP) with checks, screenshots and a recording. " +
-  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. Read-only: these tools never start, cancel or approve anything.";
+  "Start with get_run (repo + pr gives the newest run of a PR); its `issues` list what failed or blocked. An issue of kind merge_conflict means the PR was not tested because its branch conflicts with the base: update the branch and resolve the conflicts yourself, then push. get_review returns the PR comment, get_run_file a screenshot (as an image) or the recording (as a link), get_run_log the job log. Read-only: these tools never start, cancel or approve anything.";
 
 class ToolError extends Error {}
 
@@ -88,12 +89,19 @@ const filesOf = (run: Run): string[] => JSON.parse(run.files) as string[];
 const kindOf = (file: string) => (IMAGE_TYPES[extname(file).toLowerCase()] ? "image" : VIDEO_TYPES[extname(file).toLowerCase()] ? "video" : "data");
 
 function runRow(d: McpDeps, run: Run) {
-  return { run_id: run.id, pr: run.pr, title: run.title, head: run.head, base_ref: run.base_ref, status: run.status, outcome: run.outcome, created: run.created, finished: run.finished, error: run.error, url: runUrl(d, run) };
+  return { run_id: run.id, pr: run.pr, title: run.title, head: run.head, base_ref: run.base_ref, status: run.status, outcome: run.outcome, created: run.created, finished: run.finished, error: run.error, conflict: conflictOf(run), url: runUrl(d, run) };
 }
 
-/** What a coding agent has to act on: gespann's own failure, a rejected verdict, every check that did not pass. */
+const conflictOf = (run: Run): string[] | null => (run.conflict ? (JSON.parse(run.conflict) as string[]) : null);
+
+/** What a coding agent has to act on: merge conflicts with the base, gespann's own failure, a rejected verdict, every check that did not pass. */
 function issuesOf(run: Run, judged: Judged | null) {
   const issues: { kind: string; text: string; observed?: string; fix?: string; proof?: string[] }[] = [];
+  const conflict = conflictOf(run);
+  if (conflict) {
+    const n = conflictNote(run.base_ref, conflict);
+    issues.push({ kind: "merge_conflict", text: n.title, fix: n.fix });
+  }
   if (run.error) issues.push({ kind: judged?.verdict ? "run_note" : "run_error", text: run.error });
   for (const p of judged?.problems ?? []) issues.push({ kind: "verdict_rejected", text: p });
   for (const c of judged?.verdict?.checks ?? []) {

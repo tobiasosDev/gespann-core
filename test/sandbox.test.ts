@@ -455,6 +455,66 @@ test("worker: a run cancelled while GitHub answers does not start", async () => 
   assert.deepEqual(sb.commands, []);
 });
 
+test("worker: a PR that does not merge onto its base is not tested: no FAIL, a neutral check and a comment that send its agent to update the branch", async () => {
+  // A real repository: main and the PR both change the same line.
+  const repo = mkdtempSync(join(tmpdir(), "gespann-conflict-"));
+  const sh = (cmd: string) => spawnSync("sh", ["-c", cmd], { cwd: repo, encoding: "utf8" }).stdout.trim();
+  sh("git init -q -b main && git config user.email t@t && git config user.name t && echo a > café.tsx && echo x > other.ts && git add . && git commit -qm base");
+  sh("git checkout -q -b pr && echo pr > café.tsx && git commit -qam pr && git checkout -q main && echo main > café.tsx && git commit -qam main");
+  const base = sh("git rev-parse main");
+  const head = sh("git rev-parse pr");
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe: "version: 1" });
+  class Git extends FakeSandboxes {
+    override async exec(id: string, command: string) {
+      // The merge runs for real, in the repository above instead of the sandbox's.
+      if (command.includes("merge --quiet --no-edit")) {
+        this.commands.push(command);
+        const r = spawnSync("sh", ["-c", command.replace("cd /srv/fresh/repo", `cd ${repo}`)], { encoding: "utf8" });
+        return { exitCode: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+      }
+      return super.exec(id, command);
+    }
+    override async download(_id: string, path: string) {
+      return Buffer.from(path.endsWith("project.tgz") ? "TGZ" : "");
+    }
+  }
+  const sb = new Git();
+  sb.files.set("/srv/fresh/gespann/project/verify.yml", "version: 1");
+  const checks: { conclusion?: string; title?: string; summary?: string }[] = [];
+  const comments: string[] = [];
+  const github = {
+    installationToken: async () => "tok",
+    pull: async () => ({ number: 4, title: "t", body: "", state: "open", head: { sha: head }, labels: [] }),
+    linkedIssues: async () => [],
+    updateCheck: async (_i: number, _r: string, _id: number, f: { status: string; conclusion?: string; title?: string; summary?: string }) => void (f.status === "completed" && checks.push(f)),
+    comment: async (_i: number, _r: string, _pr: number, body: string) => (comments.push(body), 77),
+  } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head, base, base_ref: "main", token: "0".repeat(32) });
+  db.updateRun(run, { check_run_id: 11 });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+
+  const r = db.run_(run)!;
+  assert.equal(db.job(job.id)?.status, "done", db.job(job.id)?.error ?? "");
+  assert.equal(r.status, "done");
+  assert.equal(r.outcome, null, "nothing was tested, so no FAIL");
+  assert.equal(r.error, null);
+  assert.deepEqual(JSON.parse(r.conflict ?? "null"), ["café.tsx"]);
+  assert.equal(sh("git status --porcelain"), "", "the failed merge is undone");
+  assert.doesNotMatch(sb.commands.join("\n"), /testing-prompt|gespann verify prepare/, "no tester for a PR that does not merge");
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0]?.conclusion, "neutral");
+  assert.equal(checks[0]?.title, "Not tested: the PR has merge conflicts with main in `café.tsx`");
+  assert.equal(comments.length, 1);
+  assert.match(comments[0] ?? "", /Merge main into the PR branch \(or rebase onto it\), resolve the conflicts in `café\.tsx` and push/);
+  assert.match(db.job(job.id)?.log ?? "", /merge conflicts with main in `café\.tsx`\. Nothing was tested/);
+});
+
 test("parallel: two PR runs of one project run at once in two sandboxes; the new one takes over the recipe as the project's bundle", async () => {
   const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
   const db = new Db(":memory:");
