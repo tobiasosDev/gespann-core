@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ButtonHTMLAttributes, ComponentProps, HTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ComponentProps, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cn } from "../cn.ts";
 
 export { cn };
@@ -66,6 +66,10 @@ const field = "w-full rounded-md border border-input bg-background px-2.5 text-b
 
 export function Input({ className, ...p }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cn(field, "h-9", className)} {...p} />;
+}
+
+export function Select({ className, ...p }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <select className={cn(field, "h-9 cursor-pointer", className)} {...p} />;
 }
 
 export function Textarea({ className, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement>) {

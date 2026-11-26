@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ago, api, type Settings, type Tokens } from "../api.ts";
 import { ModuleSections } from "../components/ModuleSections.tsx";
 import { useResource } from "../live.ts";
-import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
+import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono, Select } from "../components/ui.tsx";
 import { Sandboxes } from "./Sandboxes.tsx";
 
 const codexPending = (d: Settings) => d.codex.state === "pending";
@@ -115,13 +115,34 @@ function AgentAccess() {
 export function SettingsPage() {
   const { data, error, reload } = useResource<Settings>("/settings", codexPending, 3000);
   const [busy, setBusy] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customDraft, setCustomDraft] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
   if (error) return <p className="text-bad">{error}</p>;
   if (!data) return <p className="text-muted-foreground">Loading…</p>;
   const c = data.codex;
-  const act = async (path: string) => {
+  const known = c.models.some((m) => m.id === c.model);
+  const isCustom = customOpen || (!!c.model && !known);
+  const selectValue = isCustom ? "__custom__" : (c.model ?? "");
+  const customValue = customDraft ?? (c.model && !known ? c.model : "");
+  const act = async (path: string, body: unknown = {}) => {
     setBusy(true);
     try {
-      await api(path, {});
+      await api(path, body);
+    } finally {
+      setBusy(false);
+      await reload();
+    }
+  };
+  const saveModel = async (next: string) => {
+    setBusy(true);
+    setModelError(null);
+    try {
+      await api("/settings/codex/model", { model: next });
+      if (!next || c.models.some((m) => m.id === next)) setCustomOpen(false);
+      setCustomDraft(null);
+    } catch (err) {
+      setModelError((err as Error).message);
     } finally {
       setBusy(false);
       await reload();
@@ -183,6 +204,77 @@ export function SettingsPage() {
               Connect ChatGPT plan
             </Button>
           )}
+        </div>
+        <div className="space-y-2 border-t border-border px-4 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="codex-model" className="text-body font-medium">
+              Model
+            </label>
+            <Select
+              id="codex-model"
+              className="max-w-sm"
+              disabled={busy}
+              value={selectValue}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__custom__") {
+                  setCustomOpen(true);
+                  setCustomDraft(c.model ?? "");
+                  setModelError(null);
+                  return;
+                }
+                setCustomOpen(false);
+                setCustomDraft(null);
+                void saveModel(v);
+              }}
+            >
+              <option value="">Codex default</option>
+              {c.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} — {m.description}
+                </option>
+              ))}
+              <option value="__custom__">Custom…</option>
+            </Select>
+          </div>
+          {isCustom && (
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveModel(customValue.trim());
+              }}
+            >
+              <Input
+                aria-label="Custom Codex model"
+                className="max-w-64 font-mono"
+                placeholder="e.g. gpt-6.2-sol"
+                value={customValue}
+                onChange={(e) => setCustomDraft(e.target.value)}
+                maxLength={80}
+              />
+              <Button type="submit" size="sm" disabled={busy}>
+                Save
+              </Button>
+              {c.model && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setCustomOpen(false);
+                    setCustomDraft(null);
+                    void saveModel("");
+                  }}
+                >
+                  Use default
+                </Button>
+              )}
+            </form>
+          )}
+          {modelError && <p className="text-body text-bad">{modelError}</p>}
+          <p className="text-small text-muted-foreground">Used for all your projects unless a project sets its own model in Setup.</p>
         </div>
       </Card>
       <Sandboxes />

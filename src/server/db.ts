@@ -243,6 +243,7 @@ export class Db {
       ["codex_login", "text"],
       ["codex_auth", "text"],
       ["codex_account", "text"],
+      ["codex_model", "text"],
       ["repos_synced", "text"],
       ["max_jobs", "integer"],
       ["job_cap", "integer"],
@@ -286,11 +287,11 @@ export class Db {
     }
   }
 
-  codex(userId: number): { codex_state: CodexState; codex_login: string | null; codex_account: string | null } | undefined {
-    return this.one("select codex_state, codex_login, codex_account from users where id = ?", userId);
+  codex(userId: number): { codex_state: CodexState; codex_login: string | null; codex_account: string | null; codex_model: string | null } | undefined {
+    return this.one("select codex_state, codex_login, codex_account, codex_model from users where id = ?", userId);
   }
 
-  setCodex(userId: number, fields: Partial<{ codex_state: CodexState; codex_login: string | null; codex_auth: string | null; codex_account: string | null }>): void {
+  setCodex(userId: number, fields: Partial<{ codex_state: CodexState; codex_login: string | null; codex_auth: string | null; codex_account: string | null; codex_model: string | null }>): void {
     const keys = Object.keys(fields);
     if (!keys.length) return;
     this.run(`update users set ${keys.map((k) => `${k} = ?`).join(", ")} where id = ?`, ...keys.map((k) => (fields as Record<string, string | null>)[k] ?? null), userId);
