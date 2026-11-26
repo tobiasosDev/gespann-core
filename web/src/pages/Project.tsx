@@ -342,6 +342,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             <div className="min-w-0 flex-1">
               <PrRuns
                 runs={p.runs}
+                closed={p.closed}
                 header={
                   <CardHeader
                     title="Pull requests"

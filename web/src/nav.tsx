@@ -53,6 +53,8 @@ export function RunStatus({ run }: { run: Pick<RunRow, "status" | "outcome" | "c
   if (run.status === "cancelled") return <Badge>cancelled</Badge>;
   // Not tested: the PR does not merge onto its base. Grey, the PR's agent updates the branch.
   if (run.conflict) return <Badge>conflict</Badge>;
+  // gespann broke off the run before a verdict: not the PR's FAIL.
+  if (run.status === "failed") return <Badge>error</Badge>;
   const o = run.outcome ?? "FAIL";
   return <Badge tone={OUTCOME_TONE[o]}>{o}</Badge>;
 }

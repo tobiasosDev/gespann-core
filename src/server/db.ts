@@ -152,6 +152,10 @@ create table if not exists holds (
   project_id integer not null references projects(id), pr integer not null,
   held integer not null default 0, approved_by text, approved_head text, comment_id integer, updated text not null,
   primary key (project_id, pr));
+create table if not exists pulls (
+  project_id integer not null references projects(id), pr integer not null,
+  closed text not null, merged integer not null default 0,
+  primary key (project_id, pr));
 create table if not exists slots (
   id integer primary key, project_id integer not null references projects(id), sandbox_id text not null,
   job_id integer, bundle integer not null default 0);
@@ -751,6 +755,31 @@ export class Db {
     const user = this.one<User>("select u.* from api_tokens t join users u on u.id = t.user_id where t.hash = ? and (t.expires is null or t.expires > ?)", hash, now());
     if (user) this.run("update api_tokens set last_used = ? where hash = ?", now(), hash);
     return user;
+  }
+
+  /** Marks the PR merged or closed (at `closed`), or open again with null. */
+  setPrClosed(projectId: number, pr: number, closed: { at: string; merged: boolean } | null): void {
+    if (!closed) this.run("delete from pulls where project_id = ? and pr = ?", projectId, pr);
+    else
+      this.run(
+        "insert into pulls (project_id, pr, closed, merged) values (?, ?, ?, ?) on conflict (project_id, pr) do update set closed = excluded.closed, merged = excluded.merged",
+        projectId,
+        pr,
+        closed.at,
+        closed.merged ? 1 : 0,
+      );
+  }
+
+  /** The project's PRs that are merged or closed, as far as gespann heard. */
+  closedPrs(projectId: number): { pr: number; merged: boolean }[] {
+    return this.all<{ pr: number; merged: number }>("select pr, merged from pulls where project_id = ?", projectId).map((r) => ({ pr: r.pr, merged: r.merged === 1 }));
+  }
+
+  /** PRs with runs that gespann still counts as open, with their project's repo. */
+  openPrsWithRuns(): { project_id: number; pr: number; repo: string; installation_id: number }[] {
+    return this.all(
+      "select distinct r.project_id, r.pr, p.repo, p.installation_id from runs r join projects p on p.id = r.project_id where not exists (select 1 from pulls u where u.project_id = r.project_id and u.pr = r.pr) order by r.project_id, r.pr",
+    );
   }
 
   /** The newest runs of one PR, superseded ones included. */

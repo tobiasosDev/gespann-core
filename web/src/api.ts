@@ -116,6 +116,8 @@ export interface ProjectDetail extends ProjectRow {
   notes: string | null;
   proof: boolean;
   runs: RunRow[];
+  /** PRs with runs that are merged or closed. */
+  closed: { pr: number; merged: boolean }[];
   jobs: JobRow[];
 }
 

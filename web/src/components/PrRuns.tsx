@@ -2,7 +2,7 @@ import { ChevronRight, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import { ago, duration, type RunRow } from "../api.ts";
 import { Link, navigate, RunStatus } from "../nav.tsx";
-import { counts, groupByPr, type PrGroup, type PrState, result, type RunResult, usualSeconds } from "../runs.ts";
+import { type ClosedPr, counts, groupByPr, type PrGroup, type PrState, result, type RunResult, usualSeconds } from "../runs.ts";
 import { Button, Card, cn, Empty, LinkButton, Mono } from "./ui.tsx";
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
@@ -13,11 +13,12 @@ const SQUARE: Record<RunResult, string> = {
   blocked: "bg-warn",
   skip: "bg-muted-foreground/50",
   conflict: "bg-muted-foreground/25",
+  error: "bg-bad/30",
   running: "border-2 border-info",
   queued: "border-2 border-muted-foreground/60",
   cancelled: "border border-muted-foreground/40",
 };
-const WORD: Record<RunResult, string> = { pass: "PASS", fail: "FAIL", blocked: "BLOCKED", skip: "SKIP", conflict: "merge conflict", running: "running", queued: "queued", cancelled: "cancelled" };
+const WORD: Record<RunResult, string> = { pass: "PASS", fail: "FAIL", blocked: "BLOCKED", skip: "SKIP", conflict: "merge conflict", error: "gespann error", running: "running", queued: "queued", cancelled: "cancelled" };
 
 /** The PR's runs as squares, oldest on the left. Each opens its run. */
 function History({ runs }: { runs: RunRow[] }) {
@@ -58,11 +59,13 @@ function Progress({ run, usual }: { run: RunRow; usual: number | null }) {
 const SECTION: Record<PrState, (n: number) => ReactNode> = {
   running: (n) => plural(n, "pull request"),
   attention: (n) => `${plural(n, "pull request")} whose latest run failed or was blocked`,
+  error: (n) => `${plural(n, "pull request")} gespann broke off before the tester gave a verdict; open the run for the reason, then test again`,
   conflict: (n) => `${plural(n, "pull request")} not tested: ${n === 1 ? "it does" : "they do"} not merge onto the base until ${n === 1 ? "its" : "their"} agent updates the branch`,
   passing: (n) => plural(n, "pull request"),
   cancelled: (n) => `${plural(n, "pull request")} whose runs were all cancelled`,
+  closed: (n) => `${plural(n, "pull request")} no longer open; ${n === 1 ? "its" : "their"} runs stay for reference`,
 };
-const TITLE: Record<PrState, string> = { running: "Running", attention: "Needs a look", conflict: "Merge conflict", passing: "Passing", cancelled: "Cancelled" };
+const TITLE: Record<PrState, string> = { running: "Running", attention: "Needs a look", error: "Could not test", conflict: "Merge conflict", passing: "Passing", cancelled: "Cancelled", closed: "Merged or closed" };
 
 function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] }) {
   if (groups.length === 0) return null;
@@ -75,7 +78,7 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
         </th>
       </tr>
       {groups.map((g) => (
-        <tr key={g.pr} className="cursor-pointer border-b border-border last:border-0 hover:bg-accent" onClick={() => navigate(`/runs/${g.latest.id}`)}>
+        <tr key={g.pr} className={cn("cursor-pointer border-b border-border last:border-0 hover:bg-accent", state === "closed" && "text-muted-foreground")} onClick={() => navigate(`/runs/${g.latest.id}`)}>
           <td className="px-3 py-2.5 align-top sm:px-4 sm:align-middle">
             <RunStatus run={g.latest} />
           </td>
@@ -84,6 +87,7 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
             <Link to={`/runs/${g.latest.id}`} className="hover:underline" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
               <Mono className="text-muted-foreground">#{g.pr}</Mono> {g.title}
             </Link>
+            {state === "closed" && g.closed && <span className="ml-2 text-[12px]">{g.closed}</span>}
           </td>
           <td className="hidden px-4 py-2.5 sm:table-cell">
             <History runs={g.runs} />
@@ -103,8 +107,8 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
 }
 
 /** The project's runs as one row per pull request, grouped by where each PR stands. */
-export function PrRuns({ runs, header }: { runs: RunRow[]; header: ReactNode }) {
-  const groups = groupByPr(runs);
+export function PrRuns({ runs, closed, header }: { runs: RunRow[]; closed: ClosedPr[]; header: ReactNode }) {
+  const groups = groupByPr(runs, closed);
   const usual = usualSeconds(runs);
   const of = (s: PrState) => groups.filter((g) => g.state === s);
   const running = of("running");
@@ -146,9 +150,11 @@ export function PrRuns({ runs, header }: { runs: RunRow[]; header: ReactNode }) 
               </thead>
               <Section state="running" groups={running} />
               <Section state="attention" groups={of("attention")} />
+              <Section state="error" groups={of("error")} />
               <Section state="conflict" groups={of("conflict")} />
               <Section state="passing" groups={of("passing")} />
               <Section state="cancelled" groups={of("cancelled")} />
+              <Section state="closed" groups={of("closed")} />
             </table>
           </div>
         </>
@@ -163,6 +169,7 @@ const LEGEND: { key: RunResult; label: string; bar: string; text: string }[] = [
   { key: "blocked", label: "Blocked", bar: "bg-warn", text: "text-warn" },
   { key: "skip", label: "Skipped", bar: "bg-muted-foreground/50", text: "text-muted-foreground" },
   { key: "conflict", label: "Merge conflict", bar: "bg-muted-foreground/25", text: "text-muted-foreground" },
+  { key: "error", label: "gespann error", bar: "bg-bad/30", text: "text-muted-foreground" },
   { key: "running", label: "Running", bar: "bg-info", text: "text-info" },
   { key: "queued", label: "Queued", bar: "bg-muted-foreground/30", text: "text-muted-foreground" },
   { key: "cancelled", label: "Cancelled", bar: "bg-muted-foreground/20", text: "text-muted-foreground" },

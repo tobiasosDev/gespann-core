@@ -212,6 +212,7 @@ test("a PR merged or closed while its run waits: the queued run is cancelled and
   // A late "closed" for a PR reopened since leaves its run alone.
   await send("pull_request", { action: "closed", pull_request: { ...gh.current, state: "closed" }, sender: person });
   assert.equal(db.run_(run.id)?.status, "queued");
+  assert.deepEqual(db.closedPrs(project().id), [], "still open on GitHub: not marked closed");
   gh.current = { ...gh.current, state: "closed", merged: true };
   await send("pull_request", { action: "closed", pull_request: gh.current, sender: person });
   const after = db.run_(run.id)!;
@@ -220,6 +221,11 @@ test("a PR merged or closed while its run waits: the queued run is cancelled and
   assert.equal(db.jobOfRun(run.id)?.status, "cancelled", "the worker never picks it up");
   assert.deepEqual(gh.checks, [{ id: 1, conclusion: "skipped", title: "Skipped: the PR was merged" }]);
   assert.equal(db.nextJob(), undefined);
+  assert.deepEqual(db.closedPrs(project().id), [{ pr: 7, merged: true }], "the Runs page moves it to merged or closed");
+  // Reopened: it is open again.
+  gh.current = { ...gh.current, state: "open", merged: false };
+  await send("pull_request", { action: "reopened", pull_request: gh.current, sender: person });
+  assert.deepEqual(db.closedPrs(project().id), []);
 });
 
 test("files answer byte ranges, which Safari on iOS needs to play a video", async () => {
