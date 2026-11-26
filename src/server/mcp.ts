@@ -175,6 +175,7 @@ const TOOLS: Tool[] = [
         goals: judged?.verdict?.goals ?? [],
         proof: judged?.verdict?.proof ?? [],
         files: files.map((f) => ({ name: f, kind: kindOf(f), url: fileUrl(d, run, f) })),
+        ...(run.media_cleared ? { media_deleted: `${run.media_cleared}: screenshots and recording were deleted after the PR closed` } : {}),
       });
     },
   },

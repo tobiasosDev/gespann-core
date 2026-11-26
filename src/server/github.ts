@@ -50,6 +50,7 @@ export interface PullRequest {
   draft: boolean;
   state: string;
   merged?: boolean;
+  closed_at?: string | null;
   head: { sha: string; ref: string; repo: { full_name: string } | null };
   base: { sha: string; ref: string; repo: { full_name: string } };
   labels: { name: string }[];

@@ -25,6 +25,7 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
 | `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
+| `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `DATA_DIR` | default `/data` in the image |
 | `SERVER_MODULE` | path of a module that adds pages and a say over jobs ([Server module](#server-module)); default: none |
 

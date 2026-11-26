@@ -7,6 +7,7 @@ import { Db } from "./db.ts";
 import { loadServerModule } from "./extension.ts";
 import { Github } from "./github.ts";
 import { createSandboxes } from "./provider.ts";
+import { startMediaSweep } from "./retention.ts";
 import { startWorker } from "./worker.ts";
 
 /** `gespann serve`: the web service, its webhook and the job worker in one process. */
@@ -40,6 +41,7 @@ export async function serve(): Promise<void> {
     console.log(JSON.stringify({ level: "info", message: `sandboxes: ${sandboxes.kind}` }));
     console.log(JSON.stringify({ level: "info", message: `parallel jobs: ${parallel.jobs} (${parallel.why})` }));
   } else console.error(JSON.stringify({ level: "warn", message: "no sandbox provider (SANDBOX_PROVIDER): jobs stay queued" }));
+  if (config.mediaRetentionDays !== null) startMediaSweep({ db, github, dataDir: config.dataDir, days: config.mediaRetentionDays });
   listen({ fetch: app.fetch, port: config.port, hostname: "0.0.0.0" }, (info) => {
     console.log(JSON.stringify({ level: "info", message: `gespann listening on ${info.port}`, baseUrl: config.baseUrl }));
   });

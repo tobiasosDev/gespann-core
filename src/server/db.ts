@@ -105,6 +105,8 @@ export interface Run {
   started: string | null;
   finished: string | null;
   error: string | null;
+  /** When the screenshots and recording were deleted after the PR closed; null while they are kept. */
+  media_cleared: string | null;
 }
 
 const SCHEMA = `
@@ -247,6 +249,8 @@ export class Db {
       if (!tcols.has(name)) this.sql.exec(`alter table api_tokens add column ${name} ${def}`);
     }
     this.sql.exec("create unique index if not exists api_tokens_refresh on api_tokens(refresh_hash)");
+    const rcols = new Set((this.sql.prepare("pragma table_info(runs)").all() as { name: string }[]).map((c) => c.name));
+    if (!rcols.has("media_cleared")) this.sql.exec("alter table runs add column media_cleared text");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");
     const jcols = new Set((this.sql.prepare("pragma table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
@@ -748,6 +752,13 @@ export class Db {
 
   runByToken(token: string): Run | undefined {
     return this.one<Run>("select * from runs where token = ?", token);
+  }
+
+  /** Finished runs whose screenshots or recording are still kept, with their project's repo. */
+  runsWithMedia(): (Run & { repo: string; installation_id: number })[] {
+    return this.all<Run & { repo: string; installation_id: number }>(
+      "select r.*, p.repo, p.installation_id from runs r join projects p on p.id = r.project_id where r.media_cleared is null and r.status in ('done', 'failed', 'cancelled') and r.files != '[]' order by r.id",
+    );
   }
 
   runs(projectId: number, limit = 50): Run[] {
