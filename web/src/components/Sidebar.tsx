@@ -106,19 +106,21 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
           </Link>
         )}
         <ul className="space-y-0.5">
-          {projects?.map((p) => {
+          {projects?.map((p, _, all) => {
             const here = p.id === current;
             const open = unfolded.has(p.id);
             const [owner, name] = p.repo.split("/");
+            // The owner shows only when two projects share a name; the full name is in the tooltip.
+            const twin = all.some((q) => q.id !== p.id && q.repo.split("/")[1] === name);
             const tab = section.kind === "project" && here ? section.tab : null;
             return (
               <li key={p.id}>
-                <button type="button" className={cn(rowClass(), "cursor-pointer")} aria-expanded={open} onClick={() => toggle(p.id)}>
+                <button type="button" className={cn(rowClass(), "cursor-pointer")} aria-expanded={open} title={p.repo} aria-label={p.repo} onClick={() => toggle(p.id)}>
                   <span className="flex size-4 shrink-0 items-center justify-center">
                     <FolderGit2 className="size-4" />
                   </span>
                   <span className="min-w-0 flex-1 truncate">
-                    <span className="text-small text-muted-foreground">{owner}/</span>
+                    {twin && <span className="text-small text-muted-foreground">{owner}/</span>}
                     <span className={here ? "text-foreground" : undefined}>{name}</span>
                   </span>
                   <span className="flex shrink-0 items-center gap-1">
