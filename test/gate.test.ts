@@ -12,6 +12,7 @@ import { Db } from "../src/server/db.ts";
 import { applyGate, gateLine } from "../src/server/gate.ts";
 import type { Github, PullRequest } from "../src/server/github.ts";
 import { judge } from "../src/verify/verdict.ts";
+import { checkConclusion } from "../src/server/worker.ts";
 
 const RECIPE = `
 version: 1
@@ -348,3 +349,12 @@ test("merge gate: off by default; with the gate off the label holds nothing, and
   assert.equal(fresh.project(fresh.createProject({ owner_id: u.id, installation_id: 9, repo: "o/x", repo_id: 1, default_branch: "main" }))?.gate, 0, "new projects start with the gate off");
 });
 
+
+test("merge gate: only the project's gate lets a FAIL fail the check, whatever the recipe says", () => {
+  const fail = { outcome: "FAIL" as const, tested: true, approved: false };
+  assert.equal(checkConclusion({ ...fail, gate: false }), "neutral", "gate off: reported, merging stays free");
+  assert.equal(checkConclusion({ ...fail, gate: true }), "failure");
+  assert.equal(checkConclusion({ ...fail, gate: true, approved: true }), "neutral", "a person released this head");
+  assert.equal(checkConclusion({ ...fail, gate: true, tested: false }), "neutral", "gespann could not test");
+  assert.equal(checkConclusion({ outcome: "PASS", tested: true, gate: false, approved: false }), "success");
+});

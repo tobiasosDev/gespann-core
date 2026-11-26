@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parse } from "yaml";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verify/prompt.ts";
 import { screenFor, viewportsOf } from "../verify/viewports.ts";
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
@@ -772,13 +771,7 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     }
     const body = runComment(d.config.baseUrl, run, judged, files, gateText);
     const conflict = run.conflict ? conflictNote(run.base_ref, JSON.parse(run.conflict) as string[]) : null;
-    const conclusion = conflict || !judged?.verdict
-      ? "neutral" // gespann itself failed (sandbox, copy, Codex): never a FAIL on the PR
-      : outcome === "FAIL" && (state !== "off" || !isShadow(p)) && !approvedHead(d.db, p, run.pr, run.head) // a person released this head
-        ? "failure"
-        : outcome === "FAIL"
-          ? "neutral"
-          : CONCLUSION[outcome];
+    const conclusion = checkConclusion({ outcome, tested: !conflict && !!judged?.verdict, gate: p.gate === 1, approved: approvedHead(d.db, p, run.pr, run.head) });
     const checkId = d.db.run_(run.id)?.check_run_id ?? run.check_run_id;
     if (checkId) {
       await gh
@@ -805,12 +798,16 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
   });
 }
 
-function isShadow(p: Project): boolean {
-  try {
-    return (parse(p.recipe ?? "") as { mode?: string } | null)?.mode !== "gate";
-  } catch {
-    return true;
-  }
+/**
+ * The gespann/verify check's conclusion. Only the project's merge gate lets a FAIL fail the check:
+ * with the gate off, results are reported and merging stays free, also under a rule that requires
+ * the check. A head a person approved, and a run that could not test (conflict, sandbox, Codex),
+ * end neutral.
+ */
+export function checkConclusion(r: { outcome: NonNullable<Run["outcome"]>; tested: boolean; gate: boolean; approved: boolean }): "success" | "neutral" | "failure" {
+  if (!r.tested) return "neutral";
+  if (r.outcome === "FAIL") return r.gate && !r.approved ? "failure" : "neutral";
+  return CONCLUSION[r.outcome];
 }
 
 /** How often a run asks GitHub again while the PR's other checks run. */

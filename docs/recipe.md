@@ -13,7 +13,6 @@ git diff --name-only origin/dev... | gespann recipe trigger --base dev --labels 
 
 ```yaml
 version: 1
-mode: shadow            # shadow: report only. gate: a FAIL verdict fails the check.
 timeout: 25             # minutes, setup to verdict
 
 trigger:
@@ -108,7 +107,6 @@ Every command runs with `sh -c` in the repo root. These variables are set:
 | `trigger.ignore` | | changed files matching these never start a run |
 | `trigger.branches` | | PR base branches; empty means any |
 | `trigger.label` | | a PR with this label always runs (still only into `branches`) |
-| `mode` | | `shadow` (default) or `gate` |
 | `timeout` | | minutes, default 25 |
 | `setup[]` | | `{name, run}` |
 | `services[]` | | `{name, run, ready?, readyTimeout?}`: background processes for the whole run. `ready` is polled every second until it exits 0 (default 60 s). |
