@@ -649,6 +649,8 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
   const result = (await d.sandboxes.readFile(b.id, `${dir}/work/result.json`).catch(() => null)) ?? null;
   const teardownErrors = lastJson<{ teardownErrors?: string[] }>(fin.tail)?.teardownErrors ?? [];
   if (teardownErrors.length) log(`✗ the copy did not go down cleanly: ${teardownErrors.join("; ").slice(0, 800)}`);
+  // A stopped attempt has no verdict: what finish judged is only the cut-off tester.
+  if (stopped(d, job)) return { judged: null, outcome: "FAIL", clean: !teardownErrors.length };
   if (!result) {
     log(`finish did not report: ${fin.tail.slice(-400)}`);
     return { judged: null, outcome: "FAIL", clean: !teardownErrors.length };

@@ -642,6 +642,7 @@ test("worker: a newer push stops the PR's running test: the tester is killed, th
   const log = db.job(job.id)?.log ?? "";
   assert.match(log, /the tester was stopped/);
   assert.match(log, /stopped: a newer push supersedes this run/);
+  assert.doesNotMatch(log, /verdict:|finish did not report/, "the stopped attempt logs no verdict");
   assert.deepEqual(db.slots(p).map((s) => s.job_id), [null], "the sandbox is free again");
 });
 
