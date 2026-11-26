@@ -749,12 +749,14 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
   return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
 
-async function report(d: Deps, p: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
+export async function report(d: Deps, started: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
   const gh = d.github();
   const outcome = run.outcome ?? "FAIL";
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
   // Gate, check and comment together under the PR lock, so an approval cannot interleave.
-  await withPrLock(p, run.pr, async () => {
+  await withPrLock(started, run.pr, async () => {
+    // The merge gate as it is now: a person may switch it while the test runs.
+    const p = d.db.project(started.id) ?? started;
     // The gate follows the result only for the PR's current head; a newer push has its own run.
     let state = "off" as GateState;
     let gateText = "";
@@ -835,11 +837,12 @@ export function ciStep(c: OtherChecks, ageMs: number): CiStep {
 }
 
 /** A run whose PR failed its other checks ends as SKIP, without a sandbox; a held PR stays held for a person. */
-async function skipForChecks(d: Deps, p: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
+async function skipForChecks(d: Deps, started: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
   d.db.updateRun(run.id, { status: "done", outcome: "SKIP", error: reason, finished: new Date().toISOString() });
   log(`skipped: ${reason}`);
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
-  await withPrLock(p, run.pr, async () => {
+  await withPrLock(started, run.pr, async () => {
+    const p = d.db.project(started.id) ?? started; // the merge gate as it is now
     const checkId = d.db.run_(run.id)?.check_run_id ?? run.check_run_id;
     if (checkId)
       await d

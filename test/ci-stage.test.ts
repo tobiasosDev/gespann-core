@@ -8,7 +8,8 @@ import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
 import { type CheckRun, Github, type OtherChecks, otherChecks } from "../src/server/github.ts";
 import type { Sandboxes } from "../src/server/sandbox.ts";
-import { CI_GRACE_MS, CI_MAX_WAIT_MS, CI_POLL_MS, ciStep, processJob } from "../src/server/worker.ts";
+import { judge } from "../src/verify/verdict.ts";
+import { CI_GRACE_MS, CI_MAX_WAIT_MS, CI_POLL_MS, ciStep, processJob, report } from "../src/server/worker.ts";
 
 const run = (name: string, status: string, conclusion: string | null = null, slug = "github-actions"): CheckRun => ({ name, status, conclusion, app: { slug } });
 
@@ -144,4 +145,16 @@ test("github: a source GitHub refuses for good (404) counts as none; a 502 throw
   assert.deepEqual(await gh.otherChecks(9, "acme/shop", "h"), { pending: [], failed: [], passed: ["buildkite/acme"], statuses: true });
   statusCode = 502;
   await assert.rejects(gh.otherChecks(9, "acme/shop", "h"), /GitHub 502/);
+});
+
+test("worker: a merge gate switched off while the test runs makes its FAIL neutral, and switched on makes it fail", async () => {
+  const judged = judge(JSON.stringify({ verdict: "FAIL", summary: "The total is wrong.", checks: [{ expect: "Total is 10", observed: "Total is 9", result: "fail", proof: ["a.png"] }], proof: ["a.png"] }), () => true);
+  for (const [atStart, atEnd, conclusion] of [[1, 0, "neutral"], [0, 1, "failure"]] as const) {
+    const t = setup({ ...none, passed: ["check"] });
+    t.db.updateProject(1, { gate: atStart });
+    const started = t.db.project(1)!;
+    t.db.updateProject(1, { gate: atEnd });
+    await report(t.deps, started, { ...t.db.run_(t.id)!, status: "done", outcome: "FAIL" }, judged, ["a.png"], () => undefined);
+    assert.equal(t.updates.at(-1)?.conclusion, conclusion, `gate ${atStart} at the start, ${atEnd} at the end`);
+  }
 });
