@@ -102,6 +102,11 @@ test("API: a signed-in user sees own projects through every step, not others'", 
   assert.equal(JSON.stringify(settings0).includes("sealed"), false);
   assert.equal(settings0.codex.model, null);
   assert.ok(Array.isArray(settings0.codex.models) && settings0.codex.models.some((m: { id: string }) => m.id === "gpt-6.2-sol"));
+  assert.deepEqual(
+    settings0.codex.models.filter((m: { recommended?: boolean }) => m.recommended).map((m: { id: string }) => m.id),
+    ["gpt-6.2-sol"],
+    "exactly one model is recommended, the benchmark winner in docs/models.md",
+  );
   assert.equal((await post("/settings/codex/model", { model: "bad model!" })).status, 400);
   assert.equal((await post("/settings/codex/model", { model: "gpt-6.2-astra" })).status, 200);
   assert.equal((await (await get("/settings")).json()).codex.model, "gpt-6.2-astra");

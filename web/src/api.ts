@@ -33,6 +33,10 @@ export interface CodexModel {
   id: string;
   name: string;
   description: string;
+  /** Best tester in the benchmark (docs/models.md). */
+  recommended?: boolean;
+  /** A warning from the benchmark, shown when the model is selected. */
+  note?: string;
 }
 
 export interface Settings {

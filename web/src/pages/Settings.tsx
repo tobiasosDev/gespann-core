@@ -125,6 +125,8 @@ export function SettingsPage() {
   const isCustom = customOpen || (!!c.model && !known);
   const selectValue = isCustom ? "__custom__" : (c.model ?? "");
   const customValue = customDraft ?? (c.model && !known ? c.model : "");
+  const selected = isCustom ? undefined : c.models.find((m) => m.id === c.model);
+  const recommended = c.models.find((m) => m.recommended);
   const act = async (path: string, body: unknown = {}) => {
     setBusy(true);
     try {
@@ -231,7 +233,8 @@ export function SettingsPage() {
               <option value="">Codex default</option>
               {c.models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name} — {m.description}
+                  {m.name}
+                  {m.recommended ? " (recommended)" : ""} — {m.description}
                 </option>
               ))}
               <option value="__custom__">Custom…</option>
@@ -274,7 +277,21 @@ export function SettingsPage() {
             </form>
           )}
           {modelError && <p className="text-body text-bad">{modelError}</p>}
-          <p className="text-small text-muted-foreground">Used for all your projects unless a project sets its own model in Setup.</p>
+          {selected?.note && <p className="text-body text-warn">{selected.note}</p>}
+          {recommended && !isCustom && selected?.id !== recommended.id && (
+            <p className="text-body">
+              Recommended: {recommended.name}. In our benchmark it judged every test PR right.{" "}
+              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void saveModel(recommended.id)}>
+                Use {recommended.name}
+              </Button>
+            </p>
+          )}
+          <p className="text-small text-muted-foreground">
+            Used for all your projects unless a project sets its own model in Setup.{" "}
+            <a className="underline" href="https://github.com/tobiasosDev/gespann-core/blob/main/docs/models.md" target="_blank" rel="noreferrer">
+              How we compared the models
+            </a>
+          </p>
         </div>
       </Card>
       <Sandboxes />
