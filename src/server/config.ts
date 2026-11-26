@@ -11,8 +11,12 @@ export interface Config {
   sandboxProvider: string;
   docker: { image: string; args: string[]; command: string[]; user: string; home: string };
   ssh: { host: string; port: string; keyFile: string; key: string; knownHosts: string; root: string };
+  /** `SERVER_MODULE`: path of a module that adds pages and a say over jobs; "" for none. */
+  serverModule: string;
   /** `MAX_PARALLEL_JOBS`: how many jobs run at once; null computes it from the sandbox host. */
   maxParallel: number | null;
+  /** Days after a PR closes until its runs' screenshots and recordings are deleted; null keeps them. */
+  mediaRetentionDays: number | null;
   /** git ref of gespann-core that sandboxes install, so sandbox and server run the same code. */
   gespannRef: string;
   /** Guards /setup (GitHub App creation). */
@@ -71,6 +75,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (sandboxProvider === "ssh" && !ssh.host) throw new Error("SANDBOX_PROVIDER=ssh needs SSH_HOST");
   const allowedUsers = (env.ALLOWED_USERS ?? "").split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
   if (env.ALLOWED_USERS !== undefined && !allowedUsers.length) throw new Error("ALLOWED_USERS is set but names no GitHub login; remove it to let everyone sign in");
+  const retention = (env.MEDIA_RETENTION_DAYS ?? "10").trim().toLowerCase();
+  if (retention !== "off" && !/^\d{1,4}$/.test(retention)) throw new Error(`MEDIA_RETENTION_DAYS ${retention} is not a whole number of days or off`);
   const max = (env.MAX_PARALLEL_JOBS ?? "").trim();
   if (max && !/^[1-9]\d{0,2}$/.test(max)) throw new Error(`MAX_PARALLEL_JOBS ${max} is not a whole number from 1 to 999`);
   return {
@@ -80,9 +86,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath: env.DATABASE_PATH ?? join(dataDir, "gespann.sqlite"),
     sessionSecret,
     sandboxProvider,
+    serverModule: (env.SERVER_MODULE ?? "").trim(),
     docker,
     ssh,
     maxParallel: max ? Number(max) : null,
+    mediaRetentionDays: retention === "off" ? null : Number(retention),
     gespannRef: env.GESPANN_REF ?? "main",
     adminToken: env.ADMIN_TOKEN ?? "",
     allowedUsers,

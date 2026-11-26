@@ -52,6 +52,8 @@ export interface Project {
   active: number;
   /** Merge gate on: PRs with the gespann label are held as drafts until they pass. */
   gate: number;
+  /** Screen sizes the tester checks every PR at, preset ids joined with commas (`phone-s,desktop`); empty: the browser's own size. */
+  viewports: string;
   created: string;
 }
 
@@ -107,6 +109,8 @@ export interface Run {
   error: string | null;
   /** JSON: live progress while the run runs (see verify/progress.ts). */
   progress: string | null;
+  /** When the screenshots and recording were deleted after the PR closed; null while they are kept. */
+  media_cleared: string | null;
 }
 
 const SCHEMA = `
@@ -234,6 +238,7 @@ export class Db {
     const pcols = new Set((this.sql.prepare("pragma table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
     if (!pcols.has("bundle")) this.sql.exec("alter table projects add column bundle integer not null default 0");
+    if (!pcols.has("viewports")) this.sql.exec("alter table projects add column viewports text not null default ''");
     if (!pcols.has("gate")) {
       // New projects start with the gate off; projects from before the setting keep the gate they had.
       this.sql.exec("alter table projects add column gate integer not null default 0");
@@ -251,6 +256,7 @@ export class Db {
     this.sql.exec("create unique index if not exists api_tokens_refresh on api_tokens(refresh_hash)");
     const rcols = new Set((this.sql.prepare("pragma table_info(runs)").all() as { name: string }[]).map((c) => c.name));
     if (!rcols.has("progress")) this.sql.exec("alter table runs add column progress text");
+    if (!rcols.has("media_cleared")) this.sql.exec("alter table runs add column media_cleared text");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");
     const jcols = new Set((this.sql.prepare("pragma table_info(jobs)").all() as { name: string }[]).map((c) => c.name));
@@ -311,6 +317,10 @@ export class Db {
 
   createSession(id: string, userId: number, days = 7): void {
     this.run("insert into sessions (id, user_id, created, expires) values (?, ?, ?, ?)", id, userId, now(), new Date(Date.now() + days * 86_400_000).toISOString());
+  }
+
+  user(id: number): User | undefined {
+    return this.one<User>("select * from users where id = ?", id);
   }
 
   sessionUser(id: string): User | undefined {
@@ -748,6 +758,13 @@ export class Db {
 
   runByToken(token: string): Run | undefined {
     return this.one<Run>("select * from runs where token = ?", token);
+  }
+
+  /** Finished runs whose screenshots or recording are still kept, with their project's repo. */
+  runsWithMedia(): (Run & { repo: string; installation_id: number })[] {
+    return this.all<Run & { repo: string; installation_id: number }>(
+      "select r.*, p.repo, p.installation_id from runs r join projects p on p.id = r.project_id where r.media_cleared is null and r.status in ('done', 'failed', 'cancelled') and r.files != '[]' order by r.id",
+    );
   }
 
   runs(projectId: number, limit = 50): Run[] {

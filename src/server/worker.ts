@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { parse } from "yaml";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../verify/prompt.ts";
+import { screenFor, viewportsOf } from "../verify/viewports.ts";
 import { parseRecipe, RecipeError } from "../verify/recipe.ts";
 import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/similar.ts";
 import { emptyProgress, mergeTester, parseProgress, type Progress, type Stage, startStage } from "../verify/progress.ts";
@@ -9,9 +10,10 @@ import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
+import type { ServerModule } from "./extension.ts";
 import { withCodex } from "./codex.ts";
 import type { Github, LinkedIssue } from "./github.ts";
-import { q, runLong, type Sandboxes } from "./sandbox.ts";
+import { finishRecordingScript, q, runLong, type Sandboxes } from "./sandbox.ts";
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const VIDEO = /\.(mp4|webm)$/i;
@@ -21,6 +23,8 @@ export interface Deps {
   sandboxes: Sandboxes;
   github: () => Github;
   config: Config;
+  /** `SERVER_MODULE`: asked before each job starts, told when it ended. */
+  module?: ServerModule | null;
 }
 
 /** A project's sandbox and the places in it: the repo checkout, gespann's files, the recipe. */
@@ -464,7 +468,10 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   }
   let judged = a.judged;
   const outcome = a.outcome;
-  const { files, alias } = await collect(d, b, run, `${dir}/out`, log);
+  // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
+  const sizes = viewportsOf((d.db.project(p.id) ?? p).viewports).length;
+  const { files, alias, complete } = await collect(d, b, run, `${dir}/out`, log, sizes < 2);
+  if (complete) await dropProof(d, b, run);
   if (judged) judged = withAliases(judged, alias);
   // A verdict without the issue goals says why, on the run page and over MCP.
   if (unread && judged?.verdict) {
@@ -475,6 +482,15 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   d.db.updateRun(run.id, { status: error && !judged?.verdict ? "failed" : "done", outcome, verdict: judged ? JSON.stringify(judged) : null, files: JSON.stringify(files), finished: new Date().toISOString() });
   await stopSandbox(d, b);
   await report(d, p, { ...run, outcome, error }, judged, files, log);
+}
+
+/**
+ * The server now has the proof: the sandbox's copy of it goes, of both attempts. The work folders
+ * stay; their state.json says what may still be up.
+ */
+async function dropProof(d: Deps, b: Box, run: Run): Promise<void> {
+  const outs = [run.token.slice(0, 12), run.token.slice(12, 24)].map((id) => `${b.gespann}/runs/${id}/out`);
+  await d.sandboxes.exec(b.id, `rm -rf ${outs.join(" ")}`, 120).catch(() => undefined);
 }
 
 /** A run lost in a restart may have left its copy up: finish tears it down before the run starts again. */
@@ -520,6 +536,14 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       // finish reads the refs to require one goal per issue.
       await d.sandboxes.writeFile(b.id, `${dir}/work/issues.json`, `${JSON.stringify(issues.map((i) => ({ ref: i.ref, url: i.url })))}\n`);
     }
+    const viewports = viewportsOf((d.db.project(p.id) ?? p).viewports);
+    const screen = screenFor(viewports);
+    if (screen) {
+      // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
+      // Before the copy comes up: a new screen ends whatever ran on the old one.
+      await d.sandboxes.writeFile(b.id, `${d.sandboxes.home(b.id)}/.gespann-screen`, `${screen}\n`);
+      await d.sandboxes.ensureRunning(b.id);
+    }
     log("bringing the copy up");
     stage("copy");
     const prep = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify prepare --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir}`), {
@@ -536,6 +560,9 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     const recipe = parseRecipe(current.recipe ?? (await d.sandboxes.readFile(b.id, b.recipe)) ?? "");
     const addendum = recipe.prompt ? ((await d.sandboxes.readFile(b.id, `${b.project}/${recipe.prompt}`)) ?? (await d.sandboxes.readFile(b.id, `${b.repo}/${recipe.prompt}`)) ?? "") : "";
     const notes = (await d.sandboxes.readFile(b.id, `${b.project}/NOTES.md`)) ?? "";
+    // Every further screen size repeats the checks: half the recipe's time more for each.
+    const minutes = recipe.timeout * (1 + Math.max(0, viewports.length - 1) / 2);
+    if (viewports.length) log(`screen sizes to test: ${viewports.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ")}`);
     const prompt = testerPrompt({
       testerNote: d.sandboxes.testerNote,
       repo: p.repo,
@@ -549,6 +576,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       recipe,
       addendum: [notes, addendum].filter(Boolean).join("\n\n"),
       issues: issues.map((i) => i.ref),
+      viewports,
     });
     await d.sandboxes.writeFile(b.id, `${dir}/work/prompt.txt`, prompt);
     const rec = `${dir}/out/recording.mp4`;
@@ -564,7 +592,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     try {
       tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
         runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
-          timeoutMs: recipe.timeout * 60_000,
+          timeoutMs: minutes * 60_000,
           isCancelled: () => d.db.job(job.id)?.status === "cancelled",
           onTick: readTester,
         }),
@@ -573,11 +601,10 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     } finally {
       if (recording) {
         await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
-        // Index at the front (faststart), so browsers start playing before the whole file is loaded.
-        await d.sandboxes.exec(b.id, `test -s ${rec} && ffmpeg -loglevel error -y -i ${rec} -c copy -movflags +faststart ${rec}.tmp.mp4 && mv ${rec}.tmp.mp4 ${rec}; rm -f ${rec}.tmp.mp4`, 300).catch(() => undefined);
+        await d.sandboxes.exec(b.id, finishRecordingScript(rec), 300).catch(() => undefined);
       }
     }
-    log(tester.timedOut ? `the tester ran out of time (${recipe.timeout} min)` : `the tester finished (exit ${tester.exitCode})`);
+    log(tester.timedOut ? `the tester ran out of time (${minutes} min)` : `the tester finished (exit ${tester.exitCode})`);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
@@ -659,13 +686,13 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
  * Copies the run's proof to the server. Screenshots of the same screen are copied once; `alias`
  * maps each skipped one to the screenshot that was kept.
  */
-async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string> }> {
+async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void, dedupe = true): Promise<{ files: string[]; alias: Map<string, string>; complete: boolean }> {
   const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -104857601c -printf '%f\\n'`, 30);
   const big = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size +104857600c -printf '%f %s\\n'`, 30).catch(() => null);
   for (const line of big?.stdout.split("\n").filter(Boolean) ?? []) log(`✗ ${line.split(" ")[0]} is too large to keep (${Math.round(Number(line.split(" ")[1]) / 1024 ** 2)} MB, limit 100 MB)`);
   const all = ls.stdout.split("\n").filter((f) => /^[A-Za-z0-9._-]+$/.test(f) && (IMAGE.test(f) || VIDEO.test(f) || f === "verdict.json"));
   const images = all.filter((f) => IMAGE.test(f));
-  const thumbs = images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;
+  const thumbs = dedupe && images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;
   const alias = sameScreens(parseThumbs(thumbs?.stdout ?? ""));
   if (alias.size) log(`${alias.size} of ${images.length} screenshots show the same screen as another one; kept one of each`);
   // The recording first: it is the run's main proof and must not fall behind a long list of screenshots.
@@ -681,7 +708,7 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
       log(`could not copy ${f}: ${(err as Error).message}`);
     }
   }
-  return { files: saved, alias };
+  return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
 
 async function report(d: Deps, p: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
@@ -761,8 +788,8 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
     // Every background command is recorded, so a restart can stop what this attempt left running.
     d = { ...d, sandboxes: tracked(d.sandboxes, (sandboxId, processId) => d.db.addProc(job.id, sandboxId, processId)) };
     if (job.kind === "login") throw new Error("Codex sign-in moved to Settings");
-    else if (job.kind === "setup") await setup(d, job, p, log);
-    else if (job.kind === "suggest") await suggest(d, job, p, log);
+    else if (job.kind === "setup") await admit(d, job, p).then(() => setup(d, job, p, log));
+    else if (job.kind === "suggest") await admit(d, job, p).then(() => suggest(d, job, p, log));
     else {
       const run = job.run_id ? d.db.run_(job.run_id) : undefined;
       if (!run) throw new Error("run gone");
@@ -776,13 +803,16 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
         return d.db.endJob(job.id, "cancelled");
       }
-      // Closed or superseded while GitHub answered; verifyRun marks the run running before its first await.
+      const refused = await admit(d, job, p).then(() => null, (err: Error) => err);
+      // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
+      if (refused) throw refused;
       await verifyRun(d, job, p, run, log);
     }
     // Stopped and freed while the job still counts as running, so no other job takes a sandbox mid-stop.
     await releaseSlots(d, job);
     d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
+    await ended(d, job, p);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     await releaseSlots(d, job);
@@ -795,6 +825,39 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         await report(d, p, { ...run, outcome: "FAIL", error: (err as Error).message }, null, [], log).catch(() => undefined);
       }
     }
+    await ended(d, job, p);
+  }
+}
+
+function moduleJob(d: Deps, job: Job, p: Project) {
+  const owner = d.db.user(p.owner_id);
+  return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" } };
+}
+
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Throws when the server module does not let this job start. */
+async function admit(d: Deps, job: Job, p: Project): Promise<void> {
+  if (!d.module?.admit) return;
+  let refused: string | null;
+  try {
+    refused = (await d.module.admit(moduleJob(d, job, p))) ?? null;
+  } catch (err) {
+    throw new Error(`${d.module.name} could not check this job: ${errText(err)}`);
+  }
+  if (refused !== null) throw new Error(`not started: ${refused}`);
+}
+
+/** Tells the server module a job ended, with its sandbox time. */
+async function ended(d: Deps, job: Job, p: Project): Promise<void> {
+  if (!d.module?.jobEnded) return;
+  const j = d.db.job(job.id);
+  if (!j?.started || !j.finished) return;
+  const seconds = Math.max(0, (Date.parse(j.finished) - Date.parse(j.started)) / 1000);
+  try {
+    await d.module.jobEnded({ ...moduleJob(d, job, p), status: j.status, started: j.started, finished: j.finished, seconds });
+  } catch (err) {
+    console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: errText(err) }));
   }
 }
 

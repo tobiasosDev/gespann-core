@@ -58,7 +58,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           <video controls playsInline preload="metadata" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
         </div>
       ) : (
-        <Empty>{live ? "The recording appears when the tester is done." : "This run has no recording. The log below says why."}</Empty>
+        <Empty>{live ? "The recording appears when the tester is done." : r.media_cleared ? `The recording and screenshots were deleted ${ago(r.media_cleared)}, after the pull request closed.` : "This run has no recording. The log below says why."}</Empty>
       )}
     </Card>
   );

@@ -10,10 +10,12 @@ import { triggered } from "../verify/plan.ts";
 import { parseProgress } from "../verify/progress.ts";
 import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
+import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
 import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
+import type { ServerModule } from "./extension.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 
@@ -50,6 +52,8 @@ export interface AppDeps {
   githubReady: () => boolean;
   /** How many jobs the sandbox host runs at once, for all users together; absent without sandboxes. */
   parallel?: number;
+  /** `SERVER_MODULE`: its routes and sidebar links. */
+  module?: ServerModule | null;
 }
 
 export function githubApp(config: Config, db: Db): GithubApp | null {
@@ -202,7 +206,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const u = c.get("user");
     let installUrl: string | null = null;
     if (d.githubReady()) installUrl = d.github().installUrl();
-    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl });
+    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [] });
   });
 
   app.post("/api/logout", (c) => {
@@ -298,6 +302,8 @@ export function createApp(d: AppDeps): Hono<Env> {
       codex_account: owner?.codex_account ?? null,
       own: p.owner_id === me(c).id,
       default_checks: DEFAULT_CHECKS,
+      viewports: viewportsOf(p.viewports).map((v) => v.id),
+      viewport_presets: VIEWPORTS,
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
       runs: db.runs(p.id),
       jobs: db.jobs(p.id, 30).map((j) => ({ ...j, log: j.kind === "run" ? "" : j.log })),
@@ -324,6 +330,16 @@ export function createApp(d: AppDeps): Hono<Env> {
     const model = String(body.model ?? "").trim();
     if (model && !/^[A-Za-z0-9._:-]{1,80}$/.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
     db.updateProject(p.id, { criteria: String(body.criteria ?? "").slice(0, 8000), model: model || null, suggestion: null });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/projects/:id/viewports", async (c) => {
+    const p = project(c);
+    const body = await c.req.json<{ viewports?: unknown }>();
+    if (!Array.isArray(body.viewports)) throw new HttpError(400, "viewports: a list of screen sizes");
+    const unknown = body.viewports.filter((id) => !VIEWPORTS.some((v) => v.id === id));
+    if (unknown.length) throw new HttpError(400, `viewports: unknown size ${unknown.map(String).join(", ")}`);
+    db.updateProject(p.id, { viewports: viewportsOf(body.viewports.join(",")).map((v) => v.id).join(",") });
     return c.json({ ok: true });
   });
 
@@ -445,6 +461,14 @@ export function createApp(d: AppDeps): Hono<Env> {
     const handler = event === "pull_request" ? onPullRequest : event === "issue_comment" ? onIssueComment : null;
     if (handler) void handler(d, JSON.parse(body) as Record<string, unknown>).catch((err: Error) => console.error(JSON.stringify({ level: "error", at: `webhook ${event}`, message: err.message })));
     return c.json({ ok: true }, 202);
+  });
+
+  // The server module's pages come before the React app, so its paths are not client routes.
+  d.module?.routes?.(app, {
+    user: (c) => {
+      const u = (c as Context<Env>).get("user");
+      return u ? { id: u.id, login: u.login } : null;
+    },
   });
 
   // The React app: static assets, and index.html for every other GET so client routes work on reload.
