@@ -9,7 +9,8 @@ import { runHook } from "./hook.ts";
 import { hooksInstalled, installHooks, uninstallHooks } from "./install.ts";
 import { gitOk, repoRoot } from "./util.ts";
 import { renderPlan, triggered } from "./verify/plan.ts";
-import { loadRecipe, RECIPE_PATH } from "./verify/recipe.ts";
+import { PROMPT_KINDS, type PromptKind, promptFor } from "./verify/prompt.ts";
+import { loadRecipe, RECIPE_PATH, recipeLine } from "./verify/recipe.ts";
 import { finish, prepare, type RunContext, screenshot } from "./verify/run.ts";
 
 const VERSION = "0.3.0";
@@ -103,6 +104,20 @@ function runContext(root: string, args: Args, fresh: boolean): RunContext {
   return { root, recipeFile, pr: str(args, "pr") ?? "0", head: rev(str(args, "head")), base: rev(str(args, "base")), run, work: join(dir, "work"), out: join(dir, "out") };
 }
 
+/**
+ * `verify recipe` and `verify prompt`, for the orchestrator: they need no git checkout. A prompt is
+ * printed exactly as the function returns it (each ends with a newline already); a newline is added
+ * only to one that does not.
+ */
+function cmdVerifyTool(args: Args): void {
+  if (args._[1] === "recipe") return say(recipeLine(need(str(args, "recipe"), "--recipe")));
+  const kind = args._[2] as PromptKind;
+  if (!PROMPT_KINDS.includes(kind)) throw new Error(`usage: gespann verify prompt ${PROMPT_KINDS.join("|")} --input <file.json>`);
+  const input = JSON.parse(readFileSync(need(str(args, "input"), "--input"), "utf8")) as Record<string, unknown>;
+  const text = promptFor(kind, input);
+  process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+}
+
 async function cmdVerify(root: string, args: Args) {
   const sub = args._[1];
   if (sub === "prepare") {
@@ -120,7 +135,7 @@ async function cmdVerify(root: string, args: Args) {
     if (f.outcome === "FAIL") process.exitCode = 1;
     return;
   }
-  throw new Error("usage: gespann verify prepare|finish [--recipe f] [--pr n --head sha --base sha] [--run id]");
+  throw new Error("usage: gespann verify prepare|finish|recipe|prompt [--recipe f] [--pr n --head sha --base sha] [--run id]");
 }
 
 const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude Code, Codex)
@@ -136,6 +151,9 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
   verify prepare [--recipe f] [--pr n --head sha --base sha]
                                          bring the copy up; prints {"ok","url","run","work","out"}
   verify finish [--run id] [--wait s]    wait for alongside checks, judge verdict.json, tear down
+  verify recipe --recipe f               check a recipe; prints {"ok","timeout","prompt"} or {"ok":false,"error"}
+  verify prompt <tester|setup|repair|suggest> --input f.json
+                                         print an agent prompt (used by the orchestrator)
   shot <file.png>                        save a screenshot of the desktop (for the tester)
   serve                                  run the gespann web service (see docs/self-host.md)
 
@@ -152,6 +170,7 @@ export async function main(argv: string[]): Promise<void> {
     return say(resolve(args._[1] as string));
   }
   if (cmd === "serve") return (await import("./server/main.ts")).serve();
+  if (cmd === "verify" && (args._[1] === "recipe" || args._[1] === "prompt")) return cmdVerifyTool(args);
   const root = repoRoot(process.cwd());
   switch (cmd) {
     case "init":

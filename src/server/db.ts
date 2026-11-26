@@ -79,6 +79,8 @@ export interface Job {
   procs: string;
   /** Set while a run waits for its PR's other checks: not taken before then. Null: starts as soon as there is room. */
   not_before: string | null;
+  /** When the server module heard that the job ended; set once, so a job is never billed twice. */
+  ended_noted: string | null;
 }
 
 /** One of a project's sandboxes. A job holds one at a time, so parallel jobs never share a checkout. */
@@ -280,6 +282,7 @@ export class Db {
       ["heartbeat", "text"],
       ["procs", "text not null default '[]'"],
       ["not_before", "text"],
+      ["ended_noted", "text"],
     ] as const) {
       if (!jcols.has(name)) this.sql.exec(`alter table jobs add column ${name} ${def}`);
     }
@@ -620,6 +623,11 @@ export class Db {
 
   endJob(id: number, status: JobStatus, error: string | null = null): void {
     this.run("update jobs set status = ?, finished = ?, error = ? where id = ?", status, now(), error, id);
+  }
+
+  /** Marks the job's end as told to the server module; false when it already was. */
+  noteEnded(id: number): boolean {
+    return Number(this.sql.prepare("update jobs set ended_noted = ? where id = ? and ended_noted is null").run(now(), id).changes) > 0;
   }
 
   appendLog(id: number, line: string): void {

@@ -21,6 +21,8 @@ export interface Config {
   mediaRetentionDays: number | null;
   /** git ref of gespann-core that sandboxes install, so sandbox and server run the same code. */
   gespannRef: string;
+  /** `WORKER`: "builtin" runs jobs in this process; "external" leaves them to the orchestrator (docs/orchestrator.md). */
+  worker: "builtin" | "external";
   /** Guards /setup (GitHub App creation). */
   adminToken: string;
   /** `ALLOWED_USERS`: GitHub logins (lowercase) that may sign in; empty lets every GitHub user in. */
@@ -92,6 +94,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (retention !== "off" && !/^\d{1,4}$/.test(retention)) throw new Error(`MEDIA_RETENTION_DAYS ${retention} is not a whole number of days or off`);
   const max = (env.MAX_PARALLEL_JOBS ?? "").trim();
   if (max && !/^[1-9]\d{0,2}$/.test(max)) throw new Error(`MAX_PARALLEL_JOBS ${max} is not a whole number from 1 to 999`);
+  const worker = (env.WORKER ?? "builtin").trim() || "builtin";
+  if (worker !== "builtin" && worker !== "external") throw new Error(`WORKER ${worker} is not builtin or external`);
   return {
     baseUrl,
     port,
@@ -106,6 +110,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxParallel: max ? Number(max) : null,
     mediaRetentionDays: retention === "off" ? null : Number(retention),
     gespannRef: env.GESPANN_REF ?? "main",
+    worker,
     adminToken: env.ADMIN_TOKEN ?? "",
     allowedUsers,
     production,

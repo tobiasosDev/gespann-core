@@ -1,0 +1,5 @@
+# The build context is the repo root; this image needs only the crate (not target/, node_modules, …).
+*
+!orchestrator/Cargo.toml
+!orchestrator/Cargo.lock
+!orchestrator/src

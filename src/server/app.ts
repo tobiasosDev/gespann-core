@@ -16,6 +16,7 @@ import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
+import { mountInternal, orchestratorPresent, orchestratorState } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
@@ -48,13 +49,13 @@ export interface AppDeps {
   db: Db;
   /**
    * Starts the Codex device sign-in for a user in a sandbox of their provider; false when the user has
-   * none. Absent when the instance has no sandbox provider at all.
+   * none. Absent when the instance has no sandbox provider at all. With WORKER=external the orchestrator runs it.
    */
   startCodexLogin?: (userId: number) => boolean | void;
   /** Throws when the instance has no GitHub App yet. */
   github: () => Github;
   githubReady: () => boolean;
-  /** How many jobs the user's sandbox provider runs at once, for all its users together; null without one. */
+  /** How many jobs the user's sandbox provider runs at once, for all its users together; null without one. With WORKER=external it comes from `settings.orchestrator`. */
   parallel?: number | ((userId: number) => number | null);
   /** `SERVER_MODULE`: its routes, sidebar links and Settings cards. */
   module?: ServerModule | null;
@@ -110,6 +111,12 @@ export function createApp(d: AppDeps): Hono<Env> {
   const secure = config.baseUrl.startsWith("https://");
   // ALLOWED_USERS closes the instance to everyone else, including users who signed in before.
   const allowed = (login: string) => !config.allowedUsers.length || config.allowedUsers.includes(login.toLowerCase());
+  const external = config.worker === "external";
+  // Read per request: the orchestrator publishes its host size while it runs.
+  const hostSize = (userId: number): number | null => (external ? (orchestratorState(db)?.parallel ?? null) : ((typeof d.parallel === "function" ? d.parallel(userId) : d.parallel) ?? null));
+
+  // The orchestrator's API comes first: it has its own token and needs no session.
+  mountInternal(app, d);
 
   app.use("*", async (c, next) => {
     const sid = getCookie(c, "gs") ?? null;
@@ -246,6 +253,12 @@ export function createApp(d: AppDeps): Hono<Env> {
   });
 
   app.post("/api/settings/codex/login", (c) => {
+    if (external) {
+      if (!orchestratorPresent(db)) throw new HttpError(409, "the orchestrator is not running, and Codex sign-in needs it; try again in a minute");
+      // The orchestrator runs the sign-in for every pending user; one already waiting keeps its sign-in.
+      if (db.codex(me(c).id)?.codex_state !== "pending") db.setCodex(me(c).id, { codex_state: "pending", codex_login: null });
+      return c.json({ ok: true });
+    }
     if (!d.startCodexLogin) throw new HttpError(409, "this instance has no sandbox provider configured");
     if (d.startCodexLogin(me(c).id) === false) throw new HttpError(409, "this instance has no sandbox provider for your account");
     return c.json({ ok: true });
@@ -259,7 +272,7 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
   // The most a user may choose: the host's number, lowered by the server module's cap (e.g. a plan's).
   const ceiling = (u: User) => {
-    const host = (typeof d.parallel === "function" ? d.parallel(u.id) : d.parallel) ?? null;
+    const host = hostSize(u.id);
     const cap = capFor(d.module, { id: u.id, login: u.login });
     const most = [host, cap?.jobs].filter((n): n is number => typeof n === "number");
     return { host, cap, most: most.length ? Math.min(...most) : null };
