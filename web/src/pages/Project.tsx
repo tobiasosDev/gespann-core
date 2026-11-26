@@ -1,9 +1,10 @@
-import { Check, ChevronRight, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
+import { Check, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { ago, api, duration, type ProjectDetail, useResource } from "../api.ts";
+import { ago, api, type ProjectDetail, useResource } from "../api.ts";
+import { PrRuns, RunsPanel } from "../components/PrRuns.tsx";
 import { ShotList } from "../components/Shots.tsx";
-import { Button, Card, CardHeader, Empty, Input, Log, Mono, Textarea } from "../components/ui.tsx";
-import { JobStatus, Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
+import { Button, Card, CardHeader, Input, Log, Mono, Textarea } from "../components/ui.tsx";
+import { JobStatus, navigate, ProjectStatus } from "../nav.tsx";
 
 type StepState = "done" | "running" | "failed" | "todo";
 
@@ -304,66 +305,35 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               </Card>
             )
           )}
-      <Card>
-        <CardHeader
-          title="Runs"
-          action={
-            <form
-              className="flex items-center gap-2"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const r = await post("/runs", { pr: Number(pr) });
-                if (r.runId) navigate(`/runs/${r.runId}`);
-              }}
-            >
-              <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" className="w-20 font-mono" disabled={setup !== "done"} />
-              <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
-                <Play className="size-3.5" /> Test PR
-              </Button>
-            </form>
-          }
-        />
-        {p.runs.length === 0 ? (
-          <Empty>No runs yet.</Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead className="text-left text-[12px] text-muted-foreground">
-                <tr className="border-b border-border">
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Pull request</th>
-                  <th className="px-4 py-2 font-medium">Commit</th>
-                  <th className="px-4 py-2 font-medium">Duration</th>
-                  <th className="px-4 py-2 font-medium">Started</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {p.runs.map((r) => (
-                  <tr key={r.id} className="cursor-pointer border-b border-border last:border-0 hover:bg-accent" onClick={() => navigate(`/runs/${r.id}`)}>
-                    <td className="px-4 py-2.5">
-                      <RunStatus run={r} />
-                    </td>
-                    <td className="max-w-md truncate px-4 py-2.5">
-                      <Mono className="text-muted-foreground">#{r.pr}</Mono> {r.title}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <Mono>{r.head.slice(0, 7)}</Mono>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-[12px] text-muted-foreground">{duration(r.started, r.finished)}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{ago(r.started ?? r.created)}</td>
-                    <td className="px-4 py-2.5 text-right">
-                      <Link to={`/runs/${r.id}`} className="text-muted-foreground">
-                        <ChevronRight className="inline size-4" />
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex items-start gap-6">
+            <div className="min-w-0 flex-1">
+              <PrRuns
+                runs={p.runs}
+                header={
+                  <CardHeader
+                    title="Pull requests"
+                    description="Each pull request once, with all its runs. Select a row to open its latest run."
+                    action={
+                      <form
+                        className="flex items-center gap-2"
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          const r = await post("/runs", { pr: Number(pr) });
+                          if (r.runId) navigate(`/runs/${r.runId}`);
+                        }}
+                      >
+                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" className="w-20 font-mono" disabled={setup !== "done"} />
+                        <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
+                          <Play className="size-3.5" /> Test PR
+                        </Button>
+                      </form>
+                    }
+                  />
+                }
+              />
+            </div>
+            <RunsPanel runs={p.runs} repo={p.repo} />
           </div>
-        )}
-      </Card>
 
         </>
       )}

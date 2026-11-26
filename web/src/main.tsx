@@ -11,12 +11,13 @@ import { Run } from "./pages/Run.tsx";
 import { SettingsPage } from "./pages/Settings.tsx";
 import "./index.css";
 
-function Shell({ me, section, projects, children }: { me: Me; section: Section; projects: ProjectRow[] | null; children: React.ReactNode }) {
+/** `wide` lets a page use the width of a wide screen; forms and run reports keep a readable width. */
+function Shell({ me, section, projects, wide, children }: { me: Me; section: Section; projects: ProjectRow[] | null; wide?: boolean; children: React.ReactNode }) {
   return (
     <div className="min-h-screen">
       <Sidebar me={me} section={section} projects={projects} />
-      <main className="px-4 py-6 md:ml-72 md:px-8">
-        <div className="mx-auto max-w-5xl">{children}</div>
+      <main className="px-4 py-6 md:ml-[60px] md:px-8 sidebar:ml-72">
+        <div className={wide ? "mx-auto max-w-[1680px]" : "mx-auto max-w-5xl"}>{children}</div>
       </main>
     </div>
   );
@@ -85,7 +86,7 @@ function Signed({ me, path }: { me: Me; path: string }) {
     page = <SettingsPage />;
   } else page = <Projects />;
   return (
-    <Shell me={me} section={section} projects={projects}>
+    <Shell me={me} section={section} projects={projects} wide={path.startsWith("/projects/") && section.kind === "project" && section.tab === "runs"}>
       {page}
     </Shell>
   );

@@ -19,7 +19,7 @@ export function usePath(): string {
 }
 
 /** Plain links that stay inside the app. */
-export function Link({ to, className, children, ...rest }: { to: string; className?: string; children: ReactNode; "aria-current"?: "page" }) {
+export function Link({ to, className, children, ...rest }: { to: string; className?: string; children: ReactNode; "aria-current"?: "page"; "aria-label"?: string; title?: string }) {
   return (
     <a
       href={to}
