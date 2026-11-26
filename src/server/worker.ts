@@ -735,10 +735,8 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
     // Every background command is recorded, so a restart can stop what this attempt left running.
     d = { ...d, sandboxes: tracked(d.sandboxes, (sandboxId, processId) => d.db.addProc(job.id, sandboxId, processId)) };
     if (job.kind === "login") throw new Error("Codex sign-in moved to Settings");
-    const refused = await admit(d, job, p);
-    if (refused) throw new Error(`not started: ${refused}`);
-    if (job.kind === "setup") await setup(d, job, p, log);
-    else if (job.kind === "suggest") await suggest(d, job, p, log);
+    else if (job.kind === "setup") await admit(d, job, p).then(() => setup(d, job, p, log));
+    else if (job.kind === "suggest") await admit(d, job, p).then(() => suggest(d, job, p, log));
     else {
       const run = job.run_id ? d.db.run_(job.run_id) : undefined;
       if (!run) throw new Error("run gone");
@@ -752,7 +750,8 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
         return d.db.endJob(job.id, "cancelled");
       }
-      // Closed or superseded while GitHub answered; verifyRun marks the run running before its first await.
+      await admit(d, job, p);
+      // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
       await verifyRun(d, job, p, run, log);
     }
@@ -781,10 +780,18 @@ function moduleJob(d: Deps, job: Job, p: Project) {
   return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" } };
 }
 
-/** The server module's reason not to start this job, or null. */
-async function admit(d: Deps, job: Job, p: Project): Promise<string | null> {
-  if (!d.module?.admit) return null;
-  return (await d.module.admit(moduleJob(d, job, p))) ?? null;
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Throws when the server module does not let this job start. */
+async function admit(d: Deps, job: Job, p: Project): Promise<void> {
+  if (!d.module?.admit) return;
+  let refused: string | null;
+  try {
+    refused = (await d.module.admit(moduleJob(d, job, p))) ?? null;
+  } catch (err) {
+    throw new Error(`${d.module.name} could not check this job: ${errText(err)}`);
+  }
+  if (refused !== null) throw new Error(`not started: ${refused}`);
 }
 
 /** Tells the server module a job ended, with its sandbox time. */
@@ -796,7 +803,7 @@ async function ended(d: Deps, job: Job, p: Project): Promise<void> {
   try {
     await d.module.jobEnded({ ...moduleJob(d, job, p), status: j.status, started: j.started, finished: j.finished, seconds });
   } catch (err) {
-    console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: (err as Error).message }));
+    console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: errText(err) }));
   }
 }
 

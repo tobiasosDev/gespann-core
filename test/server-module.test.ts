@@ -54,11 +54,28 @@ test("a job the module refuses fails with its reason before it takes a sandbox; 
   assert.equal(ends[0]?.owner.login, "tobi");
   assert.ok(ends[0]!.seconds >= 0 && ends[0]!.seconds < 5);
 
-  // A module that throws in jobEnded does not change the job's result.
-  const loud: ServerModule = { name: "loud", admit: () => "no", jobEnded: () => { throw new Error("boom"); } };
+  // A module that throws anything, even a string or null, fails the job with a message; the job still ends.
+  const loud: ServerModule = { name: "loud", admit: () => Promise.reject("down"), jobEnded: () => { throw null; } };
   const job2 = db.job(db.enqueue(p, "suggest"))!;
   await processJob({ db, sandboxes, github: () => github, config, module: loud }, job2);
-  assert.equal(db.job(job2.id)?.error, "not started: no");
+  assert.equal(db.job(job2.id)?.status, "failed");
+  assert.equal(db.job(job2.id)?.error, "loud could not check this job: down");
+});
+
+test("a PR closed while its run waited is skipped, not refused", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-module-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "tobi", name: null, avatar: null });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  let asked = 0;
+  const module: ServerModule = { name: "test", admit: () => { asked++; return "no plan"; } };
+  const github = { pull: async () => ({ state: "closed", merged: true, head: { sha: "h" } }), installationToken: async () => "tok", updateCheck: async () => undefined } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  const sandboxes = new Proxy({}, { get: () => () => { throw new Error("no sandbox in this test"); } }) as Sandboxes;
+  await processJob({ db, sandboxes, github: () => github, config, module }, job);
+  assert.equal(db.job(job.id)?.status, "cancelled");
+  assert.equal(asked, 0, "the module is not asked about a run that does not happen");
 });
 
 test("the module's routes see the signed-in user and come before the web app; its links show in /api/me", async () => {
