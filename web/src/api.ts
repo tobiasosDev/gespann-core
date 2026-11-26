@@ -112,9 +112,17 @@ export interface Check {
   proof?: string[];
 }
 
+export interface Goal {
+  issue: string;
+  goal: string;
+  observed: string;
+  result: "met" | "missed" | "blocked";
+  proof?: string[];
+}
+
 export interface RunDetail extends RunRow {
   project: { id: number; repo: string };
-  verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; proof: string[] } | null; problems: string[] } | null;
+  verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[] } | null;
   files: string[];
   token: string;
   log: string;

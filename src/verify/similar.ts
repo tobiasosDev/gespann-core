@@ -61,6 +61,7 @@ export function withAliases(j: Judged, alias: Map<string, string>): Judged {
       ...j.verdict,
       proof: map(j.verdict.proof),
       checks: j.verdict.checks.map((c) => (c.proof ? { ...c, proof: map(c.proof) } : c)),
+      ...(j.verdict.goals ? { goals: j.verdict.goals.map((g) => (g.proof ? { ...g, proof: map(g.proof) } : g)) } : {}),
     },
   };
 }

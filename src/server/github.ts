@@ -56,6 +56,36 @@ export interface PullRequest {
   html_url: string;
 }
 
+export interface LinkedIssue {
+  /** `#12` in the PR's own repository, `owner/repo#12` in another. */
+  ref: string;
+  title: string;
+  body: string;
+  url: string;
+}
+
+const MAX_ISSUES = 5;
+
+function issueRef(prRepo: string, issueRepo: string, n: number): string {
+  return issueRepo.toLowerCase() === prRepo.toLowerCase() ? `#${n}` : `${issueRepo}#${n}`;
+}
+
+/**
+ * Issues the PR text closes with GitHub's keywords: `Fixes #12`, `closes owner/repo#3`,
+ * `Resolves https://github.com/owner/repo/issues/4`. A bare mention (`#12`, `Refs #12`) is no goal of this PR.
+ */
+export function closingRefs(text: string, repo: string): { repo: string; number: number }[] {
+  const out: { repo: string; number: number }[] = [];
+  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+(?:https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/|([\w.-]+\/[\w.-]+))?#?(\d+)\b/gi;
+  for (const m of text.matchAll(re)) {
+    // A number only counts with `#` or as an issue URL: "fixes 3 bugs" is no reference.
+    if (!m[1] && !m[0].includes("#")) continue;
+    const r = { repo: m[1] ?? m[2] ?? repo, number: Number(m[3]) };
+    if (!out.some((o) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.number === r.number)) out.push(r);
+  }
+  return out;
+}
+
 export class Github {
   private readonly app: GithubApp;
   private readonly fetchImpl: typeof fetch;
@@ -144,6 +174,37 @@ export class Github {
 
   async pull(installationId: number, repo: string, pr: number): Promise<PullRequest> {
     return this.asInstallation(installationId, "GET", `/repos/${repo}/pulls/${pr}`);
+  }
+
+  /**
+   * The issues this PR says it resolves: GitHub's own list (closing keywords and issues linked in the
+   * sidebar) plus closing keywords in the PR text that GitHub does not count, e.g. on a PR into a
+   * branch other than the default. Issues the app cannot read are left out.
+   */
+  async linkedIssues(installationId: number, repo: string, pr: number, body: string | null): Promise<LinkedIssue[]> {
+    const [owner, name] = repo.split("/");
+    const found = new Map<string, LinkedIssue>();
+    const add = (r: { number: number; title: string; body: string | null; html_url: string; repo: string }) => {
+      const ref = issueRef(repo, r.repo, r.number);
+      if (!found.has(ref.toLowerCase())) found.set(ref.toLowerCase(), { ref, title: r.title, body: r.body ?? "", url: r.html_url });
+    };
+    const q = await this.asInstallation<{ data?: { repository?: { pullRequest?: { closingIssuesReferences?: { nodes: { number: number; title: string; body: string; url: string; repository: { nameWithOwner: string } }[] } } } } }>(
+      installationId,
+      "POST",
+      "/graphql",
+      {
+        query: "query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { closingIssuesReferences(first: 10) { nodes { number title body url repository { nameWithOwner } } } } } }",
+        variables: { owner, name, pr },
+      },
+    ).catch(() => null);
+    for (const n of q?.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? []) add({ ...n, html_url: n.url, repo: n.repository.nameWithOwner });
+    for (const r of closingRefs(body ?? "", repo)) {
+      if (found.size >= MAX_ISSUES) break;
+      if (found.has(issueRef(repo, r.repo, r.number).toLowerCase())) continue;
+      const i = await this.asInstallation<{ number: number; title: string; body: string | null; html_url: string; pull_request?: unknown }>(installationId, "GET", `/repos/${r.repo}/issues/${r.number}`).catch(() => null);
+      if (i && !i.pull_request) add({ ...i, repo: r.repo });
+    }
+    return [...found.values()].slice(0, MAX_ISSUES);
   }
 
   async changedFiles(installationId: number, repo: string, pr: number): Promise<string[]> {

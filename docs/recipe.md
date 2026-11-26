@@ -80,7 +80,7 @@ A run executes the recipe in this order. Steps marked *always* run even when an 
 5. `alongside` checks start in the background
 6. the tester works against `env.url`
 7. the run waits for the `alongside` checks
-8. `verdict.json` is validated
+8. `verdict.json` is validated. When the PR resolves GitHub issues (`Fixes #12`, or linked in the PR sidebar), the server writes their title and description to `$GESPANN_WORK/issues.md` and their refs to `issues.json`; the tester then judges each issue's goal (`goals` in `verdict.json`: met, missed or blocked), and a missed goal fails the run
 9. *always:* `env.down`, the services stop, `cleanup` in order
 
 ## Commands
