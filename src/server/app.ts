@@ -137,7 +137,7 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.get("/healthz", (c) => c.json({ ok: true }));
 
-  // Read-only MCP endpoint for coding agents (Streamable HTTP, stateless). An agent's OAuth sign-in or
+  // MCP endpoint for coding agents (Streamable HTTP, stateless): reads runs, and reruns a PR. An agent's OAuth sign-in or
   // a personal token from Settings sees the projects its user sees; the ADMIN_TOKEN sees every project.
   app.post("/mcp", async (c) => {
     const origin = c.req.header("origin");
@@ -160,7 +160,12 @@ export function createApp(d: AppDeps): Hono<Env> {
     } catch {
       return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, 400);
     }
-    const out = mcpRespond(body, viewer, { db, dataDir: config.dataDir, baseUrl: config.baseUrl });
+    const out = await mcpRespond(body, viewer, {
+      db,
+      dataDir: config.dataDir,
+      baseUrl: config.baseUrl,
+      ...(d.githubReady() ? { pull: (p: Project, pr: number) => d.github().pull(p.installation_id, p.repo, pr), queueRun: (p: Project, pr: PullRequest) => queueRun(d, p, pr) } : {}),
+    });
     return out === null ? c.body(null, 202) : c.json(out);
   });
   // No server-to-client stream and no sessions: GET and DELETE are not offered.

@@ -204,7 +204,7 @@ button.go{background:#ededed;color:#0a0a0a;border-color:#ededed}.who{display:fle
       200,
       html`<div class="who">${user.avatar ? html`<img src="${user.avatar}" alt="">` : ""}Signed in to gespann as <b>${user.login}</b></div>
 <h1>Allow <b>${ask.client.name}</b> to read your gespann runs?</h1>
-<ul><li>Status, issues, review text, screenshots and recordings of runs</li><li>Only the projects you can see</li><li>Read-only: it cannot start, cancel or approve anything</li></ul>
+<ul><li>Status, issues, review text, screenshots and recordings of runs</li><li>Rerun a pull request, at most 3 times per commit</li><li>Only the projects you can see</li><li>It cannot cancel or approve anything</li></ul>
 <p>After you allow it, your browser goes back to ${where}. You can revoke it under Settings → Agent access.</p>
 <form method="post" action="/oauth/authorize">${hidden}<input type="hidden" name="csrf" value="${sign(`csrf:${c.get("session")}`)}">
 <div class="row"><button type="submit" name="decision" value="deny">Cancel</button><button class="go" type="submit" name="decision" value="allow">Allow</button></div></form>`,

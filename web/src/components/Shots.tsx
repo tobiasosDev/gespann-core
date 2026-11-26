@@ -45,7 +45,7 @@ export function ShotList({ shots, className }: { shots: Shot[]; className?: stri
                 <Maximize2 className="size-4" />
               </span>
             </button>
-            <figcaption className="mt-2 flex gap-2 text-[13px] leading-snug">
+            <figcaption className="mt-2 flex gap-2 text-body leading-snug">
               <ResultIcon result={s.result} />
               <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">{s.caption}</span>
             </figcaption>
@@ -108,12 +108,12 @@ function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: 
       className="shot-viewer fixed inset-0 m-0 flex h-dvh max-h-none w-screen max-w-none flex-col bg-black p-0 text-white backdrop:bg-transparent"
     >
       <div className="flex h-14 shrink-0 items-center gap-1 px-2 sm:px-4">
-        <span className="px-2 font-mono text-[12px] text-white/60 tabular-nums">
+        <span className="px-2 font-mono text-small text-white/60 tabular-nums">
           {index + 1} / {shots.length}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <ViewerButton label={actual ? "Fit to screen" : "Actual size"} onClick={() => setActual((a) => !a)} pressed={actual}>
-            {actual ? <Scan className="size-4" /> : <span className="font-mono text-[12px]">1:1</span>}
+            {actual ? <Scan className="size-4" /> : <span className="font-mono text-small">1:1</span>}
           </ViewerButton>
           <a
             href={shot.src}
@@ -178,7 +178,7 @@ function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: 
       </div>
 
       <div className="shrink-0 border-t border-white/10 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <p className="mx-auto flex max-w-3xl gap-2 text-[13px] leading-snug text-white/85">
+        <p className="mx-auto flex max-w-3xl gap-2 text-body leading-snug text-white/85">
           <ResultIcon result={shot.result} />
           <span className="min-w-0 [overflow-wrap:anywhere]">{shot.caption}</span>
         </p>

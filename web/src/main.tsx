@@ -30,15 +30,15 @@ function SignIn({ me }: { me: Me }) {
         <div className="mb-4 flex items-center gap-2 font-semibold">
           <Logo /> gespann
         </div>
-        <h1 className="text-lg font-semibold">Acceptance tests for every pull request</h1>
-        <p className="mt-1 mb-5 text-[13px] text-muted-foreground">An agent on your own Codex plan clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
-        {new URLSearchParams(location.search).has("closed") && <p className="mb-4 text-[13px] text-warn">Sign-in is limited to invited accounts for now. Your GitHub account is not on the list.</p>}
+        <h1 className="text-title font-semibold">Acceptance tests for every pull request</h1>
+        <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own Codex plan clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
+        {new URLSearchParams(location.search).has("closed") && <p className="mb-4 text-body text-warn">Sign-in is limited to invited accounts for now. Your GitHub account is not on the list.</p>}
         {me.githubReady ? (
           <LinkButton href="/auth/github" className="w-full">
             Continue with GitHub
           </LinkButton>
         ) : (
-          <p className="text-[13px] text-warn">No GitHub App configured on this instance yet.</p>
+          <p className="text-body text-warn">No GitHub App configured on this instance yet.</p>
         )}
       </div>
     </div>

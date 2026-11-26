@@ -19,8 +19,8 @@ export function NewProject({ installUrl }: { installUrl: string | null }) {
   };
   return (
     <>
-      <h1 className="mb-1 text-xl font-semibold">Add project</h1>
-      <p className="mb-4 text-[13px] text-muted-foreground">Repositories where the gespann GitHub App is installed.</p>
+      <h1 className="mb-1 text-title font-semibold">Add project</h1>
+      <p className="mb-4 text-body text-muted-foreground">Repositories where the gespann GitHub App is installed.</p>
       <div className="mb-3 flex gap-2">
         <Input placeholder="Filter repositories" value={filter} onChange={(e) => setFilter(e.target.value)} className="max-w-xs" />
         {installUrl && (
