@@ -21,15 +21,18 @@ import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
 
-/** Codex models offered in Settings; users may also keep Codex's default or enter a custom model slug. */
-const CODEX_MODELS = [
-  { id: "gpt-6.2-sol", name: "GPT-6.2-Sol", description: "Fast, go-to model for coding and everyday work" },
+/**
+ * Codex models offered in Settings; users may also keep Codex's default or enter a custom model slug.
+ * `recommended` and `note` come from the tester benchmark in docs/models.md.
+ */
+const CODEX_MODELS: { id: string; name: string; description: string; recommended?: true; note?: string }[] = [
+  { id: "gpt-6.2-sol", name: "GPT-6.2-Sol", description: "Fast, go-to model for coding and everyday work", recommended: true },
   { id: "gpt-6.2-astra", name: "GPT-6.2-Astra", description: "Most capable model for complex coding" },
   { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", description: "Strong at visual understanding and computer use" },
   { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", description: "Previous generation coding model" },
   { id: "gpt-6-astra", name: "GPT-6-Astra", description: "Previous generation complex coding model" },
-  { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks" },
-] as const;
+  { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks", note: "In our benchmark it passed a PR that broke a total, and it was not faster. Not recommended for testing." },
+];
 
 const MODEL_RE = /^[A-Za-z0-9._:-]{1,80}$/;
 
