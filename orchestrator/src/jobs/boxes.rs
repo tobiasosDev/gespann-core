@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::{cut, never, tail, Cx};
 use crate::codex::{Agent, Provider};
-use crate::db::{Project, Slot};
+use crate::db::{AgentRow, Project, Slot};
 use crate::journal::Long;
 use crate::sandbox::scripts::{install_script, q};
 use crate::sandbox::{CreateOpts, LongResult, Purpose};
@@ -143,22 +143,29 @@ pub(crate) fn with_env(b: &Sbx, command: &str) -> String {
     format!(". {}/env.sh 2>/dev/null; {command}", b.gespann)
 }
 
-/// The job's agent: the owner's provider from Settings, and the model (the project's own first,
-/// otherwise the owner's for that provider). Decided once per job; a takeover keeps it.
+/// The job's agent: the owner's provider from Settings, and the model (the project's own first when it
+/// belongs to that provider, otherwise the owner's for it). Decided once per job; a takeover keeps it.
 pub(crate) async fn agent_for(cx: &Cx<'_>, p: &Project) -> Result<Agent> {
     cx.jr
         .step("agent", || async {
             let row = cx.ctx.db.agent(p.owner_id)?.unwrap_or_default();
-            let own = p.model.as_deref().filter(|m| !m.is_empty()).map(str::to_string);
-            Ok(if row.openrouter {
-                // The context size belongs to the owner's model; a project's own model goes without it.
-                let context = if own.is_some() { None } else { row.openrouter_context };
-                Agent { provider: Provider::Openrouter, model: own.or(row.openrouter_model), context }
-            } else {
-                Agent { provider: Provider::Codex, model: own.or(cx.ctx.db.codex_model(p.owner_id)?), context: None }
-            })
+            let codex_model = if row.openrouter { None } else { cx.ctx.db.codex_model(p.owner_id)? };
+            Ok(pick_agent(&row, p.model.as_deref(), codex_model))
         })
         .await
+}
+
+fn pick_agent(row: &AgentRow, project_model: Option<&str>, codex_model: Option<String>) -> Agent {
+    // OpenRouter ids name the vendor (`vendor/model`), Codex's never do: a project's model set for
+    // the other provider is left out rather than sent where it does not exist.
+    let own = project_model.filter(|m| !m.is_empty() && m.contains('/') == row.openrouter).map(str::to_string);
+    if row.openrouter {
+        // The context size belongs to the owner's model; a project's own model goes without it.
+        let context = if own.is_some() { None } else { row.openrouter_context };
+        Agent { provider: Provider::Openrouter, model: own.or(row.openrouter_model.clone()), context }
+    } else {
+        Agent { provider: Provider::Codex, model: own.or(codex_model), context: None }
+    }
 }
 
 pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, agent: &Agent, effort: &str) -> String {
@@ -374,6 +381,17 @@ mod tests {
     }
 
     #[test]
+    fn a_projects_model_counts_only_for_its_own_provider() {
+        let or = AgentRow { openrouter: true, openrouter_key: None, openrouter_model: Some("anthropic/claude-x".into()), openrouter_context: Some(200_000) };
+        assert_eq!(pick_agent(&or, Some("gpt-6.2-sol"), None), Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) });
+        assert_eq!(pick_agent(&or, Some("openai/gpt-x"), None), Agent { provider: Provider::Openrouter, model: Some("openai/gpt-x".into()), context: None });
+        let codex = AgentRow::default();
+        assert_eq!(pick_agent(&codex, Some("openai/gpt-x"), Some("gpt-6.2-astra".into())).model.as_deref(), Some("gpt-6.2-astra"));
+        assert_eq!(pick_agent(&codex, Some("gpt-6.2-sol"), Some("gpt-6.2-astra".into())).model.as_deref(), Some("gpt-6.2-sol"));
+        assert_eq!(pick_agent(&codex, Some(""), None).model, None);
+    }
+
+    #[test]
     fn codex_exec_passes_requested_reasoning_effort() {
         let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
         let codex = |model: Option<&str>| Agent { provider: Provider::Codex, model: model.map(str::to_string), context: None };
@@ -381,7 +399,7 @@ mod tests {
         assert!(codex_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
         let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None };
         let c = codex_exec(&b, "/p", "/l", "/j", &or, "high");
-        assert!(c.contains(r#"&& OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key")" codex exec "#), "{c}");
+        assert!(c.contains(r#"&& OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key"; rm -f "$HOME/.gespann-openrouter-key")" codex exec "#), "{c}");
         assert!(c.contains("-m 'x/y' -c model_provider=openrouter -c 'model_providers.openrouter="), "{c}");
     }
 }

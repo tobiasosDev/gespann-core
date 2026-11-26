@@ -147,7 +147,7 @@ function AgentChoice({ agent, onChange, busy }: { agent: AgentProvider; onChange
 /** The user's own OpenRouter key and model. */
 function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promise<void> }) {
   const o = data.openrouter;
-  const models = useResource<{ models: OpenRouterModel[]; error?: string }>("/settings/openrouter/models");
+  const models = useResource<{ models: OpenRouterModel[] }>("/settings/openrouter/models");
   const [key, setKey] = useState("");
   const [modelDraft, setModelDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -173,7 +173,7 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
     <Card className="mt-6">
       <CardHeader
         title="OpenRouter"
-        description="Codex runs on OpenRouter with your own API key, for all your projects. gespann keeps the key encrypted, puts it into a project's sandbox only while a job runs, and keeps it out of the commands the agent runs."
+        description="Codex runs on OpenRouter with your own API key, for all your projects. gespann keeps the key encrypted and hands it to the agent only while a job runs, outside the commands the agent runs."
         action={o.connected && o.model ? <Badge tone="ok">ready</Badge> : o.connected ? <Badge tone="warn">pick a model</Badge> : <Badge>not connected</Badge>}
       />
       <div className="space-y-3 px-4 py-4">
@@ -229,7 +229,7 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
           </Button>
         </form>
         {modelError && <p className="text-body text-bad">{modelError}</p>}
-        {models.data?.error && <p className="text-small text-warn">Could not load OpenRouter's models: {models.data.error}. You can still type a model id.</p>}
+        {models.error && <p className="text-small text-warn">Could not load OpenRouter's models: {models.error}. You can still type a model id.</p>}
         <p className="text-small text-muted-foreground">
           Required. The list shows the {list.length || ""} models that call tools and read screenshots, which the tester needs. Used for all your projects unless a project sets its own model in Setup.
         </p>

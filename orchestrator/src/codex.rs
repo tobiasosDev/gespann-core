@@ -5,9 +5,12 @@
 //! afterwards, because Codex refreshes it in place.
 //!
 //! OpenRouter: the same Codex CLI with OpenRouter as its model provider (Responses API). The sealed key
-//! is written into the sandbox for the length of a Codex step and handed to Codex as an environment
-//! variable, which `shell_environment_policy.exclude` keeps out of the shell commands Codex runs (Codex
-//! passes its whole environment to them otherwise), so PR code never sees it.
+//! is written into the sandbox just before a Codex step; the step's shell reads it into
+//! `OPENROUTER_API_KEY` and deletes the file before Codex starts, and `shell_environment_policy.exclude`
+//! keeps the variable out of the commands Codex runs (Codex passes its whole environment to them
+//! otherwise). Like the Codex sign-in, the key is still within reach of code running as the sandbox's
+//! user while Codex runs (its process environment), which is why only branches of the repo itself are
+//! tested, never forks.
 
 use std::future::Future;
 use std::sync::{Mutex, OnceLock};
@@ -72,7 +75,8 @@ impl Agent {
         if let Some(n) = self.context.filter(|n| *n > 0) {
             args.push_str(&format!(" -c model_context_window={n} -c model_auto_compact_token_limit={}", n * 8 / 10));
         }
-        (format!(r#"OPENROUTER_API_KEY="$(cat "$HOME/{OPENROUTER_KEY_FILE}")" "#), args)
+        // The key file goes as soon as the shell has read it, before Codex or any PR code runs.
+        (format!(r#"OPENROUTER_API_KEY="$(cat "$HOME/{OPENROUTER_KEY_FILE}"; rm -f "$HOME/{OPENROUTER_KEY_FILE}")" "#), args)
     }
 }
 
@@ -427,7 +431,7 @@ mod tests {
         assert_eq!(Agent { provider: Provider::Codex, model: None, context: None }.codex_args().1, "");
         let or = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
         let (env, args) = or.codex_args();
-        assert_eq!(env, r#"OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key")" "#, "the key never appears on a command line");
+        assert_eq!(env, r#"OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key"; rm -f "$HOME/.gespann-openrouter-key")" "#, "the key never appears on a command line, and its file goes at once");
         assert!(args.starts_with(r#" -m 'anthropic/claude-x' -c model_provider=openrouter -c 'model_providers.openrouter={name="OpenRouter""#), "{args}");
         assert!(args.contains(r#"env_key="OPENROUTER_API_KEY",wire_api="responses""#), "{args}");
         assert!(args.contains(r#" -c 'shell_environment_policy.exclude=["OPENROUTER_API_KEY"]'"#), "the commands Codex runs never see the key: {args}");

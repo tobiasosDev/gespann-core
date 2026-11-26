@@ -258,7 +258,13 @@ export class Db {
       ["openrouter_model", "text"],
       ["openrouter_context", "integer"],
     ] as const) {
-      if (!cols.has(name)) this.sql.exec(`alter table users add column ${name} ${def}`);
+      if (cols.has(name)) continue;
+      try {
+        this.sql.exec(`alter table users add column ${name} ${def}`);
+      } catch (err) {
+        // The orchestrator adds the same columns and may have done so since `table_info` was read.
+        if (!String((err as Error).message).includes("duplicate column")) throw err;
+      }
     }
     const pcols = new Set((this.sql.prepare("pragma table_info(projects)").all() as { name: string }[]).map((c) => c.name));
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
