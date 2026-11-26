@@ -90,3 +90,13 @@ It reads the same variables as `gespann serve` for sandboxes (`SANDBOX_PROVIDER`
 `SANDBOX_*`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus `UI_URL` and `HEALTH_PORT` (default 3001,
 `GET /healthz`). Provider modules (`module:<path>`) and a provider per user (`SANDBOX_PROVIDER_BY_USER`)
 need the builtin worker.
+
+With Docker, build from the repo root and run it next to the UI on the same host, with the UI's data
+volume at `/data` (both images write it as uid 1000). It needs no public port; the UI gets `WORKER=external`.
+
+```
+docker build -f orchestrator/Dockerfile -t gespann-orchestrator .
+docker run -d --name gespann-orchestrator -v gespann-data:/data \
+  -e SESSION_SECRET=… -e BASE_URL=https://gespann.example.com -e SANDBOX_PROVIDER=ssh -e SSH_HOST=… \
+  gespann-orchestrator
+```
