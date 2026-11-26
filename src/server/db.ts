@@ -105,6 +105,8 @@ export interface Run {
   started: string | null;
   finished: string | null;
   error: string | null;
+  /** JSON: live progress while the run runs (see verify/progress.ts). */
+  progress: string | null;
 }
 
 const SCHEMA = `
@@ -247,6 +249,8 @@ export class Db {
       if (!tcols.has(name)) this.sql.exec(`alter table api_tokens add column ${name} ${def}`);
     }
     this.sql.exec("create unique index if not exists api_tokens_refresh on api_tokens(refresh_hash)");
+    const rcols = new Set((this.sql.prepare("pragma table_info(runs)").all() as { name: string }[]).map((c) => c.name));
+    if (!rcols.has("progress")) this.sql.exec("alter table runs add column progress text");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");
     const jcols = new Set((this.sql.prepare("pragma table_info(jobs)").all() as { name: string }[]).map((c) => c.name));

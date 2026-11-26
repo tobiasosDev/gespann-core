@@ -635,3 +635,67 @@ test("parallel: two PR runs that both find no recipe anywhere prepare the enviro
   assert.equal(logs.filter((l) => /took over the project's current recipe/.test(l)).length, 1);
   assert.equal(db.project(p)?.bundle, 1);
 });
+
+test("worker: a PR run records when each stage starts and what the tester writes to progress.json while it works", async () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-worker-")) });
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
+  db.setCodex(u.id, { codex_state: "connected", codex_auth: seal(config.sessionSecret, JSON.stringify({ tokens: {}, last_refresh: new Date().toISOString() })) });
+  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
+  const recipe = 'version: 1\ntrigger: { paths: ["**"] }\nenv: { up: "true", down: "true", url: "http://127.0.0.1:4000/" }\n';
+  db.updateProject(p, { sandbox_id: "fresh", setup: "ready", recipe });
+  const dir = `/srv/fresh/gespann/runs/${"3".repeat(12)}`;
+  const seen: (string | null)[] = [];
+  class Tester extends FakeSandboxes {
+    readonly cmds = new Map<number, string>();
+    polls = 0;
+    override async start(id: string, command: string) {
+      await super.start(id, command);
+      const pid = this.cmds.size + 1;
+      this.cmds.set(pid, command);
+      if (command.includes("codex exec")) this.files.set(`${dir}/work/progress.json`, JSON.stringify({ checks: [{ expect: "Sign in works", result: null }, { expect: "Export works", result: null }], now: "Opening the sign-in page" }));
+      if (command.includes("verify finish") && command.includes("--dir")) {
+        const judged = { verdict: { verdict: "PASS", summary: "ok", checks: [], proof: [] }, outcome: "PASS", problems: [] };
+        this.files.set(`${dir}/work/result.json`, JSON.stringify({ judged, outcome: "PASS" }));
+      }
+      return pid;
+    }
+    override async status(_id: string, pid: number): Promise<ProcessStatus> {
+      const command = this.cmds.get(pid) ?? "";
+      if (command.includes("verify prepare")) return { running: false, status: "exited", exitCode: 0, stdout: '{"ok":true,"url":"http://127.0.0.1:4000/"}', stderr: "" };
+      if (command.includes("codex exec") && this.polls++ === 0) {
+        // The page sees the plan while the tester still works; then the tester finishes the first check.
+        seen.push(db.run_(run)?.progress ?? null);
+        this.files.set(`${dir}/work/progress.json`, JSON.stringify({ checks: [{ expect: "Sign in works", result: "pass", observed: "Landed on the projects page" }, { expect: "Export works", result: null }], now: "Pressing Export" }));
+        return { running: true, status: "running", exitCode: null, stdout: "", stderr: "" };
+      }
+      return super.status(_id, pid);
+    }
+  }
+  const sb = new Tester();
+  sb.files.set("/srv/fresh/gespann/project/verify.yml", recipe);
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "3".repeat(32) });
+  const job = db.job(db.enqueue(p, "run", run))!;
+  db.claimJob(job.id);
+  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  assert.equal(db.job(job.id)?.status, "done", db.job(job.id)?.error ?? "");
+  const progress = JSON.parse(db.run_(run)?.progress ?? "null");
+  assert.deepEqual(Object.keys(progress.at), ["sandbox", "copy", "read", "checks", "verdict"], "every stage started, in order");
+  assert.deepEqual(
+    progress.checks.map((c: { expect: string; result: string | null; observed?: string }) => [c.expect, c.result, c.observed ?? null]),
+    [
+      ["Sign in works", "pass", "Landed on the projects page"],
+      ["Export works", null, null],
+    ],
+  );
+  assert.ok(progress.checks[0].at, "a finished check carries when it was seen done");
+  assert.deepEqual(
+    progress.now.map((n: { text: string }) => n.text),
+    ["Pressing Export"],
+    "read on each poll of the tester: the file as it stands then",
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(JSON.parse(seen[0]!).at.checks, undefined, "before the first read the tester is still reading the change");
+  assert.match(sb.files.get(`${dir}/work/prompt.txt`) ?? "", /progress\.json/, "the tester is told to write its progress");
+});
