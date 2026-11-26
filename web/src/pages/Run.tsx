@@ -2,7 +2,7 @@ import { Check, ExternalLink, Minus, RotateCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ago, api, duration, type RunDetail, useResource } from "../api.ts";
 import { ShotList } from "../components/Shots.tsx";
-import { Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
+import { Badge, Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Link, navigate, RunStatus } from "../nav.tsx";
 
 const ICON = {
@@ -10,6 +10,14 @@ const ICON = {
   fail: <X className="size-4 text-bad" />,
   blocked: <Minus className="size-4 text-warn" />,
 };
+const GOAL = { met: ICON.pass, missed: ICON.fail, blocked: ICON.blocked };
+const GOAL_TONE = { met: "ok", missed: "bad", blocked: "warn" } as const;
+
+/** `#12` is an issue of the run's repository, `owner/repo#12` one of another. */
+function issueUrl(repo: string, ref: string): string {
+  const m = /^(?:([\w.-]+\/[\w.-]+))?#(\d+)$/.exec(ref.trim());
+  return m ? `https://github.com/${m[1] ?? repo}/issues/${m[2]}` : `https://github.com/${repo}/issues`;
+}
 
 export function Run({ id, onProject }: { id: number; onProject?: (project: number) => void }) {
   const { data: r, error } = useResource<RunDetail>(`/runs/${id}`, (d) => d.status === "queued" || d.status === "running");
@@ -27,7 +35,8 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
   const live = r.status === "queued" || r.status === "running";
   const shots = images.map((f) => {
     const check = v?.checks.find((c) => c.proof?.includes(f));
-    return { src: src(f), caption: check?.expect ?? f, result: check?.result };
+    const goal = check ? undefined : v?.goals?.find((g) => g.proof?.includes(f));
+    return { src: src(f), caption: check?.expect ?? goal?.goal ?? f, result: check?.result ?? (goal ? ({ met: "pass", missed: "fail", blocked: "blocked" } as const)[goal.result] : undefined) };
   });
 
   return (
@@ -90,6 +99,36 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           </ul>
         </Card>
       ) : null}
+
+      {v?.goals && v.goals.length > 0 && (
+        <Card className="mb-6">
+          <CardHeader
+            title="Issue goals"
+            description={`${v.goals.filter((g) => g.result === "met").length} of ${v.goals.length} met, judged against what each linked issue asks for`}
+          />
+          <ul className="divide-y divide-border">
+            {v.goals.map((g, i) => (
+              <li key={i} className="flex gap-3 px-4 py-3">
+                <span className="mt-0.5 shrink-0" aria-hidden>
+                  {GOAL[g.result]}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <a href={issueUrl(r.project.repo, g.issue)} target="_blank" rel="noreferrer" className="truncate font-mono text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                      {g.issue}
+                    </a>
+                    <span className="ml-auto">
+                      <Badge tone={GOAL_TONE[g.result]}>{g.result}</Badge>
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-[13px] font-medium">{g.goal}</p>
+                  {g.observed && <p className="mt-1 max-w-3xl text-[13px] text-muted-foreground">{g.observed}</p>}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <Card className="mb-6">
         <CardHeader title="Recording" description={video ? "The tester's screen during the whole test." : undefined} />

@@ -56,6 +56,32 @@ export interface PullRequest {
   html_url: string;
 }
 
+export interface LinkedIssue {
+  /** `#12`: always an issue of the PR's own repository. */
+  ref: string;
+  title: string;
+  body: string;
+  url: string;
+}
+
+const MAX_ISSUES = 5;
+
+/**
+ * Issues the PR text closes with GitHub's keywords: `Fixes #12`, `closes owner/repo#3`,
+ * `Resolves https://github.com/owner/repo/issues/4`. A bare mention (`#12`, `Refs #12`) is no goal of this PR.
+ */
+export function closingRefs(text: string, repo: string): { repo: string; number: number }[] {
+  const out: { repo: string; number: number }[] = [];
+  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+(?:https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/|([\w.-]+\/[\w.-]+))?#?(\d+)\b/gi;
+  for (const m of text.matchAll(re)) {
+    // A number only counts with `#` or as an issue URL: "fixes 3 bugs" is no reference.
+    if (!m[1] && !m[0].includes("#")) continue;
+    const r = { repo: m[1] ?? m[2] ?? repo, number: Number(m[3]) };
+    if (!out.some((o) => o.repo.toLowerCase() === r.repo.toLowerCase() && o.number === r.number)) out.push(r);
+  }
+  return out;
+}
+
 export class Github {
   private readonly app: GithubApp;
   private readonly fetchImpl: typeof fetch;
@@ -144,6 +170,42 @@ export class Github {
 
   async pull(installationId: number, repo: string, pr: number): Promise<PullRequest> {
     return this.asInstallation(installationId, "GET", `/repos/${repo}/pulls/${pr}`);
+  }
+
+  /**
+   * The issues of this repository that this PR says it resolves: GitHub's own list (closing keywords
+   * and issues linked in the sidebar) plus closing keywords in the PR text that GitHub does not count,
+   * e.g. on a PR into a branch other than the default. Issues of other repositories are left out: their
+   * text would reach this repository's sandbox and PR comment, which may be public while they are not.
+   * Throws when GitHub does not answer, so the run can say it judged without them.
+   */
+  async linkedIssues(installationId: number, repo: string, pr: number, body: string | null): Promise<LinkedIssue[]> {
+    const [owner, name] = repo.split("/");
+    const found = new Map<number, LinkedIssue>();
+    const q = await this.asInstallation<{ errors?: { message: string }[]; data?: { repository?: { pullRequest?: { closingIssuesReferences?: { nodes: { number: number; title: string; body: string; url: string; repository: { nameWithOwner: string } }[] } } } } }>(
+      installationId,
+      "POST",
+      "/graphql",
+      {
+        query: "query($owner: String!, $name: String!, $pr: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $pr) { closingIssuesReferences(first: 10) { nodes { number title body url repository { nameWithOwner } } } } } }",
+        variables: { owner, name, pr },
+      },
+    );
+    if (q.errors?.length) throw new GithubError(422, `closingIssuesReferences: ${q.errors.map((e) => e.message).join("; ").slice(0, 300)}`);
+    for (const n of q.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? []) {
+      if (n.repository.nameWithOwner.toLowerCase() === repo.toLowerCase()) found.set(n.number, { ref: `#${n.number}`, title: n.title, body: n.body ?? "", url: n.url });
+    }
+    for (const r of closingRefs(body ?? "", repo)) {
+      if (found.size >= MAX_ISSUES) break;
+      if (r.repo.toLowerCase() !== repo.toLowerCase() || found.has(r.number)) continue;
+      // A number that is no issue (a typo, a PR) is no goal; any other GitHub failure stops the lookup.
+      const i = await this.asInstallation<{ number: number; title: string; body: string | null; html_url: string; pull_request?: unknown }>(installationId, "GET", `/repos/${repo}/issues/${r.number}`).catch((err: unknown) => {
+        if (err instanceof GithubError && (err.status === 404 || err.status === 410)) return null;
+        throw err;
+      });
+      if (i && !i.pull_request) found.set(r.number, { ref: `#${r.number}`, title: i.title, body: i.body ?? "", url: i.html_url });
+    }
+    return [...found.values()].slice(0, MAX_ISSUES);
   }
 
   async changedFiles(installationId: number, repo: string, pr: number): Promise<string[]> {

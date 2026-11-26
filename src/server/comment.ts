@@ -1,4 +1,4 @@
-import type { Check, Judged, VerdictKind } from "../verify/verdict.ts";
+import type { Check, Goal, Judged, VerdictKind } from "../verify/verdict.ts";
 
 export interface CommentInput {
   outcome: VerdictKind;
@@ -17,6 +17,7 @@ export interface CommentInput {
 
 const ICON: Record<VerdictKind, string> = { PASS: "✅", FAIL: "❌", BLOCKED: "⛔", SKIP: "⏭️" };
 const MARK: Record<Check["result"], string> = { pass: "✅", fail: "❌", blocked: "⛔" };
+const GOAL: Record<Goal["result"], string> = { met: "✅ met", missed: "❌ missed", blocked: "⛔ blocked" };
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 
 /** One line of table text: no pipes or line breaks, cut at a word. */
@@ -45,6 +46,11 @@ function table(checks: Check[]): string[] {
   return ["| | Check | What the tester saw |", "|:-:|---|---|", ...checks.map((x) => `| ${MARK[x.result] ?? "❔"} | ${cell(x.expect, 80)} | ${cell(x.observed, 130)} |`)];
 }
 
+/** Whether the PR reaches what each linked issue asks for; always in the open, it is the PR's purpose. */
+function goalTable(goals: Goal[]): string[] {
+  return ["| Issue | Goal | Result | What the tester saw |", "|---|---|---|---|", ...goals.map((g) => `| ${cell(g.issue, 40)} | ${cell(g.goal, 80)} | ${GOAL[g.result] ?? "❔"} | ${cell(g.observed, 130)} |`)];
+}
+
 /**
  * The PR comment, short on purpose: outcome and count in the title, the summary, the merge gate,
  * the checks that need a person in the open, and passed checks and screenshots folded away.
@@ -65,6 +71,7 @@ export function renderComment(c: CommentInput): string {
   }
   if (c.gate) lines.push("", c.gate);
   for (const p of c.judged?.problems ?? []) if (v) lines.push("", `⚠️ Verdict rejected: ${cell(p, 200)}`);
+  if (v?.goals?.length) lines.push("", ...goalTable(v.goals));
   if (open.length) lines.push("", ...table(open));
   if (passed.length) lines.push("", `<details><summary>✅ ${passed.length} passed ${passed.length === 1 ? "check" : "checks"}</summary>`, "", ...table(passed), "", "</details>");
 
@@ -72,9 +79,9 @@ export function renderComment(c: CommentInput): string {
   const video = c.files.find((f) => /\.(mp4|webm)$/i.test(f));
   if (video) lines.push("", `🎬 **[Watch the recording](${c.fileUrl(video)})** of the tester's screen`);
 
-  const shown = [...new Set([...checks.flatMap((x) => x.proof ?? []), ...(v?.proof ?? [])])].filter((f) => IMAGE.test(f) && c.files.includes(f));
+  const shown = [...new Set([...checks.flatMap((x) => x.proof ?? []), ...(v?.goals ?? []).flatMap((g) => g.proof ?? []), ...(v?.proof ?? [])])].filter((f) => IMAGE.test(f) && c.files.includes(f));
   if (shown.length) {
-    const caption = (f: string) => esc(cell(checks.find((x) => x.proof?.includes(f))?.expect ?? f, 48).replace(/\\\|/g, "|"));
+    const caption = (f: string) => esc(cell(checks.find((x) => x.proof?.includes(f))?.expect ?? v?.goals?.find((g) => g.proof?.includes(f))?.goal ?? f, 48).replace(/\\\|/g, "|"));
     lines.push("", `<details><summary>📸 ${shown.length} ${shown.length === 1 ? "screenshot" : "screenshots"}</summary>`, "", "<table>");
     for (let i = 0; i < shown.length; i += 3) {
       const row = shown.slice(i, i + 3).map((f) => `<td width="33%" valign="top"><a href="${esc(c.fileUrl(f))}"><img src="${esc(c.fileUrl(f))}" width="100%" alt="${caption(f)}"></a><br><sub>${caption(f)}</sub></td>`);

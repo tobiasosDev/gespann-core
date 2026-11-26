@@ -100,6 +100,10 @@ function issuesOf(run: Run, judged: Judged | null) {
     if (c.result === "pass") continue;
     issues.push({ kind: c.result === "fail" ? "check_failed" : "check_blocked", text: c.expect, observed: c.observed, ...(c.fix ? { fix: c.fix } : {}), ...(c.proof?.length ? { proof: c.proof } : {}) });
   }
+  for (const g of judged?.verdict?.goals ?? []) {
+    if (g.result === "met") continue;
+    issues.push({ kind: g.result === "missed" ? "goal_missed" : "goal_blocked", text: `${g.issue}: ${g.goal}`, observed: g.observed, ...(g.proof?.length ? { proof: g.proof } : {}) });
+  }
   return issues;
 }
 
@@ -149,7 +153,7 @@ const TOOLS: Tool[] = [
     name: "get_run",
     title: "Get run",
     description:
-      "Status, verdict, summary, every check (expected, observed, result, proof files, suggested fix) and the issues to act on. Give run_id, or repo and pr for the newest run of that pull request.",
+      "Status, verdict, summary, every check (expected, observed, result, proof files, suggested fix), per linked GitHub issue whether its goal was met or missed, and the issues to act on. Give run_id, or repo and pr for the newest run of that pull request.",
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "integer" }, repo: { type: "string", description: "owner/repo or project id" }, pr: { type: "integer", minimum: 1 } },
@@ -168,6 +172,7 @@ const TOOLS: Tool[] = [
         summary: judged?.verdict?.summary ?? null,
         issues: issuesOf(run, judged),
         checks: (judged?.verdict?.checks ?? []).map((c, i) => ({ n: i + 1, ...c })),
+        goals: judged?.verdict?.goals ?? [],
         proof: judged?.verdict?.proof ?? [],
         files: files.map((f) => ({ name: f, kind: kindOf(f), url: fileUrl(d, run, f) })),
       });

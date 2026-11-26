@@ -252,7 +252,7 @@ test("worker: a PR run in a sandbox without the recipe (replaced, even after a s
   const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
   db.updateProject(p, { sandbox_id: "sandbox-old", setup: "ready", recipe: "version: 1" });
   const sb = new FakeSandboxes();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   // A suggestion made the new sandbox first; the PR run after it still finds no recipe there.
   sb.files.set("/srv/fresh/gespann/suggested-checks.md", "Sign in works.");
   await processJob({ db, sandboxes: sb, github: () => github, config }, db.job(db.enqueue(p, "suggest"))!);
@@ -340,7 +340,7 @@ test("restart: lost jobs go back into the queue with their run and setup, stop w
   db.updateProject(p, { setup: "ready", recipe: "version: 1" });
   sb.files.set("/srv/fresh/gespann/project/verify.yml", "version: 1");
   sb.files.set("/srv/fresh/gespann/runs/000000000000/work/state.json", "{}");
-  const prGithub = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const prGithub = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   await processJob({ db, sandboxes: sb, github: () => prGithub, config }, db.job(rj)!);
   const cmds = sb.commands.join("\n");
   assert.match(db.job(rj)?.log ?? "", /taking down the copy that the attempt before the restart left up/);
@@ -461,7 +461,7 @@ test("parallel: two PR runs of one project run at once in two sandboxes; the new
   }
   const sb = new Pool();
   sb.files.set("/srv/first/gespann/project/verify.yml", "version: 1");
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);
@@ -486,13 +486,21 @@ test("parallel: two PR runs of one project run at once in two sandboxes; the new
   assert.match(all, /cd \/srv\/second\/repo && gespann verify prepare --recipe \/srv\/second\/gespann\/project\/verify\.yml --pr 5 /, "each run in its own checkout");
   assert.ok(all.indexOf("verify prepare --recipe /srv/second") < all.indexOf("verify finish --recipe /srv/first"), "side by side: the second copy comes up before the first goes down");
 
-  // A later run takes a free sandbox again instead of making a third.
+  // A later run takes a free sandbox again instead of making a third. Its PR resolves an issue: the
+  // tester gets the issue's text and has to judge its goal.
+  const issue = { ref: "#12", title: "Export as CSV", body: "Users export all orders as CSV.", url: "https://github.com/acme/shop/issues/12" };
+  const withIssue = { ...github, linkedIssues: async () => [issue] } as unknown as Github;
   const run = db.createRun({ project_id: p, pr: 6, title: "t", head: "h6", base: "b", base_ref: "main", token: "2".repeat(32) });
   const job = db.job(db.enqueue(p, "run", run))!;
   db.claimJob(job.id);
-  await processJob({ db, sandboxes: sb, github: () => github, config }, job);
+  await processJob({ db, sandboxes: sb, github: () => withIssue, config }, job);
   assert.equal(sb.created.length, 1);
   assert.doesNotMatch(db.job(job.id)?.log ?? "", /took over/, "it already has the current recipe");
+  assert.match(db.job(job.id)?.log ?? "", /linked issue: #12/);
+  const work = [...sb.files.keys()].find((k) => k.endsWith("/runs/222222222222/work/issues.md"))?.replace(/issues\.md$/, "");
+  assert.ok(work, "the issue text goes into the run's work dir");
+  assert.match(sb.files.get(`${work}issues.md`) ?? "", /# #12: Export as CSV[\s\S]*Users export all orders as CSV/);
+  assert.deepEqual(JSON.parse(sb.files.get(`${work}issues.json`) ?? "null"), [{ ref: "#12", url: issue.url }]);
 });
 
 /** A sandbox stand-in with files only, for the Codex sign-in. */
@@ -613,7 +621,7 @@ test("parallel: two PR runs that both find no recipe anywhere prepare the enviro
     }
   }
   const sb = new Pool();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);

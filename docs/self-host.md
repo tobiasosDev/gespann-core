@@ -191,7 +191,7 @@ Coding agents read runs over MCP at `<BASE_URL>/mcp` (Streamable HTTP, JSON resp
 |---|---|
 | `list_projects` | projects with setup state and newest run |
 | `list_runs` | runs of a project, optionally of one PR |
-| `get_run` | status, verdict, summary, every check, the `issues` to act on and the run's files; `repo` + `pr` gives the newest run of a PR |
+| `get_run` | status, verdict, summary, every check, per linked GitHub issue whether its goal was met, the `issues` to act on and the run's files; `repo` + `pr` gives the newest run of a PR |
 | `get_review` | the PR comment as Markdown |
 | `get_run_file` | a screenshot as an image; the recording as a link (MCP has no video content); `verdict.json` as text |
 | `get_run_log` | the end of the job log |

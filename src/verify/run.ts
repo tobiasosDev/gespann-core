@@ -214,7 +214,7 @@ export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): 
       const text = existsSync(a.statusFile) ? readFileSync(a.statusFile, "utf8").trim() : "";
       return { name: a.name, exit: text === "" ? null : Number(text), required: a.required };
     });
-    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)));
+    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)), issueRefs(ctx));
   } finally {
     teardownErrors = await teardown(ctx, r);
   }
@@ -227,6 +227,18 @@ export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): 
   const result: Finished = { judged, alongside, outcome, teardownErrors };
   writeFileSync(join(ctx.work, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   return result;
+}
+
+/** The linked issues the tester was given (`issues.json` in the work dir, written by the server). */
+function issueRefs(ctx: RunContext): string[] {
+  const file = join(ctx.work, "issues.json");
+  if (!existsSync(file)) return [];
+  try {
+    const list = JSON.parse(readFileSync(file, "utf8")) as { ref?: unknown }[];
+    return Array.isArray(list) ? list.map((i) => String(i?.ref ?? "")).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** A proof file exists; an image must also start like a PNG, JPEG, GIF or WebP. */

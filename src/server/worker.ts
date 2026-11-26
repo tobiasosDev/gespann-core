@@ -9,7 +9,7 @@ import { applyGate, gated, gateLine, gateState, type GateState, runComment, skip
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import { withCodex } from "./codex.ts";
-import type { Github } from "./github.ts";
+import type { Github, LinkedIssue } from "./github.ts";
 import { q, runLong, type Sandboxes } from "./sandbox.ts";
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
@@ -384,6 +384,8 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   }
   const cancelled = () => d.db.job(job.id)?.status === "cancelled";
   let prText: string | null = null;
+  let issues: LinkedIssue[] = [];
+  let unread: string | null = null;
   try {
     await ensureRepo(d, b, p);
     await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(run.base)}`);
@@ -395,6 +397,14 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     if (merge.exitCode !== 0) throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
     const pr = await gh.pull(p.installation_id, p.repo, run.pr);
     prText = `# ${pr.title}\n\n${pr.body ?? ""}\n`;
+    // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
+    // diff and PR text alone, as for a PR without issues, and the run says so.
+    issues = await gh.linkedIssues(p.installation_id, p.repo, run.pr, pr.body).catch((err: Error) => {
+      unread = `Issue goals not checked: GitHub did not list the issues this PR resolves (${err.message.slice(0, 300)})`;
+      log(`✗ ${unread}`);
+      return [];
+    });
+    if (issues.length) log(`linked ${issues.length === 1 ? "issue" : "issues"}: ${issues.map((i) => i.ref).join(", ")}`);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
@@ -404,7 +414,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   let dir = `${b.gespann}/runs/${runId}`;
   let a: Attempt = { judged: null, outcome: "FAIL", clean: true };
   if (prText !== null) {
-    a = await attempt(d, job, p, run, b, runId, dir, prText, log);
+    a = await attempt(d, job, p, run, b, runId, dir, prText, issues, log);
     const gaps = copyGaps(a.judged);
     if (gaps.length && a.clean && !cancelled()) {
       for (const g of gaps) log(`blocked by the copy, not the change: ${g.expect} → ${g.fix}`);
@@ -425,7 +435,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
         const again = run.token.slice(12, 24);
         const before = d.db.run_(run.id)?.error ?? null;
         d.db.updateRun(run.id, { error: null });
-        const second = await attempt(d, job, p, run, b, again, `${b.gespann}/runs/${again}`, prText, log);
+        const second = await attempt(d, job, p, run, b, again, `${b.gespann}/runs/${again}`, prText, issues, log);
         if (second.judged?.verdict) {
           a = second;
           dir = `${b.gespann}/runs/${again}`;
@@ -440,6 +450,11 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const outcome = a.outcome;
   const { files, alias } = await collect(d, b, run, `${dir}/out`, log);
   if (judged) judged = withAliases(judged, alias);
+  // A verdict without the issue goals says why, on the run page and over MCP.
+  if (unread && judged?.verdict) {
+    const before = d.db.run_(run.id)?.error;
+    d.db.updateRun(run.id, { error: before ? `${before}\n${unread}` : unread });
+  }
   const error = d.db.run_(run.id)?.error ?? null;
   d.db.updateRun(run.id, { status: error && !judged?.verdict ? "failed" : "done", outcome, verdict: judged ? JSON.stringify(judged) : null, files: JSON.stringify(files), finished: new Date().toISOString() });
   await stopSandbox(d, b);
@@ -459,6 +474,11 @@ async function downLeftovers(d: Deps, b: Box, run: Run, log: (s: string) => void
   }
 }
 
+/** Title and description of each linked issue, for the tester. */
+export function issuesText(issues: LinkedIssue[]): string {
+  return `${issues.map((i) => `# ${i.ref}: ${i.title}\n\n${i.url}\n\n${i.body.trim() || "(no description)"}\n`).join("\n---\n\n")}`;
+}
+
 interface Attempt {
   judged: Judged | null;
   outcome: NonNullable<Run["outcome"]>;
@@ -467,11 +487,16 @@ interface Attempt {
 }
 
 /** Copy up, tester, then always finish: verdict and teardown, even when the copy or the tester failed. */
-async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: string, dir: string, prText: string, log: (s: string) => void): Promise<Attempt> {
+async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: string, dir: string, prText: string, issues: LinkedIssue[], log: (s: string) => void): Promise<Attempt> {
   try {
     // Fresh each time: a run that starts again after a restart must not show the lost attempt's proof.
     await d.sandboxes.exec(b.id, `rm -rf ${dir} && mkdir -p ${dir}/work ${dir}/out`, 30);
     await d.sandboxes.writeFile(b.id, `${dir}/work/pr.md`, prText);
+    if (issues.length) {
+      await d.sandboxes.writeFile(b.id, `${dir}/work/issues.md`, issuesText(issues));
+      // finish reads the refs to require one goal per issue.
+      await d.sandboxes.writeFile(b.id, `${dir}/work/issues.json`, `${JSON.stringify(issues.map((i) => ({ ref: i.ref, url: i.url })))}\n`);
+    }
     log("bringing the copy up");
     const prep = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify prepare --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir}`), {
       timeoutMs: 60 * 60_000,
@@ -497,6 +522,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       criteria: current.criteria,
       recipe,
       addendum: [notes, addendum].filter(Boolean).join("\n\n"),
+      issues: issues.map((i) => i.ref),
     });
     await d.sandboxes.writeFile(b.id, `${dir}/work/prompt.txt`, prompt);
     const rec = `${dir}/out/recording.mp4`;
