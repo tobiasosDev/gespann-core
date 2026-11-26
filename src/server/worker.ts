@@ -937,7 +937,10 @@ export type Route = (ownerId: number) => { key: string; sandboxes: Sandboxes; pa
  * Polls the queue. Jobs run side by side, each in its own sandbox; each sandbox provider runs up to
  * its own number at once, so a full provider never holds up the jobs of users on another one.
  */
-export function startWorker(d: Omit<Deps, "sandboxes">, route: Route): () => void {
+export function startWorker(d: Omit<Deps, "sandboxes"> & { sandboxes?: Sandboxes }, routeOrParallel: Route | number = 2): () => void {
+  // A number keeps the form from before several providers: everyone on `d.sandboxes`, that many at once.
+  const fixed = routeOrParallel;
+  const route: Route = typeof fixed === "number" ? () => (d.sandboxes ? { key: "", sandboxes: d.sandboxes, parallel: fixed } : null) : fixed;
   let stopped = false;
   const running = new Map<number, string>();
   const busy = (key: string) => [...running.values()].filter((k) => k === key).length;

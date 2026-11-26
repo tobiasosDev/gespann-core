@@ -99,6 +99,22 @@ test("worker: jobs go to their owner's provider; each provider runs its own numb
   }
 });
 
+test("worker: the single-provider form (sandboxes in the deps, a number) still runs jobs", async () => {
+  const db = new Db(":memory:");
+  const u = db.upsertUser({ github_id: 1, login: "tobi", name: null, avatar: null }).id;
+  const j1 = db.enqueue(db.createProject({ owner_id: u, installation_id: 9, repo: "tobi/a", repo_id: 1, default_branch: "main" }), "suggest");
+  const j2 = db.enqueue(db.createProject({ owner_id: u, installation_id: 9, repo: "tobi/b", repo_id: 2, default_branch: "main" }), "suggest");
+  const only = hanging("only");
+  const stop = startWorker({ db, sandboxes: only, github: () => { throw new Error("no github"); }, config: loadConfig({}) }, 1);
+  try {
+    await until(() => only.created.length >= 1);
+    assert.deepEqual(only.created, ["gespann-tobi-a"]);
+    assert.deepEqual([j1, j2].map((j) => db.job(j)?.status), ["running", "queued"]);
+  } finally {
+    stop();
+  }
+});
+
 test("API: the Codex sign-in and the job limit follow the user's provider", async () => {
   const db = new Db(":memory:");
   const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data" });

@@ -55,7 +55,7 @@ export interface AppDeps {
   github: () => Github;
   githubReady: () => boolean;
   /** How many jobs the user's sandbox provider runs at once, for all its users together; null without one. */
-  parallel?: (userId: number) => number | null;
+  parallel?: number | ((userId: number) => number | null);
   /** `SERVER_MODULE`: its routes, sidebar links and Settings cards. */
   module?: ServerModule | null;
 }
@@ -259,14 +259,14 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
   app.get("/api/boxes", (c) => {
     const u = me(c).id;
-    const host = d.parallel?.(me(c).id) ?? null;
+    const host = (typeof d.parallel === "function" ? d.parallel(me(c).id) : d.parallel) ?? null;
     const own = db.maxJobs(u);
     return c.json({ host, limit: own === null ? host : host === null ? own : Math.min(own, host), own, running: db.runningBoxes(u), queued: db.queuedJobs(u), time: db.boxTime(u) });
   });
 
   app.post("/api/boxes/limit", async (c) => {
     const { limit } = await c.req.json<{ limit?: unknown }>();
-    const host = d.parallel?.(me(c).id) ?? null;
+    const host = (typeof d.parallel === "function" ? d.parallel(me(c).id) : d.parallel) ?? null;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > (host ?? 999)) throw new HttpError(400, `limit: a whole number from 1 to ${host ?? 999}`);
     db.setMaxJobs(me(c).id, limit);
     return c.json({ ok: true });

@@ -60,7 +60,7 @@ test("box time sums job durations per UTC day of this month; a running job count
 test("API: the limit is 1 to the host's maximum; a chosen number stays when the host grows", async () => {
   const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data" });
   const db = new Db(":memory:");
-  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: () => 4 });
+  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 4 });
   const { u } = owner(db, 1, "tobi");
   db.createSession("s".repeat(64), u.id);
   const h = { Cookie: `gs=${"s".repeat(64)}`, "x-gespann": "1", "Content-Type": "application/json" };
@@ -74,7 +74,7 @@ test("API: the limit is 1 to the host's maximum; a chosen number stays when the 
   assert.deepEqual(await get().then((b) => [b.limit, b.own]), [2, 2]);
   assert.equal((await set(4)).status, 200);
   assert.deepEqual(await get().then((b) => [b.limit, b.own]), [4, 4]);
-  const bigger = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: () => 8 });
+  const bigger = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 8 });
   const after = await (await bigger.request("/api/boxes", { headers: h })).json();
   assert.deepEqual([after.host, after.limit], [8, 4], "a chosen limit stays when the host grows");
   assert.equal((await server.request("/api/boxes/limit", { method: "POST", headers: { Cookie: h.Cookie, "Content-Type": "application/json" }, body: '{"limit":1}' })).status, 403, "no x-gespann header, no change");
