@@ -124,8 +124,11 @@ test("worker: when GitHub does not answer about the other checks, the run waits 
 
 test("worker: a run whose other checks passed takes a sandbox", async () => {
   const t = setup({ ...none, passed: ["check"] });
-  await processJob(t.deps, t.job);
+  // It waited for CI before: the mark from that wait goes once the checks are green.
+  t.db.sql.prepare("update jobs set not_before = ? where id = ?").run(new Date(Date.now() - 1000).toISOString(), t.job.id);
+  await processJob(t.deps, t.db.job(t.job.id)!);
   assert.ok(t.calls.length > 0, "the run went on to the sandbox");
+  assert.equal(t.db.job(t.job.id)?.not_before, null, "a restart later does not show it as waiting for CI");
   assert.notEqual(t.db.run_(t.id)?.outcome, "SKIP");
 });
 

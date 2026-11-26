@@ -943,6 +943,7 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
       const gate = await awaitChecks(d, job, p, run, log);
       if (gate === "later") return;
       if (gate === "skipped") return d.db.endUnstarted(job.id);
+      d.db.passedChecks(job.id);
       const refused = await admit(d, job, p).then(() => null, (err: Error) => err);
       // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
