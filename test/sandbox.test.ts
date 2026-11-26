@@ -897,7 +897,7 @@ test("worker: a PR run records when each stage starts and what the tester writes
   }
   const sb = new Tester();
   sb.files.set("/srv/fresh/gespann/project/verify.yml", recipe);
-  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "3".repeat(32) });
   const job = db.job(db.enqueue(p, "run", run))!;
   db.claimJob(job.id);

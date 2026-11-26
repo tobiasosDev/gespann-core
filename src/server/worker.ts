@@ -447,15 +447,8 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
       if (files.length) throw new MergeConflict(files);
       throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
     }
-    const pr = await gh.pull(p.installation_id, p.repo, run.pr);
-    prText = `# ${pr.title}\n\n${pr.body ?? ""}\n`;
-    // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
-    // diff and PR text alone, as for a PR without issues, and the run says so.
-    issues = await gh.linkedIssues(p.installation_id, p.repo, run.pr, pr.body).catch((err: Error) => {
-      unread = `Issue goals not checked: GitHub did not list the issues this PR resolves (${err.message.slice(0, 300)})`;
-      log(`✗ ${unread}`);
-      return [];
-    });
+    ({ prText, issues, unread } = await prContext(gh, p, run.pr));
+    if (unread) log(`✗ ${unread}`);
     if (issues.length) log(`linked ${issues.length === 1 ? "issue" : "issues"}: ${issues.map((i) => i.ref).join(", ")}`);
   } catch (err) {
     if (err instanceof MergeConflict) {
@@ -551,6 +544,21 @@ async function downLeftovers(d: Deps, b: Box, run: Run, log: (s: string) => void
       (err: Error) => log(`could not take the old copy down: ${err.message}`),
     );
   }
+}
+
+/**
+ * The PR text and the issues it resolves, as the tester reads them. The issues set the PR's goal.
+ * When GitHub does not list them, the tester judges from diff and PR text alone, as for a PR without
+ * issues, and `unread` says so.
+ */
+export async function prContext(gh: Github, p: Project, pr: number): Promise<{ prText: string; issues: LinkedIssue[]; unread: string | null }> {
+  const pull = await gh.pull(p.installation_id, p.repo, pr);
+  let unread: string | null = null;
+  const issues = await gh.linkedIssues(p.installation_id, p.repo, pr, pull.body).catch((err: Error) => {
+    unread = `Issue goals not checked: GitHub did not list the issues this PR resolves (${err.message.slice(0, 300)})`;
+    return [];
+  });
+  return { prText: `# ${pull.title}\n\n${pull.body ?? ""}\n`, issues, unread };
 }
 
 /** Title and description of each linked issue, for the tester. */
@@ -760,7 +768,11 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
   return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
 
-export async function report(d: Deps, started: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
+/** What reporting a run needs: no sandboxes, so the UI can report for the orchestrator. */
+export type ReportDeps = Pick<Deps, "db" | "github" | "config">;
+
+/** Gate, check and PR comment for a finished run. */
+export async function report(d: ReportDeps, started: Project, run: Run, judged: Judged | null, files: string[], log: (s: string) => void): Promise<void> {
   const gh = d.github();
   const outcome = run.outcome ?? "FAIL";
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
@@ -848,7 +860,7 @@ export function ciStep(c: OtherChecks, ageMs: number): CiStep {
 }
 
 /** A run whose PR failed its other checks ends as SKIP, without a sandbox; a held PR stays held for a person. */
-async function skipForChecks(d: Deps, started: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
+async function skipForChecks(d: ReportDeps, started: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
   d.db.updateRun(run.id, { status: "done", outcome: "SKIP", error: reason, finished: new Date().toISOString() });
   log(`skipped: ${reason}`);
   const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
@@ -878,7 +890,7 @@ async function skipForChecks(d: Deps, started: Project, run: Run, reason: string
 }
 
 /** Marks the run's check as waiting or testing, unless a person approved its head: that check stays neutral. */
-async function pendingCheck(d: Deps, p: Project, run: Run, fields: { status: "queued" | "in_progress"; title: string; summary: string }): Promise<void> {
+export async function pendingCheck(d: ReportDeps, p: Project, run: Run, fields: { status: "queued" | "in_progress"; title: string; summary: string }): Promise<void> {
   // In the PR's lock, so an approval that lands at the same time is not undone.
   await withPrLock(p, run.pr, async () => {
     if (run.check_run_id && !approvedHead(d.db, p, run.pr, run.head)) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, fields);
@@ -886,7 +898,7 @@ async function pendingCheck(d: Deps, p: Project, run: Run, fields: { status: "qu
 }
 
 /** "go" when the run may take a sandbox now; otherwise the job went back into the queue or the run ended. */
-async function awaitChecks(d: Deps, job: Job, p: Project, run: Run, log: (s: string) => void): Promise<"go" | "later" | "skipped"> {
+export async function awaitChecks(d: ReportDeps, job: Job, p: Project, run: Run, log: (s: string) => void): Promise<"go" | "later" | "skipped"> {
   const age = Date.now() - Date.parse(run.created);
   let checks: OtherChecks | null = null;
   let unread = "";
@@ -985,36 +997,65 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
   }
 }
 
-function moduleJob(d: Deps, job: Job, p: Project) {
+/** What the server module's calls need: no sandboxes, so the UI can make them for the orchestrator. */
+export type ModuleDeps = Pick<Deps, "db" | "module">;
+
+function moduleJob(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project) {
   const owner = d.db.user(p.owner_id);
   return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" } };
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** Throws when the server module does not let this job start. */
-async function admit(d: Deps, job: Job, p: Project): Promise<void> {
-  if (!d.module?.admit) return;
-  let refused: string | null;
+/** The server module's reason not to start this job, or null. Throws when the module fails. */
+export async function refusal(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project): Promise<string | null> {
+  if (!d.module?.admit) return null;
   try {
-    refused = (await d.module.admit(moduleJob(d, job, p))) ?? null;
+    return (await d.module.admit(moduleJob(d, job, p))) ?? null;
   } catch (err) {
     throw new Error(`${d.module.name} could not check this job: ${errText(err)}`);
   }
+}
+
+/** Throws when the server module does not let this job start. */
+async function admit(d: Deps, job: Job, p: Project): Promise<void> {
+  const refused = await refusal(d, job, p);
   if (refused !== null) throw new Error(`not started: ${refused}`);
 }
 
-/** Tells the server module a job ended, with its sandbox time. */
-async function ended(d: Deps, job: Job, p: Project): Promise<void> {
-  if (!d.module?.jobEnded) return;
-  const j = d.db.job(job.id);
-  if (!j?.started || !j.finished) return;
-  const seconds = Math.max(0, (Date.parse(j.finished) - Date.parse(j.started)) / 1000);
+/** Tells the server module a job ended, with its sandbox time; once per job, whichever worker ran it. */
+// eslint-disable-next-line no-restricted-syntax -- lock: a retry while the first call still runs must not bill twice; after a restart the flag decides
+const ending = new Map<number, Promise<void>>();
+
+export async function ended(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project, opts: { retry?: boolean } = {}): Promise<void> {
+  // One call per job at a time, the flag read inside: the orchestrator's retry may arrive while a slow call still runs.
+  const before = ending.get(job.id) ?? Promise.resolve();
+  const mine = before.catch(() => undefined).then(() => endOnce(d, job, p, opts));
+  const tail = mine.catch(() => undefined);
+  ending.set(job.id, tail);
   try {
-    await d.module.jobEnded({ ...moduleJob(d, job, p), status: j.status, started: j.started, finished: j.finished, seconds });
-  } catch (err) {
-    console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: errText(err) }));
+    await mine;
+  } finally {
+    if (ending.get(job.id) === tail) ending.delete(job.id);
   }
+}
+
+async function endOnce(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project, opts: { retry?: boolean }): Promise<void> {
+  const j = d.db.job(job.id);
+  if (!j?.started || !j.finished || j.ended_noted) return;
+  if (d.module?.jobEnded) {
+    const seconds = Math.max(0, (Date.parse(j.finished) - Date.parse(j.started)) / 1000);
+    try {
+      await d.module.jobEnded({ ...moduleJob(d, job, p), status: j.status, started: j.started, finished: j.finished, seconds });
+    } catch (err) {
+      console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: errText(err) }));
+      // The orchestrator asks again; the builtin worker goes on without it, as before.
+      if (opts.retry) throw err;
+      return;
+    }
+  }
+  // Noted once the module took it: a call that failed is asked again, one that went through never.
+  d.db.noteEnded(job.id);
 }
 
 /** Stops the background commands (Codex, a copy coming up) that the lost attempt left running in the sandbox. */

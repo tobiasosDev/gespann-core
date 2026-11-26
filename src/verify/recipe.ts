@@ -284,3 +284,16 @@ export const RECIPE_PATH = ".gespann/verify.yml";
 export function loadRecipe(file: string): Recipe {
   return parseRecipe(readFileSync(file, "utf8"));
 }
+
+/**
+ * `gespann verify recipe`: one JSON line for the orchestrator, the recipe's timeout (minutes) and
+ * prompt addendum, or why the file is no valid recipe.
+ */
+export function recipeLine(file: string): string {
+  try {
+    const r = loadRecipe(file);
+    return JSON.stringify({ ok: true, timeout: r.timeout, prompt: r.prompt ?? null });
+  } catch (err) {
+    return JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}

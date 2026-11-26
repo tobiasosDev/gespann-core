@@ -1,0 +1,170 @@
+{
+  "q": [
+    [
+      "/home/user",
+      "'/home/user'"
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "'/srv/gespann-sandboxes/gespann-acme-1a2b3c'"
+    ],
+    [
+      "/tmp/it's a dir",
+      "'/tmp/it'\\''s a dir'"
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "'run/\"quoted\" $HOME `x`'"
+    ]
+  ],
+  "words": [
+    [
+      "",
+      []
+    ],
+    [
+      "--privileged -v /var/run/docker.sock:/var/run/docker.sock",
+      [
+        "--privileged",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock"
+      ]
+    ],
+    [
+      "sleep  infinity",
+      [
+        "sleep",
+        "infinity"
+      ]
+    ],
+    [
+      "a 'b c' \"d 'e'\" f\"\"g ''",
+      [
+        "a",
+        "b c",
+        "d 'e'",
+        "fg",
+        ""
+      ]
+    ],
+    [
+      " \t lead\nand trail  ",
+      [
+        "lead",
+        "and",
+        "trail"
+      ]
+    ]
+  ],
+  "prelude": [
+    [
+      "/home/user",
+      "_gespann_user_home=\"$HOME\"\nexport HOME='/home/user' CODEX_HOME='/home/user'/.codex NPM_CONFIG_PREFIX='/home/user'/.npm-global\nexport PATH=\"$NPM_CONFIG_PREFIX/bin:$PATH\"\nif [ \"$_gespann_user_home\" != \"$HOME\" ] && [ -f \"$_gespann_user_home/.codex/config.toml\" ] && [ ! -e \"$CODEX_HOME/config.toml\" ]; then mkdir -p \"$CODEX_HOME\" && ln -s \"$_gespann_user_home/.codex/config.toml\" \"$CODEX_HOME/config.toml\"; fi\nunset _gespann_user_home\nif [ -s \"$HOME/.gespann-display\" ]; then export DISPLAY=\"$(cat \"$HOME/.gespann-display\")\"; fi\ncd \"$HOME\" || exit 1"
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "_gespann_user_home=\"$HOME\"\nexport HOME='/srv/gespann-sandboxes/gespann-acme-1a2b3c' CODEX_HOME='/srv/gespann-sandboxes/gespann-acme-1a2b3c'/.codex NPM_CONFIG_PREFIX='/srv/gespann-sandboxes/gespann-acme-1a2b3c'/.npm-global\nexport PATH=\"$NPM_CONFIG_PREFIX/bin:$PATH\"\nif [ \"$_gespann_user_home\" != \"$HOME\" ] && [ -f \"$_gespann_user_home/.codex/config.toml\" ] && [ ! -e \"$CODEX_HOME/config.toml\" ]; then mkdir -p \"$CODEX_HOME\" && ln -s \"$_gespann_user_home/.codex/config.toml\" \"$CODEX_HOME/config.toml\"; fi\nunset _gespann_user_home\nif [ -s \"$HOME/.gespann-display\" ]; then export DISPLAY=\"$(cat \"$HOME/.gespann-display\")\"; fi\ncd \"$HOME\" || exit 1"
+    ],
+    [
+      "/tmp/it's a dir",
+      "_gespann_user_home=\"$HOME\"\nexport HOME='/tmp/it'\\''s a dir' CODEX_HOME='/tmp/it'\\''s a dir'/.codex NPM_CONFIG_PREFIX='/tmp/it'\\''s a dir'/.npm-global\nexport PATH=\"$NPM_CONFIG_PREFIX/bin:$PATH\"\nif [ \"$_gespann_user_home\" != \"$HOME\" ] && [ -f \"$_gespann_user_home/.codex/config.toml\" ] && [ ! -e \"$CODEX_HOME/config.toml\" ]; then mkdir -p \"$CODEX_HOME\" && ln -s \"$_gespann_user_home/.codex/config.toml\" \"$CODEX_HOME/config.toml\"; fi\nunset _gespann_user_home\nif [ -s \"$HOME/.gespann-display\" ]; then export DISPLAY=\"$(cat \"$HOME/.gespann-display\")\"; fi\ncd \"$HOME\" || exit 1"
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "_gespann_user_home=\"$HOME\"\nexport HOME='run/\"quoted\" $HOME `x`' CODEX_HOME='run/\"quoted\" $HOME `x`'/.codex NPM_CONFIG_PREFIX='run/\"quoted\" $HOME `x`'/.npm-global\nexport PATH=\"$NPM_CONFIG_PREFIX/bin:$PATH\"\nif [ \"$_gespann_user_home\" != \"$HOME\" ] && [ -f \"$_gespann_user_home/.codex/config.toml\" ] && [ ! -e \"$CODEX_HOME/config.toml\" ]; then mkdir -p \"$CODEX_HOME\" && ln -s \"$_gespann_user_home/.codex/config.toml\" \"$CODEX_HOME/config.toml\"; fi\nunset _gespann_user_home\nif [ -s \"$HOME/.gespann-display\" ]; then export DISPLAY=\"$(cat \"$HOME/.gespann-display\")\"; fi\ncd \"$HOME\" || exit 1"
+    ]
+  ],
+  "record": [
+    [
+      "/home/user",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/home/user')\"; rm -f '/home/user'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/home/user' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\n[ -s \"$HOME/.gespann-display\" ] || { echo \"the sandbox has no screen of its own (Xvfb is not installed on the machine)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/home/user')\"; rm -f '/home/user'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/home/user' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }"
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/srv/gespann-sandboxes/gespann-acme-1a2b3c')\"; rm -f '/srv/gespann-sandboxes/gespann-acme-1a2b3c'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/srv/gespann-sandboxes/gespann-acme-1a2b3c' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\n[ -s \"$HOME/.gespann-display\" ] || { echo \"the sandbox has no screen of its own (Xvfb is not installed on the machine)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/srv/gespann-sandboxes/gespann-acme-1a2b3c')\"; rm -f '/srv/gespann-sandboxes/gespann-acme-1a2b3c'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/srv/gespann-sandboxes/gespann-acme-1a2b3c' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }"
+    ],
+    [
+      "/tmp/it's a dir",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/tmp/it'\\''s a dir')\"; rm -f '/tmp/it'\\''s a dir'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/tmp/it'\\''s a dir' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\n[ -s \"$HOME/.gespann-display\" ] || { echo \"the sandbox has no screen of its own (Xvfb is not installed on the machine)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname '/tmp/it'\\''s a dir')\"; rm -f '/tmp/it'\\''s a dir'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p '/tmp/it'\\''s a dir' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }"
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname 'run/\"quoted\" $HOME `x`')\"; rm -f 'run/\"quoted\" $HOME `x`'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p 'run/\"quoted\" $HOME `x`' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }",
+      "p=\"$HOME/.gespann-recording\"\ncommand -v ffmpeg >/dev/null 2>&1 || { echo \"ffmpeg is not installed on the sandbox's machine\" >&2; exit 1; }\n[ -n \"${DISPLAY:-}\" ] || { echo \"the sandbox has no screen (DISPLAY is not set)\" >&2; exit 1; }\n[ -s \"$HOME/.gespann-display\" ] || { echo \"the sandbox has no screen of its own (Xvfb is not installed on the machine)\" >&2; exit 1; }\np=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue\nmkdir -p \"$(dirname 'run/\"quoted\" $HOME `x`')\"; rm -f 'run/\"quoted\" $HOME `x`'\ns=\"$(command -v setsid || true)\"\nnohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i \"$DISPLAY\" -vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p 'run/\"quoted\" $HOME `x`' > \"$p.log\" 2>&1 < /dev/null &\necho $! > \"$p.pid\"\nsleep 1\nkill -0 \"$(cat \"$p.pid\")\" 2>/dev/null || { echo \"ffmpeg stopped right away: $(tail -c 300 \"$p.log\")\" >&2; rm -f \"$p.pid\"; exit 1; }"
+    ]
+  ],
+  "stopRecord": "p=\"$HOME/.gespann-recording\"\nr=\"$(cat \"$p.pid\" 2>/dev/null)\"\nif [ -n \"$r\" ] && kill -TERM \"$r\" 2>/dev/null; then i=0; while kill -0 \"$r\" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done; kill -KILL \"$r\" 2>/dev/null; fi\nrm -f \"$p.pid\"\ntrue",
+  "finishRecording": [
+    [
+      "/home/user",
+      "test -s '/home/user' || exit 0\no=\"$(ffmpeg -nostdin -hide_banner -i '/home/user' -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)\"\nb=\"$(printf '%s\\n' \"$o\" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)\"\nd=\"$(printf '%s\\n' \"$o\" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')\"\n{ [ -n \"$b\" ] && [ -n \"$d\" ] && awk -v b=\"$b\" -v d=\"$d\" 'BEGIN { exit !(b < d - 0.5) }' && ffmpeg -nostdin -loglevel error -y -ss \"$b\" -i '/home/user' -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart '/home/user.tmp.mp4' && test -s '/home/user.tmp.mp4'; } ||\n  ffmpeg -nostdin -loglevel error -y -i '/home/user' -c copy -movflags +faststart '/home/user.tmp.mp4' ||\n  { rm -f '/home/user.tmp.mp4'; exit 0; }\ntest -s '/home/user.tmp.mp4' && mv '/home/user.tmp.mp4' '/home/user'\nrm -f '/home/user.tmp.mp4'"
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "test -s '/srv/gespann-sandboxes/gespann-acme-1a2b3c' || exit 0\no=\"$(ffmpeg -nostdin -hide_banner -i '/srv/gespann-sandboxes/gespann-acme-1a2b3c' -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)\"\nb=\"$(printf '%s\\n' \"$o\" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)\"\nd=\"$(printf '%s\\n' \"$o\" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')\"\n{ [ -n \"$b\" ] && [ -n \"$d\" ] && awk -v b=\"$b\" -v d=\"$d\" 'BEGIN { exit !(b < d - 0.5) }' && ffmpeg -nostdin -loglevel error -y -ss \"$b\" -i '/srv/gespann-sandboxes/gespann-acme-1a2b3c' -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4' && test -s '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4'; } ||\n  ffmpeg -nostdin -loglevel error -y -i '/srv/gespann-sandboxes/gespann-acme-1a2b3c' -c copy -movflags +faststart '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4' ||\n  { rm -f '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4'; exit 0; }\ntest -s '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4' && mv '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4' '/srv/gespann-sandboxes/gespann-acme-1a2b3c'\nrm -f '/srv/gespann-sandboxes/gespann-acme-1a2b3c.tmp.mp4'"
+    ],
+    [
+      "/tmp/it's a dir",
+      "test -s '/tmp/it'\\''s a dir' || exit 0\no=\"$(ffmpeg -nostdin -hide_banner -i '/tmp/it'\\''s a dir' -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)\"\nb=\"$(printf '%s\\n' \"$o\" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)\"\nd=\"$(printf '%s\\n' \"$o\" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')\"\n{ [ -n \"$b\" ] && [ -n \"$d\" ] && awk -v b=\"$b\" -v d=\"$d\" 'BEGIN { exit !(b < d - 0.5) }' && ffmpeg -nostdin -loglevel error -y -ss \"$b\" -i '/tmp/it'\\''s a dir' -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart '/tmp/it'\\''s a dir.tmp.mp4' && test -s '/tmp/it'\\''s a dir.tmp.mp4'; } ||\n  ffmpeg -nostdin -loglevel error -y -i '/tmp/it'\\''s a dir' -c copy -movflags +faststart '/tmp/it'\\''s a dir.tmp.mp4' ||\n  { rm -f '/tmp/it'\\''s a dir.tmp.mp4'; exit 0; }\ntest -s '/tmp/it'\\''s a dir.tmp.mp4' && mv '/tmp/it'\\''s a dir.tmp.mp4' '/tmp/it'\\''s a dir'\nrm -f '/tmp/it'\\''s a dir.tmp.mp4'"
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "test -s 'run/\"quoted\" $HOME `x`' || exit 0\no=\"$(ffmpeg -nostdin -hide_banner -i 'run/\"quoted\" $HOME `x`' -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)\"\nb=\"$(printf '%s\\n' \"$o\" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)\"\nd=\"$(printf '%s\\n' \"$o\" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')\"\n{ [ -n \"$b\" ] && [ -n \"$d\" ] && awk -v b=\"$b\" -v d=\"$d\" 'BEGIN { exit !(b < d - 0.5) }' && ffmpeg -nostdin -loglevel error -y -ss \"$b\" -i 'run/\"quoted\" $HOME `x`' -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart 'run/\"quoted\" $HOME `x`.tmp.mp4' && test -s 'run/\"quoted\" $HOME `x`.tmp.mp4'; } ||\n  ffmpeg -nostdin -loglevel error -y -i 'run/\"quoted\" $HOME `x`' -c copy -movflags +faststart 'run/\"quoted\" $HOME `x`.tmp.mp4' ||\n  { rm -f 'run/\"quoted\" $HOME `x`.tmp.mp4'; exit 0; }\ntest -s 'run/\"quoted\" $HOME `x`.tmp.mp4' && mv 'run/\"quoted\" $HOME `x`.tmp.mp4' 'run/\"quoted\" $HOME `x`'\nrm -f 'run/\"quoted\" $HOME `x`.tmp.mp4'"
+    ]
+  ],
+  "screen": [
+    [
+      "/home/user",
+      "f='/home/user/.gespann-display'\nif [ -z \"${DISPLAY:-}\" ] || ! command -v Xvfb >/dev/null 2>&1; then rm -f \"$f\" \"$f.pid\" \"$f.size\"; exit 0; fi\nsize=\"$(grep -xE '[0-9]{3,4}x[0-9]{3,4}x24' '/home/user/.gespann-screen' 2>/dev/null || echo 1440x900x24)\"\nif [ -s \"$f\" ] && [ -s \"$f.pid\" ] && kill -0 \"$(cat \"$f.pid\")\" 2>/dev/null; then\n  [ \"$(cat \"$f.size\" 2>/dev/null || echo 1440x900x24)\" = \"$size\" ] && exit 0\n  kill \"$(cat \"$f.pid\")\" 2>/dev/null\nfi\nrm -f \"$f\" \"$f.pid\" \"$f.n\" \"$f.size\"\ns=\"$(command -v setsid || true)\"\nnohup $s Xvfb -displayfd 3 -screen 0 \"$size\" -nolisten tcp 3> \"$f.n\" > /dev/null 2>&1 < /dev/null &\necho $! > \"$f.pid\"\necho \"$size\" > \"$f.size\"\ni=0; while [ ! -s \"$f.n\" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\nn=\"$(tr -dc 0-9 < \"$f.n\")\"; rm -f \"$f.n\"\nif [ -z \"$n\" ]; then kill \"$(cat \"$f.pid\")\" 2>/dev/null; rm -f \"$f.pid\"; echo \"Xvfb did not start\" >&2; exit 1; fi\necho \":$n\" > \"$f\""
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "f='/srv/gespann-sandboxes/gespann-acme-1a2b3c/.gespann-display'\nif [ -z \"${DISPLAY:-}\" ] || ! command -v Xvfb >/dev/null 2>&1; then rm -f \"$f\" \"$f.pid\" \"$f.size\"; exit 0; fi\nsize=\"$(grep -xE '[0-9]{3,4}x[0-9]{3,4}x24' '/srv/gespann-sandboxes/gespann-acme-1a2b3c/.gespann-screen' 2>/dev/null || echo 1440x900x24)\"\nif [ -s \"$f\" ] && [ -s \"$f.pid\" ] && kill -0 \"$(cat \"$f.pid\")\" 2>/dev/null; then\n  [ \"$(cat \"$f.size\" 2>/dev/null || echo 1440x900x24)\" = \"$size\" ] && exit 0\n  kill \"$(cat \"$f.pid\")\" 2>/dev/null\nfi\nrm -f \"$f\" \"$f.pid\" \"$f.n\" \"$f.size\"\ns=\"$(command -v setsid || true)\"\nnohup $s Xvfb -displayfd 3 -screen 0 \"$size\" -nolisten tcp 3> \"$f.n\" > /dev/null 2>&1 < /dev/null &\necho $! > \"$f.pid\"\necho \"$size\" > \"$f.size\"\ni=0; while [ ! -s \"$f.n\" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\nn=\"$(tr -dc 0-9 < \"$f.n\")\"; rm -f \"$f.n\"\nif [ -z \"$n\" ]; then kill \"$(cat \"$f.pid\")\" 2>/dev/null; rm -f \"$f.pid\"; echo \"Xvfb did not start\" >&2; exit 1; fi\necho \":$n\" > \"$f\""
+    ],
+    [
+      "/tmp/it's a dir",
+      "f='/tmp/it'\\''s a dir/.gespann-display'\nif [ -z \"${DISPLAY:-}\" ] || ! command -v Xvfb >/dev/null 2>&1; then rm -f \"$f\" \"$f.pid\" \"$f.size\"; exit 0; fi\nsize=\"$(grep -xE '[0-9]{3,4}x[0-9]{3,4}x24' '/tmp/it'\\''s a dir/.gespann-screen' 2>/dev/null || echo 1440x900x24)\"\nif [ -s \"$f\" ] && [ -s \"$f.pid\" ] && kill -0 \"$(cat \"$f.pid\")\" 2>/dev/null; then\n  [ \"$(cat \"$f.size\" 2>/dev/null || echo 1440x900x24)\" = \"$size\" ] && exit 0\n  kill \"$(cat \"$f.pid\")\" 2>/dev/null\nfi\nrm -f \"$f\" \"$f.pid\" \"$f.n\" \"$f.size\"\ns=\"$(command -v setsid || true)\"\nnohup $s Xvfb -displayfd 3 -screen 0 \"$size\" -nolisten tcp 3> \"$f.n\" > /dev/null 2>&1 < /dev/null &\necho $! > \"$f.pid\"\necho \"$size\" > \"$f.size\"\ni=0; while [ ! -s \"$f.n\" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\nn=\"$(tr -dc 0-9 < \"$f.n\")\"; rm -f \"$f.n\"\nif [ -z \"$n\" ]; then kill \"$(cat \"$f.pid\")\" 2>/dev/null; rm -f \"$f.pid\"; echo \"Xvfb did not start\" >&2; exit 1; fi\necho \":$n\" > \"$f\""
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "f='run/\"quoted\" $HOME `x`/.gespann-display'\nif [ -z \"${DISPLAY:-}\" ] || ! command -v Xvfb >/dev/null 2>&1; then rm -f \"$f\" \"$f.pid\" \"$f.size\"; exit 0; fi\nsize=\"$(grep -xE '[0-9]{3,4}x[0-9]{3,4}x24' 'run/\"quoted\" $HOME `x`/.gespann-screen' 2>/dev/null || echo 1440x900x24)\"\nif [ -s \"$f\" ] && [ -s \"$f.pid\" ] && kill -0 \"$(cat \"$f.pid\")\" 2>/dev/null; then\n  [ \"$(cat \"$f.size\" 2>/dev/null || echo 1440x900x24)\" = \"$size\" ] && exit 0\n  kill \"$(cat \"$f.pid\")\" 2>/dev/null\nfi\nrm -f \"$f\" \"$f.pid\" \"$f.n\" \"$f.size\"\ns=\"$(command -v setsid || true)\"\nnohup $s Xvfb -displayfd 3 -screen 0 \"$size\" -nolisten tcp 3> \"$f.n\" > /dev/null 2>&1 < /dev/null &\necho $! > \"$f.pid\"\necho \"$size\" > \"$f.size\"\ni=0; while [ ! -s \"$f.n\" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\nn=\"$(tr -dc 0-9 < \"$f.n\")\"; rm -f \"$f.n\"\nif [ -z \"$n\" ]; then kill \"$(cat \"$f.pid\")\" 2>/dev/null; rm -f \"$f.pid\"; echo \"Xvfb did not start\" >&2; exit 1; fi\necho \":$n\" > \"$f\""
+    ]
+  ],
+  "stopScreen": [
+    [
+      "/home/user",
+      "f='/home/user/.gespann-display'; p=\"$(cat \"$f.pid\" 2>/dev/null)\"; [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; rm -f \"$f\" \"$f.pid\" \"$f.size\" '/home/user/.gespann-screen'; exit 0"
+    ],
+    [
+      "/srv/gespann-sandboxes/gespann-acme-1a2b3c",
+      "f='/srv/gespann-sandboxes/gespann-acme-1a2b3c/.gespann-display'; p=\"$(cat \"$f.pid\" 2>/dev/null)\"; [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; rm -f \"$f\" \"$f.pid\" \"$f.size\" '/srv/gespann-sandboxes/gespann-acme-1a2b3c/.gespann-screen'; exit 0"
+    ],
+    [
+      "/tmp/it's a dir",
+      "f='/tmp/it'\\''s a dir/.gespann-display'; p=\"$(cat \"$f.pid\" 2>/dev/null)\"; [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; rm -f \"$f\" \"$f.pid\" \"$f.size\" '/tmp/it'\\''s a dir/.gespann-screen'; exit 0"
+    ],
+    [
+      "run/\"quoted\" $HOME `x`",
+      "f='run/\"quoted\" $HOME `x`/.gespann-display'; p=\"$(cat \"$f.pid\" 2>/dev/null)\"; [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; rm -f \"$f\" \"$f.pid\" \"$f.size\" 'run/\"quoted\" $HOME `x`/.gespann-screen'; exit 0"
+    ]
+  ],
+  "install": [
+    [
+      "main",
+      "/home/user/gespann/core",
+      "https://github.com/tobiasosDev/gespann-core.git",
+      "\"$(npm prefix -g)/bin/gespann\"",
+      "set -e; mkdir -p '/home/user/gespann'\nif [ ! -d /home/user/gespann/core/.git ]; then git clone --quiet 'https://github.com/tobiasosDev/gespann-core.git' /home/user/gespann/core; fi\nold=\"$(cat /home/user/gespann/core/.gespann-installed 2>/dev/null || true)\"\ngit -C /home/user/gespann/core fetch --quiet origin 'main'\nnew=\"$(git -C /home/user/gespann/core rev-parse FETCH_HEAD)\"\nbin=\"$(npm prefix -g)/bin/gespann\"\nif [ \"$old\" != \"$new\" ] || [ ! -x \"$bin\" ] || [ ! -d /home/user/gespann/core/node_modules ]; then\n  echo \"gespann: installing gespann main in the sandbox\"\n  rm -f /home/user/gespann/core/.gespann-installed; git -C /home/user/gespann/core checkout --quiet --force FETCH_HEAD\n  if [ -z \"$old\" ] || [ ! -d /home/user/gespann/core/node_modules ] || ! git -C /home/user/gespann/core diff --quiet \"$old\" \"$new\" -- package-lock.json 2>/dev/null; then (cd /home/user/gespann/core && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --silent); fi\n  mkdir -p \"$(dirname \"$bin\")\"; printf '#!/bin/sh\\nexec node /home/user/gespann/core/src/bin.ts \"$@\"\\n' > \"$bin\"; chmod +x \"$bin\"; \"$bin\" --version; echo \"$new\" > /home/user/gespann/core/.gespann-installed\nfi"
+    ],
+    [
+      "v1.2.3; rm -rf / 'x'",
+      "/srv/box/gespann/core",
+      "https://example.com/it's.git",
+      "/opt/bin/gespann",
+      "set -e; mkdir -p '/srv/box/gespann'\nif [ ! -d /srv/box/gespann/core/.git ]; then git clone --quiet 'https://example.com/it'\\''s.git' /srv/box/gespann/core; fi\nold=\"$(cat /srv/box/gespann/core/.gespann-installed 2>/dev/null || true)\"\ngit -C /srv/box/gespann/core fetch --quiet origin 'v1.2.3; rm -rf / '\\''x'\\'''\nnew=\"$(git -C /srv/box/gespann/core rev-parse FETCH_HEAD)\"\nbin=/opt/bin/gespann\nif [ \"$old\" != \"$new\" ] || [ ! -x \"$bin\" ] || [ ! -d /srv/box/gespann/core/node_modules ]; then\n  echo \"gespann: installing gespann v1.2.3rm-rf/x in the sandbox\"\n  rm -f /srv/box/gespann/core/.gespann-installed; git -C /srv/box/gespann/core checkout --quiet --force FETCH_HEAD\n  if [ -z \"$old\" ] || [ ! -d /srv/box/gespann/core/node_modules ] || ! git -C /srv/box/gespann/core diff --quiet \"$old\" \"$new\" -- package-lock.json 2>/dev/null; then (cd /srv/box/gespann/core && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --silent); fi\n  mkdir -p \"$(dirname \"$bin\")\"; printf '#!/bin/sh\\nexec node /srv/box/gespann/core/src/bin.ts \"$@\"\\n' > \"$bin\"; chmod +x \"$bin\"; \"$bin\" --version; echo \"$new\" > /srv/box/gespann/core/.gespann-installed\nfi"
+    ]
+  ]
+}

@@ -10,3 +10,8 @@ steps:
     label: Audit, lint, typecheck, tests, build
     command: .buildkite/jobs/check.sh
     timeout_in_minutes: 15
+
+  - key: orchestrator
+    label: Orchestrator (Rust)
+    command: .buildkite/jobs/orchestrator.sh
+    timeout_in_minutes: 20

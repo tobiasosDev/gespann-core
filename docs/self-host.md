@@ -29,8 +29,15 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `DATA_DIR` | default `/data` in the image |
 | `SERVER_MODULE` | path of a module that adds pages, Settings cards and a say over jobs ([Server module](#server-module)); default: none |
+| `WORKER` | `builtin` (default) runs jobs in this process; `external` leaves them to the orchestrator ([Worker modes](#worker-modes)) |
 
 Restarting or redeploying the server never loses a job. A job whose server stops (a deploy, a crash) goes back into the queue about a minute later and starts again from the beginning. Before that, gespann stops the commands it left running in the sandbox and takes a copy that was still up down. While the old server keeps running during a rolling deploy, the job stays with it. A job lost in three restarts fails instead of starting again.
+
+## Worker modes
+
+`WORKER=builtin`, the default, runs everything in the one `gespann serve` process: web app, MCP, webhook and the job worker. That is all a self-hosted instance needs. Its catch: a deploy of the server stops the tests that run in it, and they start again from the beginning.
+
+`WORKER=external` turns the worker off. The separate orchestrator service runs the jobs, the sandboxes and the Codex sign-ins, on the same database and `DATA_DIR`; `gespann serve` keeps the web app, MCP, the webhook, everything that talks to GitHub and the server module, and answers the orchestrator under `/internal/` (its token comes from `SESSION_SECRET`). A deploy of the UI then leaves running tests alone. The sandbox variables (`SANDBOX_PROVIDER`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`) go to the orchestrator; Settings → Sandboxes shows the host size it reports, and Codex sign-in works while it runs. The log says `worker: external (the orchestrator runs jobs)`. How to build and run it: [orchestrator.md](orchestrator.md).
 
 ## Sandboxes
 

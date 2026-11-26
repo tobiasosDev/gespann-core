@@ -1,4 +1,4 @@
-import type { Recipe } from "./recipe.ts";
+import { loadRecipe, type Recipe } from "./recipe.ts";
 import type { Viewport } from "./viewports.ts";
 
 /**
@@ -173,4 +173,30 @@ Prove it works before you stop:
 
 If the copy cannot provide it at all (a real device, a real third-party account), change nothing and start your reply with "cannot:" and the reason. Otherwise reply with what you changed, in two or three sentences.
 `;
+}
+
+export const PROMPT_KINDS = ["tester", "setup", "repair", "suggest"] as const;
+export type PromptKind = (typeof PROMPT_KINDS)[number];
+
+/**
+ * `gespann verify prompt <kind>`: the prompt from the same input as the function above, read from JSON.
+ * The tester's input names its recipe as `recipeFile` instead of carrying it; suggest takes
+ * `{repo, repoDir, out, current}`.
+ */
+export function promptFor(kind: PromptKind, input: Record<string, unknown>): string {
+  switch (kind) {
+    case "tester": {
+      const { recipeFile, ...rest } = input as Omit<TesterInput, "recipe"> & { recipeFile: string };
+      if (typeof recipeFile !== "string" || !recipeFile) throw new Error("tester input needs recipeFile");
+      return testerPrompt({ ...rest, recipe: loadRecipe(recipeFile) });
+    }
+    case "setup":
+      return setupPrompt(input as unknown as SetupInput);
+    case "repair":
+      return repairPrompt(input as unknown as RepairInput);
+    case "suggest": {
+      const s = input as { repo: string; repoDir: string; out: string; current?: string };
+      return suggestPrompt(s.repo, s.repoDir, s.out, s.current ?? "");
+    }
+  }
 }
