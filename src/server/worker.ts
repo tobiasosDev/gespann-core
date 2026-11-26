@@ -11,7 +11,7 @@ import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import type { ServerModule } from "./extension.ts";
 import { withCodex } from "./codex.ts";
 import type { Github, LinkedIssue } from "./github.ts";
-import { q, runLong, type Sandboxes } from "./sandbox.ts";
+import { finishRecordingScript, q, runLong, type Sandboxes } from "./sandbox.ts";
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const VIDEO = /\.(mp4|webm)$/i;
@@ -548,8 +548,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     } finally {
       if (recording) {
         await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
-        // Index at the front (faststart), so browsers start playing before the whole file is loaded.
-        await d.sandboxes.exec(b.id, `test -s ${rec} && ffmpeg -loglevel error -y -i ${rec} -c copy -movflags +faststart ${rec}.tmp.mp4 && mv ${rec}.tmp.mp4 ${rec}; rm -f ${rec}.tmp.mp4`, 300).catch(() => undefined);
+        await d.sandboxes.exec(b.id, finishRecordingScript(rec), 300).catch(() => undefined);
       }
     }
     log(tester.timedOut ? `the tester ran out of time (${recipe.timeout} min)` : `the tester finished (exit ${tester.exitCode})`);

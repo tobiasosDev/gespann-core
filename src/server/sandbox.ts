@@ -324,6 +324,32 @@ export function stopRecordScript(): string {
   ].join("\n");
 }
 
+/**
+ * Readies a finished recording for the run page. The screen stays black until the tester opens its browser,
+ * often for half a minute, so the video starts at the first frame that is not black. The index goes to the
+ * front (faststart), so browsers start playing before the whole file is loaded.
+ */
+export function finishRecordingScript(file: string): string {
+  const f = q(file);
+  const tmp = q(`${file}.tmp.mp4`);
+  return [
+    `test -s ${f} || exit 0`,
+    // Black means the empty screen: nearly every pixel at zero (all but the mouse pointer). A dark page
+    // (dark theme, a little text) is not black and stays in the video.
+    `o="$(ffmpeg -nostdin -hide_banner -i ${f} -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)"`,
+    `b="$(printf '%s\\n' "$o" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)"`,
+    `d="$(printf '%s\\n' "$o" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')"`,
+    // A video that is black throughout stays as it is, so the run page still shows what the tester saw.
+    // Re-encoded, not copied: a copy can only start at a keyframe, and those are far apart in this video.
+    `{ [ -n "$b" ] && [ -n "$d" ] && awk -v b="$b" -v d="$d" 'BEGIN { exit !(b < d - 0.5) }' && ffmpeg -nostdin -loglevel error -y -ss "$b" -i ${f} -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart ${tmp} && test -s ${tmp}; } ||`,
+    `  ffmpeg -nostdin -loglevel error -y -i ${f} -c copy -movflags +faststart ${tmp} ||`,
+    // A failed ffmpeg may leave half a file: keep the original recording then.
+    `  { rm -f ${tmp}; exit 0; }`,
+    `test -s ${tmp} && mv ${tmp} ${f}`,
+    `rm -f ${tmp}`,
+  ].join("\n");
+}
+
 const suffix = () => randomBytes(3).toString("hex");
 
 /** Size of a sandbox's own virtual screen on an SSH host; the tester's browser viewport is 1440x900. */
