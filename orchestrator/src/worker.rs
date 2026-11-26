@@ -15,7 +15,7 @@ pub const STALE_SECS: i64 = 60;
 /// A job taken over this often (a crash loop) fails instead of starting again.
 pub const MAX_TAKEOVERS: i64 = 10;
 
-/// What one job takes on the sandbox host at its peak (`PER_JOB` in capacity.ts).
+/// What one job takes on the sandbox host at its peak: a Docker build of the app, the running copy, Codex and a browser.
 const PER_JOB_CPUS: u32 = 4;
 const PER_JOB_MEMORY_GB: f64 = 8.0;
 /// Without a reading of the host.
@@ -38,7 +38,7 @@ pub fn jobs_for(cpus: u32, memory_gb: f64) -> u32 {
     by_cpu.min(by_mem).max(1)
 }
 
-/// `parallelJobs` from `src/server/capacity.ts`: MAX_PARALLEL_JOBS, else 4 CPUs and 8 GB per job of the host, else 2.
+/// MAX_PARALLEL_JOBS, else 4 CPUs and 8 GB per job of the host, else 2.
 pub async fn parallel_jobs(ctx: &Ctx) -> Parallel {
     if let Some(max) = ctx.cfg.max_parallel {
         return Parallel { jobs: max, why: "MAX_PARALLEL_JOBS".into() };
@@ -137,7 +137,7 @@ pub async fn run(ctx: Arc<Ctx>, parallel: Parallel, instance: String, shutdown: 
         if let Err(e) = tick(&ctx, &parallel, &instance, &mut running) {
             crate::log("error", &format!("queue: {e:#}"));
         }
-        // Codex sign-ins the UI started (WORKER=external): one per user at a time.
+        // Codex sign-ins the UI started: one per user at a time.
         match ctx.db.pending_logins() {
             Ok(users) => {
                 let busy: HashSet<i64> = signing_in.values().copied().collect();

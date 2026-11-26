@@ -1,4 +1,4 @@
-//! `from_config` picks the provider and writes the SSH key and known_hosts as provider.ts does.
+//! `from_config` picks the provider and writes the SSH key and known_hosts.
 
 use std::os::unix::fs::PermissionsExt;
 

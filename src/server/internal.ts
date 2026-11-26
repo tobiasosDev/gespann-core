@@ -4,11 +4,11 @@ import type { Judged } from "../verify/verdict.ts";
 import type { AppDeps, Env } from "./app.ts";
 import type { Db, Project, Run } from "./db.ts";
 import { skipClosedRuns, withPrLock } from "./gate.ts";
-import { awaitChecks, ended, issuesText, pendingCheck, prContext, refusal, report } from "./worker.ts";
+import { awaitChecks, ended, issuesText, pendingCheck, prContext, refusal, report } from "./jobs.ts";
 
 /**
  * The internal API the orchestrator calls (docs/orchestrator.md): everything a job needs that talks
- * to GitHub or the server module. Harmless with the builtin worker, which nobody calls it for.
+ * to GitHub or the server module.
  */
 
 /** The orchestrator's bearer token, derived from SESSION_SECRET so both sides know it without another secret. */
@@ -81,7 +81,7 @@ export function mountInternal(app: Hono<Env>, d: AppDeps): void {
     const found = jobOf(c);
     if (!found) return notFound(c, "job");
     try {
-      await ended(d, found.job, found.p, { retry: true });
+      await ended(d, found.job, found.p);
     } catch (err) {
       // Not taken: the orchestrator keeps the end in its outbox and sends it again.
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 503);

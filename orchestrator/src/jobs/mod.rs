@@ -1,5 +1,4 @@
-//! The job steps, a port of `src/server/worker.ts` (`processJob` and everything below it) on top of the
-//! journal, so another orchestrator can pick a job up where it was.
+//! The job steps (setup, suggest, PR run, repair) on top of the journal, so another orchestrator can pick a job up where it was.
 //!
 //! The code of a job runs again from the top after a takeover. Every step that changes state runs
 //! under a journal key, so on the second pass it returns what it returned the first time instead of
@@ -18,7 +17,7 @@ use anyhow::{anyhow, Result};
 
 use crate::db::{self, Job, Project};
 use crate::journal::Journal;
-use crate::sandbox::{ProcState, Sandboxes};
+use crate::sandbox::Sandboxes;
 use crate::{worker, Ctx};
 
 /// One job on its way: what every step needs.
@@ -68,7 +67,7 @@ pub(crate) fn tail(s: &str, n: usize) -> String {
     s.chars().skip(count.saturating_sub(n)).collect()
 }
 
-/// A command that never gets cancelled, for steps the TypeScript worker did not cancel either.
+/// A command that never gets cancelled.
 pub(crate) fn never() -> bool {
     false
 }
@@ -111,19 +110,6 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
     if job.restarts > worker::MAX_TAKEOVERS {
         return Err(anyhow!("the orchestrator restarted during this job {} times; it does not start again", job.restarts));
     }
-    // A job the TypeScript worker (or an attempt that stored nothing yet) left: what it started is stopped,
-    // and a run takes down the copy it left up. Decided once and kept, so later takeovers decide the same.
-    let was_empty = cx.jr.is_empty()?;
-    let legacy = cx
-        .jr
-        .step("takeover", || async move {
-            let legacy = was_empty && job.restarts > 0;
-            if legacy {
-                stop_leftovers(cx).await;
-            }
-            Ok(legacy)
-        })
-        .await?;
     match job.kind.as_str() {
         "login" => Err(anyhow!("Codex sign-in moved to Settings")),
         "setup" => {
@@ -187,7 +173,7 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
             if let Some(err) = refused {
                 return Err(err);
             }
-            run::verify_run(cx, p, &run, legacy).await?;
+            run::verify_run(cx, p, &run).await?;
             Ok(Flow::Done)
         }
     }
@@ -254,21 +240,6 @@ async fn release_slots(cx: &Cx<'_>) {
         let _ = cx.sb().stop(&s.sandbox_id).await;
     }
     let _ = db.release_slots(cx.job.id);
-}
-
-/// Stops the background commands (Codex, a copy coming up) that the TypeScript worker's lost attempt
-/// left running in the sandbox.
-async fn stop_leftovers(cx: &Cx<'_>) {
-    let procs: Vec<(String, u64)> = serde_json::from_str(if cx.job.procs.is_empty() { "[]" } else { &cx.job.procs }).unwrap_or_default();
-    for (sandbox_id, pid) in procs {
-        let running = cx.sb().status(&sandbox_id, pid, 0).await.is_ok_and(|s| s.state == ProcState::Running);
-        if !running {
-            continue;
-        }
-        let _ = cx.sb().kill(&sandbox_id, pid).await;
-        cx.log(&format!("stopped a command the attempt before the restart left running ({pid})"));
-    }
-    let _ = cx.ctx.db.clear_ts_procs(cx.job.id);
 }
 
 /// The worker spawns `process` on the runtime, so its future has to be Send.

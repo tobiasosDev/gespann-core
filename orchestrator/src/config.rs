@@ -58,11 +58,8 @@ impl Config {
             bail!("production needs an https BASE_URL and a SESSION_SECRET of at least 32 characters");
         }
         let sandbox_provider = get("SANDBOX_PROVIDER");
-        if sandbox_provider.starts_with("module:") {
-            bail!("SANDBOX_PROVIDER {sandbox_provider}: provider modules need the builtin worker (WORKER=builtin in gespann serve)");
-        }
         if !get("SANDBOX_PROVIDER_BY_USER").trim().is_empty() {
-            bail!("SANDBOX_PROVIDER_BY_USER (a provider per user) needs the builtin worker (WORKER=builtin in gespann serve)");
+            bail!("SANDBOX_PROVIDER_BY_USER is not supported: one SANDBOX_PROVIDER serves every user");
         }
         if !["docker", "ssh", ""].contains(&sandbox_provider.as_str()) {
             bail!("SANDBOX_PROVIDER {sandbox_provider} is not docker or ssh");

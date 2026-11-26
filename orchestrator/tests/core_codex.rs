@@ -1,44 +1,23 @@
-//! A Codex sign-in sealed by the TypeScript UI opens in Rust, and the other way round.
-
-use std::process::Command;
+//! Codex sign-ins in the database stay readable: one sealed by the former TypeScript server
+//! (`seal` in `src/server/codex.ts` before the orchestrator took over) opens in Rust.
 
 use gespann_orchestrator::codex::{open, seal};
 
-/// Runs `src/server/codex.ts` in node (24+ runs .ts directly): `seal` or `open` with the given input.
-fn node(mode: &str, secret: &str, input: &str) -> Option<String> {
-    let codex = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/server/codex.ts").canonicalize().expect("src/server/codex.ts");
-    let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("x.mjs");
-    let url = format!("file://{}", codex.display());
-    std::fs::write(
-        &script,
-        format!("import {{ seal, open }} from {url:?};\nconst {{ MODE, SECRET, INPUT }} = process.env;\nprocess.stdout.write(MODE === 'seal' ? seal(SECRET, INPUT) : open(SECRET, INPUT));\n"),
-    )
-    .unwrap();
-    let out = match Command::new("node").arg(&script).env("MODE", mode).env("SECRET", secret).env("INPUT", input).output() {
-        Ok(out) => out,
-        Err(e) => {
-            eprintln!("skipped: node is not available ({e})");
-            return None;
-        }
-    };
-    assert!(out.status.success(), "node: {}", String::from_utf8_lossy(&out.stderr));
-    Some(String::from_utf8(out.stdout).unwrap())
-}
-
 const SECRET: &str = "a-session-secret-of-at-least-32-characters";
 const AUTH: &str = r#"{"OPENAI_API_KEY":null,"tokens":{"id_token":"eyJ…","account_id":"acc-1"},"last_refresh":"2026-11-20T08:00:00.123456Z","note":"grüezi ✓"}"#;
+/// `AUTH` as the TypeScript server sealed it with `SECRET`: iv.tag.body, each base64.
+const SEALED_BY_TYPESCRIPT: &str = "wsHm94/iJwJ8CuSp.zHZAGZkvzubcV1CZ+mMEoA==.iEI0kbvzwmi+aFXvjQJLfF5bTLZnaDgYEpXq1ujROlG4+JxGqEbv6261ZjccHM9xMvFW3PzgMAzQBNQOcjsAiY+giMKWzp7Q6HyVPIPLvMrnBXxicWGcomGsRQwDmVcnIQz7zp25G5DP5LlCbDNnjR9RFMaSR2ylb7K+ta4aD418+mo4hz1qsBPJ2i8j";
 
 #[test]
-fn typescript_seals_rust_opens() {
-    let Some(sealed) = node("seal", SECRET, AUTH) else { return };
-    assert_eq!(open(SECRET, &sealed).unwrap(), AUTH);
-    assert!(open("another-secret", &sealed).is_err());
+fn a_sign_in_the_typescript_server_sealed_opens() {
+    assert_eq!(open(SECRET, SEALED_BY_TYPESCRIPT).unwrap(), AUTH);
+    assert!(open("another-secret", SEALED_BY_TYPESCRIPT).is_err());
 }
 
 #[test]
-fn rust_seals_typescript_opens() {
+fn seal_and_open_round_trip_in_the_same_format() {
     let sealed = seal(SECRET, AUTH);
-    let Some(plain) = node("open", SECRET, &sealed) else { return };
-    assert_eq!(plain, AUTH);
+    assert_eq!(sealed.split('.').count(), 3, "iv.tag.body");
+    assert_ne!(sealed, seal(SECRET, AUTH), "a fresh iv each time");
+    assert_eq!(open(SECRET, &sealed).unwrap(), AUTH);
 }

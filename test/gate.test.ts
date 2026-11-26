@@ -12,7 +12,7 @@ import { Db } from "../src/server/db.ts";
 import { applyGate, gateLine } from "../src/server/gate.ts";
 import type { Github, PullRequest } from "../src/server/github.ts";
 import { judge } from "../src/verify/verdict.ts";
-import { checkConclusion } from "../src/server/worker.ts";
+import { checkConclusion } from "../src/server/jobs.ts";
 
 const RECIPE = `
 version: 1
@@ -247,9 +247,8 @@ test("a PR merged or closed while its run waits: the queued run is cancelled and
   const after = db.run_(run.id)!;
   assert.equal(after.status, "cancelled");
   assert.equal(after.error, "the PR was merged before its test started");
-  assert.equal(db.jobOfRun(run.id)?.status, "cancelled", "the worker never picks it up");
+  assert.equal(db.jobOfRun(run.id)?.status, "cancelled", "the orchestrator never picks it up");
   assert.deepEqual(gh.checks, [{ id: 1, conclusion: "skipped", title: "Skipped: the PR was merged" }]);
-  assert.equal(db.nextJob(), undefined);
   assert.deepEqual(db.closedPrs(project().id), [{ pr: 7, merged: true }], "the Runs page moves it to merged or closed");
   // Reopened: it is open again.
   gh.current = { ...gh.current, state: "open", merged: false };

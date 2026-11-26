@@ -7,9 +7,9 @@ import { test } from "node:test";
 import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
 import { type CheckRun, Github, type OtherChecks, otherChecks } from "../src/server/github.ts";
-import type { Sandboxes } from "../src/server/sandbox.ts";
+import { awaitChecks, CI_GRACE_MS, CI_MAX_WAIT_MS, CI_POLL_MS, ciStep, report } from "../src/server/jobs.ts";
 import { judge } from "../src/verify/verdict.ts";
-import { CI_GRACE_MS, CI_MAX_WAIT_MS, CI_POLL_MS, ciStep, processJob, report } from "../src/server/worker.ts";
+import { startJob } from "./jobs.ts";
 
 const run = (name: string, status: string, conclusion: string | null = null, slug = "github-actions"): CheckRun => ({ name, status, conclusion, app: { slug } });
 
@@ -41,13 +41,6 @@ test("ci stage: a red check skips, a running one waits, green goes; no checks ge
   assert.match(late.kind === "go" ? (late.note ?? "") : "", /still run after 60 min \(a, b, c, d, e and 2 more\): testing anyway/);
 });
 
-/** Any sandbox call is a failure here: the CI stage decides before a sandbox is touched. */
-function noSandboxes(calls: string[]): Sandboxes {
-  return new Proxy({} as Sandboxes, {
-    get: (_t, key) => (key === "kind" ? "docker" : () => (calls.push(String(key)), Promise.reject(new Error(`sandbox ${String(key)} called`)))),
-  });
-}
-
 function setup(checks: OtherChecks | Error) {
   const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-ci-")) });
   const db = new Db(":memory:");
@@ -65,71 +58,62 @@ function setup(checks: OtherChecks | Error) {
     },
     updateCheck: async (_i: number, _r: string, _id: number, f: { status?: string; conclusion?: string; title?: string }) => void updates.push(f),
   } as unknown as Github;
-  const calls: string[] = [];
   const job = db.job(db.enqueue(p, "run", id))!;
-  db.claimJob(job.id);
-  return { db, deps: { db, sandboxes: noSandboxes(calls), github: () => github, config }, job, id, updates, calls };
+  startJob(db, job.id);
+  const deps = { db, github: () => github, config };
+  /** What the orchestrator asks before it takes a sandbox (POST /internal/runs/:id/await-checks). */
+  const ask = () => awaitChecks(deps, db.job(job.id)!, db.project(p)!, db.run_(id)!, (l) => db.appendLog(job.id, l));
+  return { db, deps, job, id, updates, ask };
 }
 
-test("worker: a run waiting for CI leaves the neutral check of a head a person approved", async () => {
+test("ci stage: a run waiting for CI leaves the neutral check of a head a person approved", async () => {
   const t = setup({ ...none, pending: ["check"] });
   t.db.setHold(1, 4, { approved_by: "tobi", approved_head: "h" });
-  await processJob(t.deps, t.job);
+  assert.equal(await t.ask(), "later");
   assert.equal(t.db.job(t.job.id)?.status, "queued", "it still waits to test");
   assert.deepEqual(t.updates, [], "no queued check over the approval");
 });
 
-test("worker: a run whose PR still runs its other checks goes back into the queue without a sandbox, and the wait is no sandbox time", async () => {
+test("ci stage: a run whose PR still runs its other checks goes back into the queue without a sandbox, and the wait is no sandbox time", async () => {
   const t = setup({ ...none, pending: ["check"] });
-  await processJob(t.deps, t.job);
+  assert.equal(await t.ask(), "later");
   const job = t.db.job(t.job.id)!;
   assert.equal(job.status, "queued");
   assert.equal(job.started, null);
   assert.ok(job.not_before && Date.parse(job.not_before) > Date.now(), "waits before it is taken again");
-  assert.equal(t.db.nextJob(), undefined, "the queue skips it until then");
   assert.deepEqual(t.db.queuedJobs(1), { sandbox: 0, checks: 1 }, "Settings says it waits for CI, not for a sandbox");
   assert.deepEqual([...t.db.runsWaitingForChecks(1)], [t.id], "the Runs list says so too");
   assert.equal(t.db.run_(t.id)?.status, "queued");
   assert.deepEqual(t.updates, [{ status: "queued", title: "Waiting for the other checks", summary: "gespann tests this PR once its other checks pass. Waiting for the PR's other checks: check." }]);
   assert.match(job.log, /waiting for the PR's other checks: check/);
-  assert.deepEqual(t.calls, []);
   // The same wait again adds no log line and no check update.
-  t.db.claimJob(job.id);
-  await processJob(t.deps, t.db.job(job.id)!);
+  startJob(t.db, job.id);
+  assert.equal(await t.ask(), "later");
   assert.equal(t.db.job(job.id)?.log.match(/waiting for/g)?.length, 1);
   assert.equal(t.updates.length, 1);
 });
 
-test("worker: a run whose PR failed its other checks ends as SKIP without a sandbox, and its check says why", async () => {
+test("ci stage: a run whose PR failed its other checks ends as SKIP without a sandbox, and its check says why", async () => {
   const t = setup({ ...none, failed: ["check"] });
-  await processJob(t.deps, t.job);
-  assert.equal(t.db.job(t.job.id)?.status, "done");
+  assert.equal(await t.ask(), "skipped");
   const r = t.db.run_(t.id)!;
   assert.equal(r.status, "done");
   assert.equal(r.outcome, "SKIP");
   assert.equal(r.error, "the PR's other checks failed first (check); gespann tests once they pass");
   assert.equal(t.updates.at(-1)?.conclusion, "skipped");
   assert.equal(t.updates.at(-1)?.title, "Skipped: other checks failed first");
-  assert.deepEqual(t.calls, []);
-  assert.equal(t.db.job(t.job.id)?.started, null, "a job that never had a sandbox adds no sandbox time");
-  assert.deepEqual([t.db.boxTime(1).jobs, t.db.boxTime(1).monthSeconds], [0, 0]);
 });
 
-test("worker: when GitHub does not answer about the other checks, the run waits and asks again instead of starting", async () => {
+test("ci stage: when GitHub does not answer about the other checks, the run waits and asks again instead of starting", async () => {
   const t = setup(new Error("GitHub 502: bad gateway"));
-  await processJob(t.deps, t.job);
+  assert.equal(await t.ask(), "later");
   assert.equal(t.db.job(t.job.id)?.status, "queued");
   assert.match(t.db.job(t.job.id)?.log ?? "", /could not read the PR's other checks \(GitHub 502: bad gateway\): trying again/);
-  assert.deepEqual(t.calls, []);
 });
 
-test("worker: a run whose other checks passed takes a sandbox", async () => {
+test("ci stage: a run whose other checks passed may take a sandbox", async () => {
   const t = setup({ ...none, passed: ["check"] });
-  // It waited for CI before: the mark from that wait goes once the checks are green.
-  t.db.sql.prepare("update jobs set not_before = ? where id = ?").run(new Date(Date.now() - 1000).toISOString(), t.job.id);
-  await processJob(t.deps, t.db.job(t.job.id)!);
-  assert.ok(t.calls.length > 0, "the run went on to the sandbox");
-  assert.equal(t.db.job(t.job.id)?.not_before, null, "a restart later does not show it as waiting for CI");
+  assert.equal(await t.ask(), "go");
   assert.notEqual(t.db.run_(t.id)?.outcome, "SKIP");
 });
 
@@ -150,7 +134,7 @@ test("github: a source GitHub refuses for good (404) counts as none; a 502 throw
   await assert.rejects(gh.otherChecks(9, "acme/shop", "h"), /GitHub 502/);
 });
 
-test("worker: a merge gate switched off while the test runs makes its FAIL neutral, and switched on makes it fail", async () => {
+test("ci stage: a merge gate switched off while the test runs makes its FAIL neutral, and switched on makes it fail", async () => {
   const judged = judge(JSON.stringify({ verdict: "FAIL", summary: "The total is wrong.", checks: [{ expect: "Total is 10", observed: "Total is 9", result: "fail", proof: ["a.png"] }], proof: ["a.png"] }), () => true);
   for (const [atStart, atEnd, conclusion] of [[1, 0, "neutral"], [0, 1, "failure"]] as const) {
     const t = setup({ ...none, passed: ["check"] });

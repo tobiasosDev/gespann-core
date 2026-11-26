@@ -49,8 +49,12 @@ Up to `v0.2.0` gespann was a rule loop (observe sessions, propose and approve ve
 npm install
 npm run check    # typecheck (server + web) and tests (node --test, Node ≥ 22.18)
 npm run build    # server to dist/, React app to dist/web
-DATA_DIR=.data node src/bin.ts serve   # http://localhost:3000
+DATA_DIR=.data node src/bin.ts serve   # the UI on http://localhost:3000
+cargo test --manifest-path orchestrator/Cargo.toml   # the orchestrator (Rust), which runs the jobs
+DATA_DIR=.data SANDBOX_PROVIDER=docker SANDBOX_IMAGE=… cargo run --manifest-path orchestrator/Cargo.toml
 ```
+
+The UI (TypeScript) serves the web app, MCP and the GitHub webhook; the orchestrator (Rust, `orchestrator/`) runs every job in the sandboxes. Both share the database under `DATA_DIR`: [docs/orchestrator.md](docs/orchestrator.md).
 
 ## Run your own instance
 

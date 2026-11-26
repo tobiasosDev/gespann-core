@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createApp } from "../src/server/app.ts";
 import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
+import { orchestrator } from "./jobs.ts";
 
 function owner(db: Db, id: number, login: string) {
   const u = db.upsertUser({ github_id: id, login, name: null, avatar: null });
@@ -11,21 +12,11 @@ function owner(db: Db, id: number, login: string) {
   return { u, a, b };
 }
 
-test("an owner's own job limit holds their next job back; other owners and freed boxes go on", () => {
+test("an owner's own job limit is kept per user; null leaves it to the host", () => {
   const db = new Db(":memory:");
   const t = owner(db, 1, "tobi");
-  const e = owner(db, 2, "eve");
   db.setMaxJobs(t.u.id, 1);
-  const j1 = db.enqueue(t.a, "suggest");
-  const j2 = db.enqueue(t.b, "suggest");
-  const j3 = db.enqueue(e.a, "suggest");
-  assert.equal(db.nextJob()?.id, j1);
-  assert.ok(db.claimJob(j1));
-  assert.equal(db.nextJob()?.id, j3, "tobi has 1 of 1 running; eve's job goes first");
-  assert.ok(db.claimJob(j3));
-  assert.equal(db.nextJob(), undefined, "tobi's second job waits for his box");
-  db.endJob(j1, "done");
-  assert.equal(db.nextJob()?.id, j2);
+  assert.equal(db.maxJobs(t.u.id), 1);
   db.setMaxJobs(t.u.id, null);
   assert.equal(db.maxJobs(t.u.id), null);
 });
@@ -60,7 +51,8 @@ test("box time sums job durations per UTC day of this month; a running job count
 test("API: the limit is 1 to the host's maximum; a chosen number stays when the host grows", async () => {
   const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data" });
   const db = new Db(":memory:");
-  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 4 });
+  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false });
+  orchestrator(db, 4);
   const { u } = owner(db, 1, "tobi");
   db.createSession("s".repeat(64), u.id);
   const h = { Cookie: `gs=${"s".repeat(64)}`, "x-gespann": "1", "Content-Type": "application/json" };
@@ -74,49 +66,18 @@ test("API: the limit is 1 to the host's maximum; a chosen number stays when the 
   assert.deepEqual(await get().then((b) => [b.limit, b.own]), [2, 2]);
   assert.equal((await set(4)).status, 200);
   assert.deepEqual(await get().then((b) => [b.limit, b.own]), [4, 4]);
-  const bigger = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 8 });
-  const after = await (await bigger.request("/api/boxes", { headers: h })).json();
+  orchestrator(db, 8);
+  const after = await get();
   assert.deepEqual([after.host, after.limit], [8, 4], "a chosen limit stays when the host grows");
   assert.equal((await server.request("/api/boxes/limit", { method: "POST", headers: { Cookie: h.Cookie, "Content-Type": "application/json" }, body: '{"limit":1}' })).status, 403, "no x-gespann header, no change");
-});
-
-test("the server module's cap holds an owner's next job in the queue; owners without a cap go on", () => {
-  const db = new Db(":memory:");
-  const t = owner(db, 1, "tobi");
-  const e = owner(db, 2, "eve");
-  const asked: string[] = [];
-  const cap = (o: { id: number; login: string }) => {
-    asked.push(o.login);
-    return o.login === "tobi" ? 1 : null;
-  };
-  const j1 = db.enqueue(t.a, "suggest");
-  const j2 = db.enqueue(t.b, "suggest");
-  const j3 = db.enqueue(e.a, "suggest");
-  const j4 = db.enqueue(e.b, "suggest");
-  assert.ok(db.claimJob(db.nextJob(cap)!.id));
-  assert.equal(db.job(j1)?.status, "running");
-  assert.equal(db.nextJob(cap)?.id, j3, "tobi has 1 of 1 running; eve has no cap");
-  assert.ok(db.claimJob(j3));
-  assert.equal(db.nextJob(cap)?.id, j4);
-  assert.ok(db.claimJob(j4));
-  assert.equal(db.nextJob(cap), undefined, "tobi's second job waits, it does not fail");
-  assert.equal(db.job(j2)?.status, "queued");
-  assert.equal(db.nextJob()?.id, j2, "without a cap the job would start");
-  db.endJob(j1, "done");
-  assert.equal(db.nextJob(cap)?.id, j2);
-  // The own limit and the cap both hold; the lower one wins.
-  assert.ok(db.claimJob(j2));
-  db.setMaxJobs(e.u.id, 1);
-  db.enqueue(e.a, "suggest");
-  assert.equal(db.nextJob(() => 5), undefined, "eve runs 2 with her own limit at 1; a cap of 5 does not lift it");
-  assert.ok(asked.includes("eve"));
 });
 
 test("API: a module cap lowers the most a user can choose and says why", async () => {
   const config = loadConfig({ DATA_DIR: "/tmp/gespann-test-data" });
   const db = new Db(":memory:");
   const module = { name: "plans", jobCap: (o: { login: string }) => (o.login === "tobi" ? { jobs: 2, reason: "the Start plan" } : null) };
-  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 7, module });
+  const server = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, module });
+  orchestrator(db, 7);
   const { u } = owner(db, 1, "tobi");
   db.createSession("s".repeat(64), u.id);
   const h = { Cookie: `gs=${"s".repeat(64)}`, "x-gespann": "1", "Content-Type": "application/json" };
@@ -127,7 +88,7 @@ test("API: a module cap lowers the most a user can choose and says why", async (
   assert.deepEqual(await get().then((b) => [b.limit, b.own]), [1, 1]);
   db.setMaxJobs(u.id, 5);
   assert.equal((await get()).limit, 2, "an older own limit above the cap counts as the cap");
-  const broken = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, parallel: 7, module: { name: "x", jobCap: () => { throw new Error("down"); } } });
+  const broken = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, module: { name: "x", jobCap: () => { throw new Error("down"); } } });
   const b = await (await broken.request("/api/boxes", { headers: h })).json();
   assert.deepEqual([b.cap, b.limit], [null, 5], "a module that fails sets no cap");
 });

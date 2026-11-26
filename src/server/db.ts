@@ -6,9 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 export type CodexState = "none" | "pending" | "connected" | "failed";
 export type SetupState = "none" | "queued" | "running" | "ready" | "failed";
 export type JobKind = "login" | "setup" | "run" | "suggest";
-/** The server module's cap for an owner: at most this many of their jobs at once; null for none. */
-export type JobCapFn = (owner: { id: number; login: string }) => number | null;
-
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface User {
@@ -293,10 +290,6 @@ export class Db {
     return this.one("select codex_state, codex_login, codex_account from users where id = ?", userId);
   }
 
-  codexAuth(userId: number): string | null {
-    return this.one<{ codex_auth: string | null }>("select codex_auth from users where id = ?", userId)?.codex_auth ?? null;
-  }
-
   setCodex(userId: number, fields: Partial<{ codex_state: CodexState; codex_login: string | null; codex_auth: string | null; codex_account: string | null }>): void {
     const keys = Object.keys(fields);
     if (!keys.length) return;
@@ -426,44 +419,6 @@ export class Db {
     return this.run("insert into jobs (project_id, kind, status, run_id, created) values (?, ?, 'queued', ?, ?)", projectId, kind, runId, now());
   }
 
-  /**
-   * The oldest queued job that may start now. Jobs run side by side, also of one project and one owner,
-   * each in its own sandbox; only a setup runs alone in its project, no job overtakes a queued setup,
-   * and an owner never has more jobs running than the limit they set in Settings, nor more than `cap`
-   * allows (the server module's cap, e.g. a plan's). A job over either limit stays queued.
-   */
-  nextJob(cap?: JobCapFn): Job | undefined {
-    return this.nextJobs(1, cap)[0];
-  }
-
-  /**
-   * The queued jobs that may start now, oldest first (see `nextJob`); the worker takes the first whose
-   * sandbox provider has room. `cap` skips owners who already run as many jobs as it allows.
-   */
-  nextJobs(limit = -1, cap?: JobCapFn): Job[] {
-    const rows = this.sql.prepare(
-      `select j.*, u.id as cap_owner, u.login as cap_login, (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) as cap_running
-         from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
-         and (j.not_before is null or j.not_before <= ?)
-         and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
-         and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
-         and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
-       order by j.id limit ?`,
-    ).all(now(), cap ? -1 : limit) as unknown as (Job & { cap_owner: number; cap_login: string; cap_running: number })[];
-    const caps = new Map<number, number | null>();
-    const out: Job[] = [];
-    for (const { cap_owner, cap_login, cap_running, ...job } of rows) {
-      if (cap) {
-        if (!caps.has(cap_owner)) caps.set(cap_owner, cap({ id: cap_owner, login: cap_login }));
-        const most = caps.get(cap_owner);
-        if (most != null && cap_running >= most) continue;
-      }
-      out.push(job as Job);
-      if (limit >= 0 && out.length >= limit) break;
-    }
-    return out;
-  }
-
   /** How many jobs of the user's projects may run at once; null leaves it to the sandbox host. */
   maxJobs(userId: number): number | null {
     return this.one<{ max_jobs: number | null }>("select max_jobs from users where id = ?", userId)?.max_jobs ?? null;
@@ -528,54 +483,8 @@ export class Db {
     return { month, days, monthSeconds: days.reduce((a, d) => a + d.seconds, 0), totalSeconds: Math.round(total?.seconds ?? 0), jobs: rows.reduce((a, r) => a + r.jobs, 0) };
   }
 
-  /**
-   * The project sandbox this job uses: the one it held before a restart, or a free one. A slot is free
-   * when no queued or running job holds it. Undefined when all are taken: the caller makes a new one.
-   */
-  takeSlot(projectId: number, jobId: number): Slot | undefined {
-    // Projects from before slots: their one sandbox becomes the first slot.
-    const p = this.project(projectId);
-    if (p?.sandbox_id && !this.one("select 1 from slots where project_id = ?", projectId)) this.run("insert into slots (project_id, sandbox_id) values (?, ?)", projectId, p.sandbox_id);
-    const mine = this.one<Slot>("select * from slots where project_id = ? and job_id = ? order by id limit 1", projectId, jobId);
-    if (mine) return mine;
-    const free = this.all<Slot>(
-      "select s.* from slots s where s.project_id = ? and (s.job_id is null or not exists (select 1 from jobs j where j.id = s.job_id and j.status in ('queued', 'running'))) order by s.id",
-      projectId,
-    );
-    for (const s of free) {
-      // Conditional, so a second server (during a rolling deploy) cannot take the same slot.
-      const taken = Number(this.sql.prepare("update slots set job_id = ? where id = ? and job_id is ?").run(jobId, s.id, s.job_id).changes) === 1;
-      if (taken) return { ...s, job_id: jobId };
-    }
-    return undefined;
-  }
-
-  addSlot(projectId: number, sandboxId: string, jobId: number): Slot {
-    const id = this.run("insert into slots (project_id, sandbox_id, job_id) values (?, ?, ?)", projectId, sandboxId, jobId);
-    return this.one<Slot>("select * from slots where id = ?", id) as Slot;
-  }
-
-  slot(id: number): Slot | undefined {
-    return this.one<Slot>("select * from slots where id = ?", id);
-  }
-
   slots(projectId: number): Slot[] {
     return this.all<Slot>("select * from slots where project_id = ? order by id", projectId);
-  }
-
-  setSlotBundle(id: number, bundle: number): void {
-    this.run("update slots set bundle = ? where id = ?", bundle, id);
-  }
-
-  /** A slot whose sandbox is gone for good. */
-  dropSlot(id: number): void {
-    const s = this.slot(id);
-    this.run("delete from slots where id = ?", id);
-    if (s) this.run("update projects set sandbox_id = null where id = ? and sandbox_id = ?", s.project_id, s.sandbox_id);
-  }
-
-  releaseSlots(jobId: number): void {
-    this.run("update slots set job_id = null where job_id = ?", jobId);
   }
 
   job(id: number): Job | undefined {
@@ -587,25 +496,6 @@ export class Db {
   }
 
 
-  startJob(id: number): void {
-    this.run("update jobs set status = 'running', started = coalesce(started, ?), heartbeat = ? where id = ?", now(), now(), id);
-  }
-
-  /** Takes a queued job; false when another server (the old one, during a rolling deploy) took it first. */
-  claimJob(id: number): boolean {
-    return Number(this.sql.prepare("update jobs set status = 'running', started = coalesce(started, ?), heartbeat = ? where id = ? and status = 'queued'").run(now(), now(), id).changes) === 1;
-  }
-
-  /** Ends a job that never touched a sandbox (e.g. its PR failed CI first); it adds no sandbox time. */
-  endUnstarted(id: number): void {
-    this.run("update jobs set status = 'done', started = null, heartbeat = null, finished = ? where id = ?", now(), id);
-  }
-
-  /** The run passed its PR's other checks: after a restart it is no longer shown as waiting for CI. */
-  passedChecks(id: number): void {
-    this.run("update jobs set not_before = null where id = ?", id);
-  }
-
   /** Runs of the project that wait in the queue for their PR's other checks (CI), not for a sandbox. */
   runsWaitingForChecks(projectId: number): Set<number> {
     return new Set(this.all<{ run_id: number }>("select run_id from jobs where project_id = ? and status = 'queued' and run_id is not null and not_before is not null", projectId).map((j) => j.run_id));
@@ -616,24 +506,6 @@ export class Db {
     this.run("update jobs set status = 'queued', started = null, heartbeat = null, not_before = ? where id = ? and status = 'running'", until, id);
   }
 
-  /** The worker still runs these jobs. */
-  beat(ids: number[]): void {
-    for (const id of ids) this.run("update jobs set heartbeat = ? where id = ? and status = 'running'", now(), id);
-  }
-
-  addProc(id: number, sandboxId: string, processId: number): void {
-    const procs = JSON.parse(this.job(id)?.procs ?? "[]") as [string, number][];
-    this.run("update jobs set procs = ? where id = ?", JSON.stringify([...procs, [sandboxId, processId]]), id);
-  }
-
-  clearProcs(id: number): void {
-    this.run("update jobs set procs = '[]' where id = ?", id);
-  }
-
-  endJob(id: number, status: JobStatus, error: string | null = null): void {
-    this.run("update jobs set status = ?, finished = ?, error = ? where id = ?", status, now(), error, id);
-  }
-
   /** Marks the job's end as told to the server module; false when it already was. */
   noteEnded(id: number): boolean {
     return Number(this.sql.prepare("update jobs set ended_noted = ? where id = ? and ended_noted is null").run(now(), id).changes) > 0;
@@ -641,37 +513,6 @@ export class Db {
 
   appendLog(id: number, line: string): void {
     this.run("update jobs set log = substr(log || ?, -200000) where id = ?", `${now().slice(11, 19)} ${line}\n`, id);
-  }
-
-  /**
-   * Jobs whose server stopped beating before `before` (a restart, a deploy, a crash) go back into the
-   * queue and start again from the beginning; their run and setup wait with them. A run or setup left
-   * running without a job fails.
-   */
-  requeueStale(before: string): number[] {
-    const ids = this.all<{ id: number }>("select id from jobs where status = 'running' and (heartbeat is null or heartbeat < ?)", before).map((j) => j.id);
-    for (const id of ids) {
-      this.run(
-        "update jobs set status = 'queued', heartbeat = null, restarts = restarts + 1, log = substr(log || ?, -200000) where id = ?",
-        `${now().slice(11, 19)} the server restarted during this job; it starts again\n`,
-        id,
-      );
-      this.run("update runs set status = 'queued' where status = 'running' and id = (select run_id from jobs where id = ?)", id);
-      this.run("update projects set setup = 'queued' where setup = 'running' and id = (select project_id from jobs where id = ? and kind = 'setup')", id);
-    }
-    this.run(
-      "update runs set status = 'failed', finished = ?, error = 'the server restarted during this run' where status = 'running' and not exists (select 1 from jobs where run_id = runs.id and status in ('queued', 'running'))",
-      now(),
-    );
-    this.run(
-      "update projects set setup = 'failed', setup_error = 'the server restarted during setup' where setup = 'running' and not exists (select 1 from jobs where project_id = projects.id and kind = 'setup' and status in ('queued', 'running'))",
-    );
-    return ids;
-  }
-
-  /** A Codex sign-in lives in the server process; one that was waiting when it stopped is over. */
-  failPendingLogins(): void {
-    this.run("update users set codex_state = 'failed', codex_login = '{\"url\":null,\"code\":null,\"lines\":\"The server restarted during the sign-in. Start it again.\"}' where codex_state = 'pending'");
   }
 
   createRun(r: { project_id: number; pr: number; title: string | null; head: string; base: string; base_ref: string; token: string }): number {

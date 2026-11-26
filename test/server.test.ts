@@ -22,36 +22,25 @@ test("the app JWT is a valid RS256 token", () => {
   assert.ok(createVerify("RSA-SHA256").update(`${h}.${b}`).verify(publicKey, Buffer.from(s, "base64url")));
 });
 
-test("one job per project at a time; a newer push cancels queued runs of the same PR", () => {
+test("a newer push cancels queued runs of the same PR", () => {
   const db = new Db(":memory:");
   const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
   const a = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/a", repo_id: 1, default_branch: "main" });
-  const u2 = db.upsertUser({ github_id: 2, login: "u2", name: null, avatar: null });
-  const b = db.createProject({ owner_id: u2.id, installation_id: 9, repo: "o/b", repo_id: 2, default_branch: "main" });
-  const j1 = db.enqueue(a, "setup");
-  db.enqueue(a, "login");
-  const j3 = db.enqueue(b, "login");
-  assert.equal(db.nextJob()?.id, j1);
-  db.startJob(j1);
-  assert.equal(db.nextJob()?.id, j3, "project a is busy, b of another owner goes next");
   const r1 = db.createRun({ project_id: a, pr: 4, title: "t", head: "h1", base: "b", base_ref: "main", token: "0".repeat(32) });
   db.enqueue(a, "run", r1);
   assert.deepEqual(db.cancelQueuedRuns(a, 4).map((r) => r.id), [r1]);
   assert.equal(db.run_(r1)?.status, "cancelled");
-  assert.equal(db.claimJob(j1), false, "a running job is not taken twice");
-  // j1's server still beats: nothing goes back into the queue.
-  assert.deepEqual(db.requeueStale(new Date(Date.now() - 60_000).toISOString()), []);
-  assert.equal(db.job(j1)?.status, "running");
 });
 
-test("a newer push supersedes the PR's queued and running runs; its job keeps the sandbox until the worker stops", () => {
+test("a newer push supersedes the PR's queued and running runs; its job keeps the sandbox until the orchestrator stops it", () => {
   const db = new Db(":memory:");
   const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
   const a = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/a", repo_id: 1, default_branch: "main" });
   const mk = (pr: number, head: string) => db.createRun({ project_id: a, pr, title: "t", head, base: "b", base_ref: "main", token: head.padEnd(32, "0") });
   const running = mk(4, "h1");
   const rj = db.enqueue(a, "run", running);
-  db.claimJob(rj);
+  // The orchestrator runs it.
+  db.sql.prepare("update jobs set status = 'running', started = ? where id = ?").run(new Date().toISOString(), rj);
   db.updateRun(running, { status: "running" });
   const queued = mk(4, "h2");
   const qj = db.enqueue(a, "run", queued);
@@ -99,10 +88,9 @@ test("API: a signed-in user sees own projects through every step, not others'", 
 
   assert.equal((await (await get("/projects")).json()).projects[0].repo, "acme/shop");
   assert.equal((await post(`/projects/${p}/setup`, {})).status, 409, "setup needs Codex first");
-  let started = 0;
-  const withLogin = createApp({ config, db, github: () => { throw new Error("no github"); }, githubReady: () => false, startCodexLogin: () => void started++ });
-  assert.equal((await withLogin.request("/api/settings/codex/login", { method: "POST", headers: h })).status, 200);
-  assert.equal(started, 1);
+  db.setSetting("orchestrator", JSON.stringify({ kind: "ssh", parallel: 2, why: "", instance: "i", beat: new Date().toISOString() }));
+  assert.equal((await post("/settings/codex/login", {})).status, 200);
+  assert.equal(db.codex(u.id)?.codex_state, "pending", "the orchestrator runs the sign-in");
   db.setCodex(u.id, { codex_state: "pending", codex_login: JSON.stringify({ url: "https://auth.openai.com/codex/device", code: "ABCD-12345", lines: "" }) });
   assert.equal((await (await get("/settings")).json()).codex.login.code, "ABCD-12345");
   db.setCodex(u.id, { codex_state: "connected", codex_account: "tobi@example.test", codex_login: null, codex_auth: "sealed" });
@@ -149,88 +137,6 @@ test("the GitHub App setup accepts only the server-side nonce", async () => {
   assert.ok(state);
   assert.equal((await server.request("/setup/github/created?state=forged&code=x", { headers: { Cookie: "gs_setup=forged" } })).status, 400);
   assert.equal(JSON.parse(db.setting("setup_state") ?? "null").state, state, "a forged callback does not spend the admin's nonce");
-});
-
-test("the Codex sign-in is sealed with AES-GCM and tampering is detected", async () => {
-  const { seal, open } = await import("../src/server/codex.ts");
-  const sealed = seal("secret", '{"tokens":{"refresh_token":"r"}}');
-  assert.ok(!sealed.includes("refresh_token"));
-  assert.equal(open("secret", sealed), '{"tokens":{"refresh_token":"r"}}');
-  assert.throws(() => open("other", sealed));
-});
-
-test("jobs run side by side, also of one project and one owner; a setup runs alone in its project and is not overtaken", () => {
-  const db = new Db(":memory:");
-  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
-  const a = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/a", repo_id: 1, default_branch: "main" });
-  const b = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/b", repo_id: 2, default_branch: "main" });
-  const start = () => {
-    const j = db.nextJob();
-    if (j) db.claimJob(j.id);
-    return j?.id;
-  };
-  const r1 = db.enqueue(a, "run");
-  const r2 = db.enqueue(a, "run");
-  const sb = db.enqueue(b, "setup");
-  const r3 = db.enqueue(b, "run");
-  assert.deepEqual([start(), start(), start()], [r1, r2, sb], "two runs of one project, and another project of the same owner");
-  assert.equal(start(), undefined, "b's run waits for b's setup");
-  db.endJob(sb, "done");
-  assert.equal(start(), r3);
-  const sa = db.enqueue(a, "setup");
-  const r4 = db.enqueue(a, "run");
-  assert.equal(start(), undefined, "a's setup waits for a's runs, and a's newer run waits for the setup");
-  db.endJob(r1, "done");
-  db.endJob(r2, "done");
-  assert.equal(start(), sa);
-  assert.equal(start(), undefined);
-  db.endJob(sa, "done");
-  assert.equal(start(), r4);
-});
-
-test("slots: each job holds its own sandbox, keeps it over a restart, frees it at the end; the old single sandbox becomes the first slot", () => {
-  const db = new Db(":memory:");
-  const u = db.upsertUser({ github_id: 1, login: "t", name: null, avatar: null });
-  const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "o/a", repo_id: 1, default_branch: "main" });
-  db.updateProject(p, { sandbox_id: "old" });
-  const j1 = db.enqueue(p, "run");
-  const j2 = db.enqueue(p, "run");
-  db.claimJob(j1);
-  db.claimJob(j2);
-  assert.equal(db.takeSlot(p, j1)?.sandbox_id, "old");
-  assert.equal(db.takeSlot(p, j2), undefined, "the only sandbox is busy");
-  db.addSlot(p, "second", j2);
-  assert.equal(db.takeSlot(p, j1)?.sandbox_id, "old", "a job that starts again gets its sandbox back");
-  assert.equal(db.takeSlot(p, j2)?.sandbox_id, "second");
-  db.endJob(j1, "done");
-  const j3 = db.enqueue(p, "run");
-  db.claimJob(j3);
-  assert.equal(db.takeSlot(p, j3)?.sandbox_id, "old", "a slot whose job ended is free, even if it was never released");
-  db.releaseSlots(j2);
-  const j4 = db.enqueue(p, "run");
-  db.claimJob(j4);
-  assert.equal(db.takeSlot(p, j4)?.sandbox_id, "second");
-  const old = db.slots(p).find((s) => s.sandbox_id === "old")!;
-  db.dropSlot(old.id);
-  assert.equal(db.project(p)?.sandbox_id, null, "a dropped sandbox is not imported again");
-  assert.deepEqual(db.slots(p).map((s) => s.sandbox_id), ["second"]);
-});
-
-test("parallel jobs: MAX_PARALLEL_JOBS wins; otherwise 4 CPUs and 8 GB per job from the sandbox host; 2 without a reading", async () => {
-  const { jobsFor, parallelJobs } = await import("../src/server/capacity.ts");
-  assert.equal(jobsFor(32, 61), 7, "the CI server: memory limits it");
-  assert.equal(jobsFor(8, 64), 2);
-  assert.equal(jobsFor(2, 4), 1, "always at least one");
-  assert.deepEqual(await parallelJobs(12, { capacity: async () => ({ cpus: 4, memoryGb: 8 }) }), { jobs: 12, why: "MAX_PARALLEL_JOBS" });
-  assert.equal((await parallelJobs(null, { capacity: async () => ({ cpus: 32, memoryGb: 61.4 }) })).jobs, 7);
-  assert.equal((await parallelJobs(null, {})).jobs, 2);
-  const failed = await parallelJobs(null, { capacity: async () => Promise.reject(new Error("ssh ci: timed out")) });
-  assert.equal(failed.jobs, 2);
-  assert.match(failed.why, /ssh ci: timed out/);
-  assert.equal(loadConfig({ MAX_PARALLEL_JOBS: "10" }).maxParallel, 10);
-  assert.equal(loadConfig({}).maxParallel, null);
-  assert.throws(() => loadConfig({ MAX_PARALLEL_JOBS: "0" }), /MAX_PARALLEL_JOBS/);
-  assert.throws(() => loadConfig({ MAX_PARALLEL_JOBS: "many" }), /MAX_PARALLEL_JOBS/);
 });
 
 test("setup starts by itself once the owner's Codex is connected", () => {

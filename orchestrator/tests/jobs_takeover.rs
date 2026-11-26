@@ -33,8 +33,6 @@ struct State {
     tester_done: bool,
     /// Status polls of the tester's process.
     tester_polls: usize,
-    /// Processes another worker left, by pid: running or not.
-    foreign: HashMap<u64, bool>,
 }
 
 #[derive(Default)]
@@ -114,9 +112,6 @@ impl Sandboxes for FakeSandboxes {
     async fn status(&self, _id: &str, pid: u64, _tail: usize) -> Result<ProcessStatus> {
         self.state(|s| {
             let exited = |stdout: &str| ProcessStatus { state: ProcState::Exited, exit_code: Some(0), stdout: stdout.into(), stderr: String::new() };
-            if let Some(running) = s.foreign.get(&pid) {
-                return Ok(if *running { ProcessStatus { state: ProcState::Running, exit_code: None, stdout: String::new(), stderr: String::new() } } else { exited("") });
-            }
             let command = s.starts.iter().find(|(p, _)| *p == pid).map(|(_, c)| c.clone()).unwrap_or_default();
             Ok(if is_tester(&command) {
                 s.tester_polls += 1;
@@ -350,23 +345,6 @@ async fn a_run_superseded_while_no_orchestrator_watched_stops_its_tester_and_cop
     assert_eq!(w.seen.lock().unwrap().iter().filter(|p| p.ends_with("/report")).count(), 0, "the newer push's run reports");
     assert!(w.sb.executed("rm -f ~/.codex/auth.json") >= 1, "the cut-off tester's sign-in leaves the sandbox");
     assert!(w.ctx.db.step_get(1, "a1.signin.done").unwrap().is_some());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_job_the_typescript_worker_left_stops_its_running_commands_first() {
-    let w = world("login", None).await;
-    w.sb.state(|s| {
-        s.foreign.insert(41, true);
-        s.foreign.insert(42, false);
-    });
-    w.ctx.db.with(|c| c.execute(r#"update jobs set restarts = 1, procs = '[["/sb/1",41],["/sb/1",42]]' where id = 1"#, [])).unwrap();
-    let job = w.ctx.db.job(1).unwrap().unwrap();
-    jobs::process(w.ctx.clone(), job).await;
-    assert_eq!(w.sb.state(|s| s.kills.clone()), vec![41], "only the command that still ran is stopped");
-    let job = w.ctx.db.job(1).unwrap().unwrap();
-    assert_eq!(job.procs, "[]");
-    assert_eq!(job.status, "failed");
-    assert_eq!(outbox_ended(&w), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

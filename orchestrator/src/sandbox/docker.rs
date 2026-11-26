@@ -1,4 +1,4 @@
-//! One container per sandbox, from one image (class Docker in src/server/sandbox.ts). The engine can be
+//! One container per sandbox, from one image. The engine can be
 //! local or a CI server (`DOCKER_HOST=ssh://ci@ci.example.com`). Stopping keeps the container's disk.
 
 use std::sync::atomic::AtomicU64;

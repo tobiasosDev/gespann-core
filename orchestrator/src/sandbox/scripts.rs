@@ -1,6 +1,5 @@
-//! Shell scripts the providers run, byte-compatible with `src/server/sandbox.ts` and
-//! `installScript` in `src/server/worker.ts`. orchestrator/tests/sandbox_scripts.rs compares them with
-//! the TypeScript output.
+//! Shell scripts the providers run, byte-compatible with the ones the former TypeScript worker wrote.
+//! orchestrator/tests/sandbox_scripts.rs compares them with its output (fixtures/scripts.json).
 
 /// Shell-quotes one argument (`q` in TypeScript).
 pub fn q(s: &str) -> String {
