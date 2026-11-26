@@ -19,6 +19,7 @@ import { capFor, type ServerModule } from "./extension.ts";
 import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
+import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal } from "./openrouter.ts";
 import { recordPrState } from "./pulls.ts";
 
 /**
@@ -34,7 +35,9 @@ const CODEX_MODELS: { id: string; name: string; description: string; recommended
   { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks", note: "In our benchmark it passed a PR that broke a total, and it was not faster. Not recommended for testing." },
 ];
 
-const MODEL_RE = /^[A-Za-z0-9._:-]{1,80}$/;
+/** A model slug: Codex's own (`gpt-6.2-sol`) or OpenRouter's (`anthropic/claude-x`). */
+const MODEL_RE = /^[A-Za-z0-9._:/-]{1,160}$/;
+const MODEL_HINT = "model: letters, digits, . _ : / - only";
 
 /** The built React app: dist/web, next to dist/server when built, or ../../dist/web from src. */
 const WEB = [new URL("../web/", import.meta.url), new URL("../../dist/web/", import.meta.url)].map((u) => fileURLToPath(u)).find((p) => existsSync(join(p, "index.html")));
@@ -67,6 +70,8 @@ export interface AppDeps {
   githubReady: () => boolean;
   /** `SERVER_MODULE`: its routes, sidebar links and Settings cards. */
   module?: ServerModule | null;
+  /** For calls to OpenRouter (tests pass a fake); default the global fetch. */
+  fetch?: Fetch;
 }
 
 export function githubApp(config: Config, db: Db): GithubApp | null {
@@ -122,6 +127,13 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Read per request: the orchestrator publishes each sandbox provider's size while it runs; a user's
   // number is the one of the provider that serves them.
   const hostSize = (login: string): number | null => hostSizeFor(orchestratorState(db), login);
+  const f = d.fetch ?? fetch;
+  // OpenRouter's model list changes rarely; asked at most once an hour. Losing it on a restart is harmless.
+  let models: { at: number; list: OpenRouterModel[] } | null = null;
+  const openRouterModels = async (): Promise<OpenRouterModel[]> => {
+    if (!models || Date.now() - models.at > 3_600_000) models = { at: Date.now(), list: await listModels(f) };
+    return models.list;
+  };
 
   // The orchestrator's API comes first: it has its own token and needs no session.
   mountInternal(app, d);
@@ -242,7 +254,10 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.get("/api/settings", (c) => {
     const codex = db.codex(me(c).id);
+    const agent = db.agent(me(c).id);
     return c.json({
+      agent: agent?.agent ?? "codex",
+      openrouter: { connected: !!agent?.openrouter, label: agent?.openrouter_label ?? null, model: agent?.openrouter_model ?? null },
       codex: {
         state: codex?.codex_state ?? "none",
         account: codex?.codex_account ?? null,
@@ -283,8 +298,59 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.post("/api/settings/codex/model", async (c) => {
     const body = await c.req.json<{ model?: unknown }>();
     const model = typeof body.model === "string" ? body.model.trim() : "";
-    if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
+    if (model && !MODEL_RE.test(model)) throw new HttpError(400, MODEL_HINT);
     db.setCodex(me(c).id, { codex_model: model || null });
+    return c.json({ ok: true, model: model || null });
+  });
+
+  // Which provider runs the agent of the user's projects. Both stay connected; switching back is one click.
+  app.post("/api/settings/agent", async (c) => {
+    const body = await c.req.json<{ agent?: unknown }>();
+    if (body.agent !== "codex" && body.agent !== "openrouter") throw new HttpError(400, "agent: codex or openrouter");
+    db.setAgent(me(c).id, { agent: body.agent });
+    db.autoSetup(me(c).id);
+    return c.json({ ok: true });
+  });
+
+  // The user's own OpenRouter key: checked with OpenRouter once, then kept sealed like a Codex sign-in.
+  app.post("/api/settings/openrouter/key", async (c) => {
+    const body = await c.req.json<{ key?: unknown }>();
+    const apiKey = typeof body.key === "string" ? body.key.trim() : "";
+    if (!/^sk-or-[A-Za-z0-9_-]{10,200}$/.test(apiKey)) throw new HttpError(400, "key: an OpenRouter API key starts with sk-or-");
+    let label: string;
+    try {
+      ({ label } = await checkKey(apiKey, f));
+    } catch (err) {
+      if (err instanceof OpenRouterError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+    db.setAgent(me(c).id, { openrouter_key: seal(config.sessionSecret, apiKey), openrouter_label: label });
+    db.autoSetup(me(c).id);
+    return c.json({ ok: true, label });
+  });
+
+  app.post("/api/settings/openrouter/logout", (c) => {
+    db.setAgent(me(c).id, { openrouter_key: null, openrouter_label: null });
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/settings/openrouter/models", async (c) => {
+    try {
+      return c.json({ models: await openRouterModels() });
+    } catch (err) {
+      if (err instanceof OpenRouterError) return c.json({ error: err.message, models: [] }, err.status);
+      throw err;
+    }
+  });
+
+  app.post("/api/settings/openrouter/model", async (c) => {
+    const body = await c.req.json<{ model?: unknown }>();
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    if (model && !OPENROUTER_MODEL_RE.test(model)) throw new HttpError(400, "model: an OpenRouter model id like vendor/model");
+    // The context size lets Codex compact before the model's limit; unknown when OpenRouter does not answer.
+    const context = model ? ((await openRouterModels().catch(() => [])).find((m) => m.id === model)?.context ?? null) : null;
+    db.setAgent(me(c).id, { openrouter_model: model || null, openrouter_context: context });
+    db.autoSetup(me(c).id);
     return c.json({ ok: true, model: model || null });
   });
 
@@ -363,12 +429,16 @@ export function createApp(d: AppDeps): Hono<Env> {
     const p = project(c);
     const { codex_login: _unused, codex: _old, ...rest } = p;
     const owner = db.codex(p.owner_id);
+    const agent = db.agent(p.owner_id);
     const ciWait = db.runsWaitingForChecks(p.id);
     return c.json({
       ...rest,
       codex: owner?.codex_state ?? "none",
       codex_account: owner?.codex_account ?? null,
       codex_model: owner?.codex_model ?? null,
+      agent: agent?.agent ?? "codex",
+      agent_ready: agent?.ready ?? false,
+      openrouter_model: agent?.openrouter_model ?? null,
       own: p.owner_id === me(c).id,
       default_checks: DEFAULT_CHECKS,
       viewports: viewportsOf(p.viewports).map((v) => v.id),
@@ -384,7 +454,7 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.post("/api/projects/:id/suggest", (c) => {
     const p = project(c);
-    if (db.codex(p.owner_id)?.codex_state !== "connected") throw new HttpError(409, "connect Codex in Settings first");
+    if (!db.agentReady(p.owner_id)) throw new HttpError(409, "connect Codex or OpenRouter in Settings first");
     if (!db.jobs(p.id).some((j) => j.kind === "suggest" && (j.status === "queued" || j.status === "running"))) db.enqueue(p.id, "suggest");
     return c.json({ ok: true });
   });
@@ -398,7 +468,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const p = project(c);
     const body = await c.req.json<{ criteria?: string; model?: string }>();
     const model = String(body.model ?? "").trim();
-    if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
+    if (model && !MODEL_RE.test(model)) throw new HttpError(400, MODEL_HINT);
     db.updateProject(p.id, { criteria: String(body.criteria ?? "").slice(0, 8000), model: model || null, suggestion: null });
     return c.json({ ok: true });
   });
@@ -415,7 +485,7 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.post("/api/projects/:id/setup", (c) => {
     const p = project(c);
-    if (db.codex(p.owner_id)?.codex_state !== "connected") throw new HttpError(409, "connect Codex in Settings first");
+    if (!db.agentReady(p.owner_id)) throw new HttpError(409, "connect Codex or OpenRouter in Settings first");
     if (p.setup !== "running" && p.setup !== "queued") {
       db.updateProject(p.id, { setup: "queued", setup_error: null });
       db.enqueue(p.id, "setup");

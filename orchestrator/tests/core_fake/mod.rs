@@ -69,6 +69,12 @@ impl Sandboxes for Fake {
         if command.starts_with("rm -f ~/.codex/auth.json") {
             self.files.lock().unwrap().remove("/home/user/.codex/auth.json");
         }
+        if command.contains("~/.gespann-openrouter-key") {
+            self.files.lock().unwrap().remove("/home/user/.gespann-openrouter-key");
+        }
+        if let Some(path) = command.strip_prefix("rm -f '").and_then(|p| p.strip_suffix('\'')) {
+            self.files.lock().unwrap().remove(path);
+        }
         Ok(CommandResult { exit_code: Some(0), stdout: self.exec_output.lock().unwrap().clone(), ..Default::default() })
     }
     async fn start(&self, _: &str, command: &str) -> Result<u64> {

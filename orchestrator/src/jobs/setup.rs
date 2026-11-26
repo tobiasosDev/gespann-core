@@ -7,9 +7,9 @@ use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::boxes::{codex_exec, ensure_repo, ensure_sandbox, git, last_json, long, model_for, recipe_check, save_bundle, stop_sandbox, with_env, write_prompt, Sbx};
+use super::boxes::{agent_for, codex_exec, ensure_repo, ensure_sandbox, git, last_json, long, recipe_check, save_bundle, stop_sandbox, with_env, write_prompt, Sbx};
 use super::{cut, tail, Cx};
-use crate::codex::with_codex;
+use crate::codex::with_agent;
 use crate::db::{opt_text, text, Project};
 use rusqlite::types::Value;
 use crate::sandbox::scripts::q;
@@ -71,10 +71,10 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
         .await?;
     cx.note(&k("log.codex"), "Codex prepares the environment (this can take a while on the first build)").await;
     let cancelled = || cx.stopped();
-    let model = model_for(cx, p);
-    let command = codex_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), model.as_deref(), "high");
+    let agent = agent_for(cx, p).await?;
+    let command = codex_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), &agent, "high");
     let codex_key = k("codex");
-    let r = with_codex(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
+    let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
     let last = sb.read_file(&b.id, &format!("{}/setup-last.txt", b.gespann)).await?.unwrap_or_default();
     if !last.is_empty() {
         cx.log(&format!("Codex: {}", cut(&last, 4000)));

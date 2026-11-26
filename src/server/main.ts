@@ -1,7 +1,7 @@
 import { serve as listen } from "@hono/node-server";
 import { createApp, githubApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
-import { Db } from "./db.ts";
+import { AGENT_READY, Db } from "./db.ts";
 import { capFor, loadServerModule } from "./extension.ts";
 import { Github } from "./github.ts";
 import { startPrSync } from "./pulls.ts";
@@ -14,8 +14,8 @@ import { startMediaSweep } from "./retention.ts";
 export async function serve(): Promise<void> {
   const config = loadConfig();
   const db = new Db(config.dbPath);
-  // Projects added before their owner connected Codex start their setup now.
-  for (const { id } of db.sql.prepare("select id from users where codex_state = 'connected'").all() as { id: number }[]) db.autoSetup(id);
+  // Projects added before their owner connected an agent start their setup now.
+  for (const { id } of db.sql.prepare(`select id from users where ${AGENT_READY}`).all() as { id: number }[]) db.autoSetup(id);
   let cached: { key: string; gh: Github } | null = null;
   const github = () => {
     const app = githubApp(config, db);

@@ -32,7 +32,7 @@ function SignIn({ me }: { me: Me }) {
           <Lockup />
         </div>
         <h1 className="text-title font-semibold">Acceptance tests for every pull request</h1>
-        <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own Codex plan clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
+        <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own ChatGPT plan or OpenRouter key clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
         {new URLSearchParams(location.search).has("closed") && <p className="mb-4 text-body text-warn">Sign-in is limited to invited accounts for now. Your GitHub account is not on the list.</p>}
         {me.githubReady ? (
           <LinkButton href="/auth/github" className="w-full">

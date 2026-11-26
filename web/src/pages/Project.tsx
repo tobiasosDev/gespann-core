@@ -66,7 +66,9 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const setupJob = p.jobs.find((j) => j.kind === "setup");
   const suggestJob = p.jobs.find((j) => j.kind === "suggest");
   const suggesting = suggestJob?.status === "queued" || suggestJob?.status === "running";
-  const codex: StepState = p.codex === "connected" ? "done" : p.codex === "pending" ? "running" : "todo";
+  const openrouter = p.agent === "openrouter";
+  const codex: StepState = p.agent_ready ? "done" : !openrouter && p.codex === "pending" ? "running" : "todo";
+  const ownerModel = openrouter ? p.openrouter_model : p.codex_model;
   const crit: StepState = "done";
   const setup: StepState = p.setup === "ready" ? "done" : p.setup === "running" || p.setup === "queued" ? "running" : p.setup === "failed" ? "failed" : "todo";
   const start: StepState = p.active ? "done" : "todo";
@@ -93,14 +95,18 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
 
         <Step
           n={1}
-          title="Codex"
+          title="Agent"
           state={codex}
           summary={
             codex === "done"
-              ? `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}${p.codex_model ? ` · model ${p.codex_model}` : ""}.`
+              ? openrouter
+                ? `Runs on ${p.own ? "your" : "the project owner's"} OpenRouter key · model ${p.openrouter_model ?? "?"}.`
+                : `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}${p.codex_model ? ` · model ${p.codex_model}` : ""}.`
               : p.own
-                ? "Connect your ChatGPT plan once in Settings. It is used for all your projects."
-                : "The project owner has not connected Codex yet."
+                ? openrouter
+                  ? "Add your OpenRouter key and pick a model once in Settings. They are used for all your projects."
+                  : "Connect your ChatGPT plan or an OpenRouter key once in Settings. It is used for all your projects."
+                : "The project owner has not connected an agent yet."
           }
           action={
             p.own && (
@@ -127,7 +133,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           action={
             !editing && (
               <div className="flex gap-2">
-                <Button size="sm" disabled={busy || suggesting || codex !== "done"} onClick={() => post("/suggest")} title={codex !== "done" ? "Connect Codex in Settings first" : undefined}>
+                <Button size="sm" disabled={busy || suggesting || codex !== "done"} onClick={() => post("/suggest")} title={codex !== "done" ? "Connect an agent in Settings first" : undefined}>
                   {suggesting ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Sparkles className="size-3.5" />} Suggest checks
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => edit(p.criteria)}>
@@ -168,7 +174,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             >
               <Textarea value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder={p.default_checks} />
               <div className="flex items-center gap-2">
-                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder={p.codex_model ? `Model (empty = ${p.codex_model})` : "Model (empty = Codex default)"} className="max-w-64 font-mono" />
+                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder={ownerModel ? `Model (empty = ${ownerModel})` : "Model (empty = Codex default)"} className="max-w-64 font-mono" />
                 <Button type="submit" size="sm" disabled={busy}>
                   Save
                 </Button>

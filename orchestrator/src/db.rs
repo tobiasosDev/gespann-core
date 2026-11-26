@@ -106,6 +106,18 @@ pub fn int(n: i64) -> Value {
     Value::Integer(n)
 }
 
+/// SQL over `users`: the owner's agent can run on the provider they chose (`AGENT_READY` in src/server/db.ts).
+pub const AGENT_READY: &str = "(case when agent = 'openrouter' then openrouter_key is not null and openrouter_model is not null else codex_state = 'connected' end)";
+
+/// The owner's agent provider from Settings. The OpenRouter key stays sealed (`codex::open`).
+#[derive(Debug, Clone, Default)]
+pub struct AgentRow {
+    pub openrouter: bool,
+    pub openrouter_key: Option<String>,
+    pub openrouter_model: Option<String>,
+    pub openrouter_context: Option<i64>,
+}
+
 /// The UI's tables as `src/server/db.ts` makes them (SCHEMA plus the columns added later), for tests.
 const UI_SCHEMA: &str = "
 create table if not exists settings (key text primary key, value text not null);
@@ -113,7 +125,8 @@ create table if not exists users (
   id integer primary key, github_id integer unique not null, login text not null,
   name text, avatar text, created text not null,
   codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text, codex_model text,
-  repos_synced text, max_jobs integer, job_cap integer);
+  repos_synced text, max_jobs integer, job_cap integer,
+  agent text not null default 'codex', openrouter_key text, openrouter_label text, openrouter_model text, openrouter_context integer);
 create table if not exists projects (
   id integer primary key, owner_id integer not null references users(id), installation_id integer not null,
   repo text not null unique, repo_id integer not null, default_branch text not null,
@@ -251,8 +264,8 @@ fn ensure_own(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             }
         }
     }
-    // The UI adds users.job_cap and users.codex_model too; an orchestrator that opens the file first must not fail on them.
-    for col in ["job_cap integer", "codex_model text"] {
+    // The UI adds these users columns too; an orchestrator that opens the file first must not fail on them.
+    for col in ["job_cap integer", "codex_model text", "agent text not null default 'codex'", "openrouter_key text", "openrouter_label text", "openrouter_model text", "openrouter_context integer"] {
         if let Err(e) = conn.execute_batch(&format!("alter table users add column {col}")) {
             if !e.to_string().contains("duplicate column") {
                 return Err(e);
@@ -330,6 +343,20 @@ impl Db {
             .flatten()
             .filter(|m| !m.is_empty()))
     }
+    /// The provider the owner chose for their agent, with what it needs (`AGENT_READY` decides the same).
+    pub fn agent(&self, user_id: i64) -> Result<Option<AgentRow>> {
+        self.with(|c| {
+            c.query_row("select agent, openrouter_key, openrouter_model, openrouter_context from users where id = ?", [user_id], |r| {
+                Ok(AgentRow {
+                    openrouter: r.get::<_, Option<String>>(0)?.as_deref() == Some("openrouter"),
+                    openrouter_key: r.get(1)?,
+                    openrouter_model: r.get::<_, Option<String>>(2)?.filter(|m| !m.is_empty()),
+                    openrouter_context: r.get(3)?,
+                })
+            })
+            .optional()
+        })
+    }
     /// Sets `codex_state`, `codex_login`, `codex_auth`, `codex_account` as given.
     pub fn set_codex(&self, user_id: i64, fields: Fields) -> Result<()> {
         self.with(|c| update(c, "users", user_id, fields))
@@ -345,11 +372,11 @@ impl Db {
             Ok(c.last_insert_rowid())
         })
     }
-    /// `autoSetup`: queues the setup of the owner's projects that never had one, once Codex is connected.
+    /// `autoSetup`: queues the setup of the owner's projects that never had one, once their agent can run.
     pub fn auto_setup(&self, owner_id: i64) -> Result<()> {
         self.with(|c| {
-            let state: Option<String> = c.query_row("select codex_state from users where id = ?", [owner_id], |r| r.get(0)).optional()?;
-            if state.as_deref() != Some("connected") {
+            let ready: Option<bool> = c.query_row(&format!("select {AGENT_READY} from users where id = ?"), [owner_id], |r| r.get(0)).optional()?;
+            if ready != Some(true) {
                 return Ok(());
             }
             let ids = {
@@ -879,6 +906,21 @@ mod tests {
         let j = db.next_job().unwrap().unwrap();
         assert_eq!((j.kind.as_str(), j.project_id), ("setup", a));
         assert_eq!(db.project(a).unwrap().unwrap().setup, "queued");
+    }
+
+    #[test]
+    fn auto_setup_with_openrouter_needs_key_and_model() {
+        let db = Db::memory().unwrap();
+        let (u, a, _) = owner(&db, 1, "t");
+        db.set_codex(u, &[("agent", text("openrouter")), ("openrouter_key", text("sealed"))]).unwrap();
+        db.auto_setup(u).unwrap();
+        assert_eq!(db.next_job().unwrap().map(|j| j.id), None, "no model yet");
+        db.set_codex(u, &[("openrouter_model", text("anthropic/claude-x")), ("openrouter_context", int(200_000))]).unwrap();
+        let row = db.agent(u).unwrap().unwrap();
+        assert!(row.openrouter);
+        assert_eq!((row.openrouter_key.as_deref(), row.openrouter_model.as_deref(), row.openrouter_context), (Some("sealed"), Some("anthropic/claude-x"), Some(200_000)));
+        db.auto_setup(u).unwrap();
+        assert_eq!(db.next_job().unwrap().map(|j| j.project_id), Some(a));
     }
 
     #[test]

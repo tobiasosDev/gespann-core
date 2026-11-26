@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{cut, never, tail, Cx};
+use crate::codex::{Agent, Provider};
 use crate::db::{Project, Slot};
 use crate::journal::Long;
 use crate::sandbox::scripts::{install_script, q};
@@ -142,21 +143,30 @@ pub(crate) fn with_env(b: &Sbx, command: &str) -> String {
     format!(". {}/env.sh 2>/dev/null; {command}", b.gespann)
 }
 
-/// Effective Codex model for a project: its own override first, otherwise the owner's model from Settings.
-pub(crate) fn model_for(cx: &Cx<'_>, p: &Project) -> Option<String> {
-    p.model
-        .as_deref()
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
-        .or_else(|| cx.ctx.db.codex_model(p.owner_id).ok().flatten())
+/// The job's agent: the owner's provider from Settings, and the model (the project's own first,
+/// otherwise the owner's for that provider). Decided once per job; a takeover keeps it.
+pub(crate) async fn agent_for(cx: &Cx<'_>, p: &Project) -> Result<Agent> {
+    cx.jr
+        .step("agent", || async {
+            let row = cx.ctx.db.agent(p.owner_id)?.unwrap_or_default();
+            let own = p.model.as_deref().filter(|m| !m.is_empty()).map(str::to_string);
+            Ok(if row.openrouter {
+                // The context size belongs to the owner's model; a project's own model goes without it.
+                let context = if own.is_some() { None } else { row.openrouter_context };
+                Agent { provider: Provider::Openrouter, model: own.or(row.openrouter_model), context }
+            } else {
+                Agent { provider: Provider::Codex, model: own.or(cx.ctx.db.codex_model(p.owner_id)?), context: None }
+            })
+        })
+        .await
 }
 
-pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, model: Option<&str>, effort: &str) -> String {
-    let m = model.filter(|m| !m.is_empty()).map(|m| format!(" -m {}", q(m))).unwrap_or_default();
+pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, agent: &Agent, effort: &str) -> String {
+    let (env, m) = agent.codex_args();
     with_env(
         b,
         &format!(
-            "cd {} && codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check{m} -c model_reasoning_effort={effort} -o {} - < {} > {} 2>&1",
+            "cd {} && {env}codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check{m} -c model_reasoning_effort={effort} -o {} - < {} > {} 2>&1",
             b.repo,
             q(last_file),
             q(prompt_file),
@@ -366,7 +376,12 @@ mod tests {
     #[test]
     fn codex_exec_passes_requested_reasoning_effort() {
         let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
-        assert!(codex_exec(&b, "/p", "/l", "/j", None, "medium").contains("-c model_reasoning_effort=medium"));
-        assert!(codex_exec(&b, "/p", "/l", "/j", Some("gpt-5"), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
+        let codex = |model: Option<&str>| Agent { provider: Provider::Codex, model: model.map(str::to_string), context: None };
+        assert!(codex_exec(&b, "/p", "/l", "/j", &codex(None), "medium").contains("&& codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -c model_reasoning_effort=medium"));
+        assert!(codex_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
+        let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None };
+        let c = codex_exec(&b, "/p", "/l", "/j", &or, "high");
+        assert!(c.contains(r#"&& OPENROUTER_API_KEY="$(cat "$HOME/.gespann-openrouter-key")" codex exec "#), "{c}");
+        assert!(c.contains("-m 'x/y' -c model_provider=openrouter -c 'model_providers.openrouter="), "{c}");
     }
 }
