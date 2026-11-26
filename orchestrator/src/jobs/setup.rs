@@ -71,7 +71,7 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
         .await?;
     cx.note(&k("log.codex"), "Codex prepares the environment (this can take a while on the first build)").await;
     let cancelled = || cx.stopped();
-    let command = codex_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), p.model.as_deref());
+    let command = codex_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), p.model.as_deref(), "high");
     let codex_key = k("codex");
     let r = with_codex(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
     let last = sb.read_file(&b.id, &format!("{}/setup-last.txt", b.gespann)).await?.unwrap_or_default();

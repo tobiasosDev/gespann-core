@@ -261,7 +261,7 @@ test("worker: a sandbox that is gone (or from another provider) is replaced, and
   assert.match(db.job(job.id)?.log ?? "", /sandbox-old no longer exists on docker/);
   const all = sb.commands.join("\n");
   assert.match(all, /clone --quiet https:\/\/github\.com\/acme\/shop\.git \/srv\/fresh\/repo/);
-  assert.match(all, /cd \/srv\/fresh\/repo && codex exec/);
+  assert.match(all, /cd \/srv\/fresh\/repo && codex exec.*-c model_reasoning_effort=medium/);
   assert.doesNotMatch(all, /\/home\/user/);
   assert.ok(sb.files.has("/srv/fresh/.codex/auth.json"), "the Codex sign-in goes into the sandbox's home");
 });

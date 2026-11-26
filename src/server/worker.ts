@@ -241,9 +241,9 @@ const recovering = new Map<number, Promise<unknown>>();
 // eslint-disable-next-line no-restricted-syntax -- lock: the jobs waiting on it end with the process too
 const repairing = new Map<number, Promise<unknown>>();
 
-function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: string, model: string | null): string {
+function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: string, model: string | null, effort: "medium" | "high" = "high"): string {
   const m = model ? ` -m ${q(model)}` : "";
-  return withEnv(b, `cd ${b.repo} && codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check${m} -c model_reasoning_effort=high -o ${q(lastFile)} - < ${q(promptFile)} > ${q(jsonlFile)} 2>&1`);
+  return withEnv(b, `cd ${b.repo} && codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check${m} -c model_reasoning_effort=${effort} -o ${q(lastFile)} - < ${q(promptFile)} > ${q(jsonlFile)} 2>&1`);
 }
 
 /** Codex reads the repo and proposes concrete checks; the user takes them over in the UI. */
@@ -257,7 +257,7 @@ async function suggest(d: Deps, job: Job, p: Project, log: (s: string) => void):
     await d.sandboxes.writeFile(b.id, `${b.gespann}/suggest-prompt.txt`, suggestPrompt(p.repo, b.repo, `${b.gespann}/suggested-checks.md`, p.criteria));
     log("Codex reads the repository and proposes checks");
     const r = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
-      runLong(d.sandboxes, b.id, codexExec(b, `${b.gespann}/suggest-prompt.txt`, `${b.gespann}/suggest-last.txt`, `${b.gespann}/suggest.jsonl`, p.model), { timeoutMs: 20 * 60_000 }),
+      runLong(d.sandboxes, b.id, codexExec(b, `${b.gespann}/suggest-prompt.txt`, `${b.gespann}/suggest-last.txt`, `${b.gespann}/suggest.jsonl`, p.model, "medium"), { timeoutMs: 20 * 60_000 }),
     );
     const text = ((await d.sandboxes.readFile(b.id, `${b.gespann}/suggested-checks.md`)) ?? (await d.sandboxes.readFile(b.id, `${b.gespann}/suggest-last.txt`)) ?? "").trim();
     if (!text) throw new Error(r.timedOut ? "Codex took longer than 20 minutes" : `Codex proposed nothing (exit ${r.exitCode}): ${r.tail.slice(-500)}`);
@@ -423,31 +423,36 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   let issues: LinkedIssue[] = [];
   let unread: string | null = null;
   try {
-    await ensureRepo(d, b, p);
-    // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was at
-    // the last push, so a rerun after newer merges would otherwise test the PR without them.
-    const tracking = `refs/remotes/origin/${run.base_ref}`;
-    await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(`+refs/heads/${run.base_ref}:${tracking}`)}`);
-    const read = await d.sandboxes.exec(b.id, `cd ${b.repo} && git rev-parse --verify --quiet ${q(`${tracking}^{commit}`)}`, 30);
-    const tip = read.stdout.trim();
-    if (read.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(tip)) throw new Error(`could not read ${run.base_ref} after fetching it: ${read.stdout.slice(-300)}`);
-    if (tip !== run.base) {
-      log(`testing on ${run.base_ref} at ${tip.slice(0, 12)}, newer than ${run.base.slice(0, 12)} from GitHub`);
-      d.db.updateRun(run.id, { base: tip });
-      run = { ...run, base: tip };
-    }
-    const merge = await d.sandboxes.exec(
-      b.id,
-      // On a failed merge the files in conflict follow, one per line, and the merge is undone.
-      `cd ${b.repo} && git checkout --quiet --force --detach ${run.base} && git clean -fdq && { git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit ${run.head} 2>&1 || { s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/${UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }; }`,
-      120,
-    );
-    if (merge.exitCode !== 0) {
-      const files = merge.stdout.split("\n").filter((l) => l.startsWith(UNMERGED)).map((l) => l.slice(UNMERGED.length));
-      if (files.length) throw new MergeConflict(files);
-      throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
-    }
-    ({ prText, issues, unread } = await prContext(gh, p, run.pr));
+    const mergeTask = (async () => {
+      await ensureRepo(d, b, p);
+      // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was at
+      // the last push, so a rerun after newer merges would otherwise test the PR without them.
+      const tracking = `refs/remotes/origin/${run.base_ref}`;
+      await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(`+refs/heads/${run.base_ref}:${tracking}`)}`);
+      const read = await d.sandboxes.exec(b.id, `cd ${b.repo} && git rev-parse --verify --quiet ${q(`${tracking}^{commit}`)}`, 30);
+      const tip = read.stdout.trim();
+      if (read.exitCode !== 0 || !/^[0-9a-f]{40}$/.test(tip)) throw new Error(`could not read ${run.base_ref} after fetching it: ${read.stdout.slice(-300)}`);
+      if (tip !== run.base) {
+        log(`testing on ${run.base_ref} at ${tip.slice(0, 12)}, newer than ${run.base.slice(0, 12)} from GitHub`);
+        d.db.updateRun(run.id, { base: tip });
+        run = { ...run, base: tip };
+      }
+      const merge = await d.sandboxes.exec(
+        b.id,
+        // On a failed merge the files in conflict follow, one per line, and the merge is undone.
+        `cd ${b.repo} && git checkout --quiet --force --detach ${run.base} && git clean -fdq && { git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit ${run.head} 2>&1 || { s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/${UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }; }`,
+        120,
+      );
+      if (merge.exitCode !== 0) {
+        const files = merge.stdout.split("\n").filter((l) => l.startsWith(UNMERGED)).map((l) => l.slice(UNMERGED.length));
+        if (files.length) throw new MergeConflict(files);
+        throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
+      }
+    })();
+    const [mergeRes, ctxRes] = await Promise.allSettled([mergeTask, prContext(gh, p, run.pr)]);
+    if (mergeRes.status === "rejected") throw mergeRes.reason;
+    if (ctxRes.status === "rejected") throw ctxRes.reason;
+    ({ prText, issues, unread } = ctxRes.value);
     if (unread) log(`✗ ${unread}`);
     if (issues.length) log(`linked ${issues.length === 1 ? "issue" : "issues"}: ${issues.map((i) => i.ref).join(", ")}`);
   } catch (err) {
@@ -582,6 +587,8 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     const raw = await d.sandboxes.readFile(b.id, `${dir}/work/progress.json`).catch(() => null);
     setProgress((x) => mergeTester(x, raw, new Date().toISOString()));
   };
+  let recording = false;
+  const rec = `${dir}/out/recording.mp4`;
   try {
     // Fresh each time: a run that starts again after a restart must not show the lost attempt's proof.
     await d.sandboxes.exec(b.id, `rm -rf ${dir} && mkdir -p ${dir}/work ${dir}/out`, 30);
@@ -634,9 +641,8 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       viewports,
     });
     await d.sandboxes.writeFile(b.id, `${dir}/work/prompt.txt`, prompt);
-    const rec = `${dir}/out/recording.mp4`;
     // Every run should come with a video of the tester's screen; when there is none, the log says why.
-    const recording = d.sandboxes.startRecording
+    recording = d.sandboxes.startRecording
       ? await d.sandboxes.startRecording(b.id, rec).then(
           () => true,
           (err: Error) => (log(`✗ no recording of this run: ${err.message}`), false),
@@ -646,7 +652,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     let tester: Awaited<ReturnType<typeof runLong>>;
     try {
       tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
-        runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
+        runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model, "medium"), {
           timeoutMs: minutes * 60_000,
           isCancelled: () => stopped(d, job),
           onTick: readTester,
@@ -654,10 +660,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       );
       await readTester();
     } finally {
-      if (recording) {
-        await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
-        await d.sandboxes.exec(b.id, finishRecordingScript(rec), 300).catch(() => undefined);
-      }
+      if (recording) await d.sandboxes.stopRecording?.(b.id).catch((err: Error) => log(`could not stop the recording: ${err.message}`));
     }
     log(stopped(d, job) ? "the tester was stopped" : tester.timedOut ? `the tester ran out of time (${minutes} min)` : `the tester finished (exit ${tester.exitCode})`);
   } catch (err) {
@@ -666,7 +669,11 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
   }
 
   stage("verdict");
-  const fin = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify finish --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir} --wait ${stopped(d, job) ? 0 : 600}`), { timeoutMs: 30 * 60_000 }).catch((err: Error) => ({ tail: err.message, exitCode: null, timedOut: false }));
+  // The recording is already closed; trimming leading black frames runs alongside copy teardown.
+  const [fin] = await Promise.all([
+    runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify finish --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir} --wait ${stopped(d, job) ? 0 : 600}`), { timeoutMs: 30 * 60_000 }).catch((err: Error) => ({ tail: err.message, exitCode: null, timedOut: false })),
+    recording ? d.sandboxes.exec(b.id, finishRecordingScript(rec), 300).catch(() => undefined) : Promise.resolve(),
+  ]);
   const result = (await d.sandboxes.readFile(b.id, `${dir}/work/result.json`).catch(() => null)) ?? null;
   const teardownErrors = lastJson<{ teardownErrors?: string[] }>(fin.tail)?.teardownErrors ?? [];
   if (teardownErrors.length) log(`✗ the copy did not go down cleanly: ${teardownErrors.join("; ").slice(0, 800)}`);
@@ -757,13 +764,21 @@ async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) 
   const dir = join(d.config.dataDir, "runs", String(run.id));
   mkdirSync(dir, { recursive: true });
   const saved: string[] = [];
-  for (const f of names.slice(0, 60)) {
-    try {
-      writeFileSync(join(dir, f), await d.sandboxes.download(b.id, `${out}/${f}`));
-      saved.push(f);
-    } catch (err) {
-      log(`could not copy ${f}: ${(err as Error).message}`);
-    }
+  const list = names.slice(0, 60);
+  for (let i = 0; i < list.length; i += 4) {
+    const batch = list.slice(i, i + 4);
+    const results = await Promise.all(
+      batch.map(async (f) => {
+        try {
+          writeFileSync(join(dir, f), await d.sandboxes.download(b.id, `${out}/${f}`));
+          return f;
+        } catch (err) {
+          log(`could not copy ${f}: ${(err as Error).message}`);
+          return null;
+        }
+      }),
+    );
+    for (const f of results) if (f) saved.push(f);
   }
   return { files: saved, alias, complete: ls.exitCode === 0 && saved.length === names.length };
 }
@@ -836,9 +851,9 @@ export function checkConclusion(r: { outcome: NonNullable<Run["outcome"]>; teste
 }
 
 /** How often a run asks GitHub again while the PR's other checks run. */
-export const CI_POLL_MS = 30_000;
+export const CI_POLL_MS = 10_000;
 /** A PR without any other check yet gets this long for its CI to report, so a slow CI start is not taken for none. */
-export const CI_GRACE_MS = 60_000;
+export const CI_GRACE_MS = 30_000;
 /** Checks that still run after this long do not hold the test back any further. */
 export const CI_MAX_WAIT_MS = 60 * 60_000;
 
@@ -855,7 +870,7 @@ export function ciStep(c: OtherChecks, ageMs: number): CiStep {
     if (ageMs >= CI_MAX_WAIT_MS) return { kind: "go", note: `other checks still run after ${Math.round(ageMs / 60_000)} min (${names(c.pending)}): testing anyway` };
     return { kind: "wait", ms: CI_POLL_MS, line: `waiting for the PR's other checks: ${names(c.pending)}` };
   }
-  if (!c.passed.length && ageMs < CI_GRACE_MS) return { kind: "wait", ms: CI_GRACE_MS - ageMs, line: "no other checks yet: waiting a minute for CI to report" };
+  if (!c.passed.length && ageMs < CI_GRACE_MS) return { kind: "wait", ms: CI_GRACE_MS - ageMs, line: "no other checks yet: waiting 30 s for CI to report" };
   return { kind: "go" };
 }
 
