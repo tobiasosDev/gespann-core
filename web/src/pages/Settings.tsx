@@ -37,17 +37,17 @@ function AgentAccess() {
         description="Lets Claude Code or Codex read your runs over MCP: status, issues, the review text, screenshots and recordings. An agent can also rerun a pull request (at most 3 times per commit), but cannot cancel or approve anything, and sees only the projects you see."
       />
       <div className="space-y-3 px-4 py-4">
-        <p className="text-[13px] text-muted-foreground">Add gespann to your agent. It opens this site in your browser; you allow it once and are connected, no token to copy.</p>
+        <p className="text-body text-muted-foreground">Add gespann to your agent. It opens this site in your browser; you allow it once and are connected, no token to copy.</p>
         <div className="space-y-1">
-          <span className="text-[12px] text-muted-foreground">Claude Code</span>
+          <span className="text-small text-muted-foreground">Claude Code</span>
           <Log text={claude} />
-          <span className="text-[12px] text-muted-foreground">Codex</span>
+          <span className="text-small text-muted-foreground">Codex</span>
           <Log text={codex} />
         </div>
         {data.tokens.length > 0 && (
           <ul className="divide-y divide-border rounded-md border border-border">
             {data.tokens.map((t) => (
-              <li key={t.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-[13px]">
+              <li key={t.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-body">
                 <span className="font-medium">{t.name}</span>
                 {t.client ? <Badge tone="info">signed in</Badge> : <Mono className="text-muted-foreground">gsp_…{t.hint}</Mono>}
                 <span className="text-muted-foreground">
@@ -66,9 +66,9 @@ function AgentAccess() {
             ))}
           </ul>
         )}
-        {failed && <p className="text-[13px] text-bad">{failed}</p>}
+        {failed && <p className="text-body text-bad">{failed}</p>}
         <details className="group rounded-md border border-border" open={!!fresh}>
-          <summary className="cursor-pointer px-3 py-2 text-[13px] text-muted-foreground select-none">Use a token instead (CI, scripts, agents without OAuth)</summary>
+          <summary className="cursor-pointer px-3 py-2 text-body text-muted-foreground select-none">Use a token instead (CI, scripts, agents without OAuth)</summary>
           <div className="space-y-3 border-t border-border px-3 py-3">
             <form
               className="flex flex-wrap gap-2"
@@ -88,7 +88,7 @@ function AgentAccess() {
             </form>
             {fresh && (
               <div className="flex flex-wrap items-center gap-3 rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-2">
-                <span className="w-full text-[12px] text-info">Copy it now; it is shown only once.</span>
+                <span className="w-full text-small text-info">Copy it now; it is shown only once.</span>
                 <Mono className="break-all">{fresh}</Mono>
                 <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(fresh)}>
                   <Copy className="size-3.5" /> Copy
@@ -96,9 +96,9 @@ function AgentAccess() {
               </div>
             )}
             <div className="space-y-1">
-              <span className="text-[12px] text-muted-foreground">Claude Code</span>
+              <span className="text-small text-muted-foreground">Claude Code</span>
               <Log text={claudeToken} />
-              <span className="text-[12px] text-muted-foreground">Codex</span>
+              <span className="text-small text-muted-foreground">Codex</span>
               <Log text={codexToken} />
             </div>
           </div>
@@ -125,7 +125,7 @@ export function SettingsPage() {
   };
   return (
     <>
-      <h1 className="mb-4 text-xl font-semibold">Settings</h1>
+      <h1 className="mb-4 text-title font-semibold">Settings</h1>
       <Card>
         <CardHeader
           title="Codex"
@@ -157,18 +157,18 @@ export function SettingsPage() {
           {c.state === "pending" &&
             (c.login?.code ? (
               <div className="flex flex-wrap items-center gap-3">
-                <span className="w-full text-[13px] text-muted-foreground">Open the link, sign in with your ChatGPT account and enter this code:</span>
-                <Mono className="rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-1.5 text-lg tracking-widest text-info">{c.login.code}</Mono>
+                <span className="w-full text-body text-muted-foreground">Open the link, sign in with your ChatGPT account and enter this code:</span>
+                <Mono className="rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-1.5 text-title tracking-widest text-info">{c.login.code}</Mono>
                 <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(c.login?.code ?? "")}>
                   <Copy className="size-3.5" /> Copy
                 </Button>
                 <LinkButton href={c.login.url ?? "https://auth.openai.com/codex/device"} target="_blank" rel="noreferrer" size="sm" variant="outline">
                   Open auth.openai.com <ExternalLink className="size-3.5" />
                 </LinkButton>
-                <span className="w-full text-[12px] text-muted-foreground">Code refused? Enable device code login in ChatGPT → Settings → Security. The code expires after 15 minutes.</span>
+                <span className="w-full text-small text-muted-foreground">Code refused? Enable device code login in ChatGPT → Settings → Security. The code expires after 15 minutes.</span>
               </div>
             ) : (
-              <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <p className="flex items-center gap-2 text-body text-muted-foreground">
                 <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> Starting a sign-in sandbox and asking OpenAI for a code (about a minute)…
               </p>
             ))}

@@ -1,12 +1,11 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { clsx, type ClassValue } from "clsx";
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
-import { twMerge } from "tailwind-merge";
+import { cn } from "../cn.ts";
 
-export const cn = (...v: ClassValue[]) => twMerge(clsx(v));
+export { cn };
 
 const button = cva(
-  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 cursor-pointer",
+  "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-body font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 cursor-pointer",
   {
     variants: {
       variant: {
@@ -15,7 +14,7 @@ const button = cva(
         ghost: "hover:bg-accent",
         danger: "border border-border text-bad hover:bg-accent",
       },
-      size: { sm: "h-7 px-2.5", md: "h-8 px-3" },
+      size: { sm: "h-8 px-3", md: "h-9 px-3.5" },
     },
     defaultVariants: { variant: "default", size: "md" },
   },
@@ -40,7 +39,7 @@ const tones: Record<Tone, string> = {
 
 export function Badge({ tone = "muted", children, dot }: { tone?: Tone; children: ReactNode; dot?: boolean }) {
   return (
-    <span className={cn("inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 font-mono text-[11px] font-medium", tones[tone])}>
+    <span className={cn("inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 font-mono text-label font-medium", tones[tone])}>
       {dot && <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />}
       {children}
     </span>
@@ -55,18 +54,18 @@ export function CardHeader({ title, description, action }: { title: ReactNode; d
   return (
     <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
       <div>
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {description && <p className="mt-0.5 text-[13px] text-muted-foreground">{description}</p>}
+        <h2 className="text-body font-semibold">{title}</h2>
+        {description && <p className="mt-0.5 text-body text-muted-foreground">{description}</p>}
       </div>
       {action}
     </div>
   );
 }
 
-const field = "w-full rounded-md border border-input bg-background px-2.5 text-[13px] placeholder:text-muted-foreground/70 focus:border-info/60 focus:outline-none";
+const field = "w-full rounded-md border border-input bg-background px-2.5 text-body placeholder:text-muted-foreground/70 focus:border-info/60 focus:outline-none";
 
 export function Input({ className, ...p }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(field, "h-8", className)} {...p} />;
+  return <input className={cn(field, "h-9", className)} {...p} />;
 }
 
 export function Textarea({ className, ...p }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -74,13 +73,13 @@ export function Textarea({ className, ...p }: TextareaHTMLAttributes<HTMLTextAre
 }
 
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <code className={cn("font-mono text-[12px]", className)}>{children}</code>;
+  return <code className={cn("font-mono text-small", className)}>{children}</code>;
 }
 
 export function Log({ text, className }: { text: string; className?: string }) {
-  return <pre className={cn("max-h-80 overflow-auto rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed whitespace-pre-wrap break-words text-muted-foreground", className)}>{text}</pre>;
+  return <pre className={cn("max-h-80 overflow-auto rounded-md border border-border bg-background p-3 font-mono text-small leading-relaxed whitespace-pre-wrap break-words text-muted-foreground", className)}>{text}</pre>;
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="px-4 py-10 text-center text-[13px] text-muted-foreground">{children}</div>;
+  return <div className="px-4 py-10 text-center text-body text-muted-foreground">{children}</div>;
 }

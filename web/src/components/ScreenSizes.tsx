@@ -42,8 +42,8 @@ export function ScreenSizes({ presets, selected, disabled, onChange }: { presets
               </span>
             </span>
             <span className="leading-tight">
-              <span className={cn("block text-[13px]", on ? "font-medium text-foreground" : "text-muted-foreground")}>{v.name}</span>
-              <span className="block font-mono text-[11px] text-muted-foreground tabular-nums">
+              <span className={cn("block text-body", on ? "font-medium text-foreground" : "text-muted-foreground")}>{v.name}</span>
+              <span className="block font-mono text-small text-muted-foreground tabular-nums">
                 {v.width} × {v.height}
               </span>
             </span>
