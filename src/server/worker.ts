@@ -8,6 +8,7 @@ import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
 import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
+import type { ServerModule } from "./extension.ts";
 import { withCodex } from "./codex.ts";
 import type { Github, LinkedIssue } from "./github.ts";
 import { q, runLong, type Sandboxes } from "./sandbox.ts";
@@ -20,6 +21,8 @@ export interface Deps {
   sandboxes: Sandboxes;
   github: () => Github;
   config: Config;
+  /** `SERVER_MODULE`: asked before each job starts, told when it ended. */
+  module?: ServerModule | null;
 }
 
 /** A project's sandbox and the places in it: the repo checkout, gespann's files, the recipe. */
@@ -732,8 +735,8 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
     // Every background command is recorded, so a restart can stop what this attempt left running.
     d = { ...d, sandboxes: tracked(d.sandboxes, (sandboxId, processId) => d.db.addProc(job.id, sandboxId, processId)) };
     if (job.kind === "login") throw new Error("Codex sign-in moved to Settings");
-    else if (job.kind === "setup") await setup(d, job, p, log);
-    else if (job.kind === "suggest") await suggest(d, job, p, log);
+    else if (job.kind === "setup") await admit(d, job, p).then(() => setup(d, job, p, log));
+    else if (job.kind === "suggest") await admit(d, job, p).then(() => suggest(d, job, p, log));
     else {
       const run = job.run_id ? d.db.run_(job.run_id) : undefined;
       if (!run) throw new Error("run gone");
@@ -747,13 +750,16 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
         return d.db.endJob(job.id, "cancelled");
       }
-      // Closed or superseded while GitHub answered; verifyRun marks the run running before its first await.
+      const refused = await admit(d, job, p).then(() => null, (err: Error) => err);
+      // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
+      if (refused) throw refused;
       await verifyRun(d, job, p, run, log);
     }
     // Stopped and freed while the job still counts as running, so no other job takes a sandbox mid-stop.
     await releaseSlots(d, job);
     d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
+    await ended(d, job, p);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     await releaseSlots(d, job);
@@ -766,6 +772,39 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         await report(d, p, { ...run, outcome: "FAIL", error: (err as Error).message }, null, [], log).catch(() => undefined);
       }
     }
+    await ended(d, job, p);
+  }
+}
+
+function moduleJob(d: Deps, job: Job, p: Project) {
+  const owner = d.db.user(p.owner_id);
+  return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" } };
+}
+
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Throws when the server module does not let this job start. */
+async function admit(d: Deps, job: Job, p: Project): Promise<void> {
+  if (!d.module?.admit) return;
+  let refused: string | null;
+  try {
+    refused = (await d.module.admit(moduleJob(d, job, p))) ?? null;
+  } catch (err) {
+    throw new Error(`${d.module.name} could not check this job: ${errText(err)}`);
+  }
+  if (refused !== null) throw new Error(`not started: ${refused}`);
+}
+
+/** Tells the server module a job ended, with its sandbox time. */
+async function ended(d: Deps, job: Job, p: Project): Promise<void> {
+  if (!d.module?.jobEnded) return;
+  const j = d.db.job(job.id);
+  if (!j?.started || !j.finished) return;
+  const seconds = Math.max(0, (Date.parse(j.finished) - Date.parse(j.started)) / 1000);
+  try {
+    await d.module.jobEnded({ ...moduleJob(d, job, p), status: j.status, started: j.started, finished: j.finished, seconds });
+  } catch (err) {
+    console.error(JSON.stringify({ level: "error", at: `${d.module.name} jobEnded`, job: job.id, message: errText(err) }));
   }
 }
 

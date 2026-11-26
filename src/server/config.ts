@@ -11,6 +11,8 @@ export interface Config {
   sandboxProvider: string;
   docker: { image: string; args: string[]; command: string[]; user: string; home: string };
   ssh: { host: string; port: string; keyFile: string; key: string; knownHosts: string; root: string };
+  /** `SERVER_MODULE`: path of a module that adds pages and a say over jobs; "" for none. */
+  serverModule: string;
   /** `MAX_PARALLEL_JOBS`: how many jobs run at once; null computes it from the sandbox host. */
   maxParallel: number | null;
   /** git ref of gespann-core that sandboxes install, so sandbox and server run the same code. */
@@ -80,6 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath: env.DATABASE_PATH ?? join(dataDir, "gespann.sqlite"),
     sessionSecret,
     sandboxProvider,
+    serverModule: (env.SERVER_MODULE ?? "").trim(),
     docker,
     ssh,
     maxParallel: max ? Number(max) : null,

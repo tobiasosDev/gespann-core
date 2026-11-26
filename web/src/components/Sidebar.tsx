@@ -1,4 +1,4 @@
-import { BookOpen, Check, ChevronRight, FolderGit2, History, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
+import { BookOpen, Check, ChevronRight, FolderGit2, History, Link2, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { api, type Me, type ProjectRow } from "../api.ts";
 import { Link, Logo, usePath } from "../nav.tsx";
@@ -31,7 +31,7 @@ function rowClass(active?: boolean, indent?: boolean) {
 }
 
 /** One row in the sidebar. The active row carries the blue bar from the logo on its left edge. */
-function Item({ to, active, icon, children, trailing, external, indent }: { to: string; active?: boolean; icon?: ReactNode; children: ReactNode; trailing?: ReactNode; external?: boolean; indent?: boolean }) {
+function Item({ to, active, icon, children, trailing, external, server, indent }: { to: string; active?: boolean; icon?: ReactNode; children: ReactNode; trailing?: ReactNode; external?: boolean; server?: boolean; indent?: boolean }) {
   const cls = rowClass(active, indent);
   const inner = (
     <>
@@ -44,6 +44,13 @@ function Item({ to, active, icon, children, trailing, external, indent }: { to: 
   if (external)
     return (
       <a href={to} target="_blank" rel="noreferrer" className={cls}>
+        {inner}
+      </a>
+    );
+  // A page the server serves itself (a server module's), so a full page load, not a client route.
+  if (server)
+    return (
+      <a href={to} className={cls}>
         {inner}
       </a>
     );
@@ -139,6 +146,11 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
         <Item to="/settings" active={section.kind === "settings"} icon={<Settings className="size-4" />}>
           Settings
         </Item>
+        {me.links?.map((l) => (
+          <Item key={l.href} to={l.href} server icon={<Link2 className="size-4" />}>
+            {l.label}
+          </Item>
+        ))}
         <Item to="https://github.com/tobiasosDev/gespann-core" external icon={<BookOpen className="size-4" />}>
           Docs
         </Item>
@@ -236,6 +248,11 @@ function Rail({ me, section, projects }: { me: Me; section: Section; projects: P
         <Link to="/settings" className={railClass(section.kind === "settings")} title="Settings" aria-label="Settings" aria-current={section.kind === "settings" ? "page" : undefined}>
           <Settings className="size-4" />
         </Link>
+        {me.links?.map((l) => (
+          <a key={l.href} href={l.href} className={railClass()} title={l.label} aria-label={l.label}>
+            <Link2 className="size-4" />
+          </a>
+        ))}
         <a href="https://github.com/tobiasosDev/gespann-core" target="_blank" rel="noreferrer" className={railClass()} title="Docs" aria-label="Docs">
           <BookOpen className="size-4" />
         </a>

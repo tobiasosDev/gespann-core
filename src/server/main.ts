@@ -4,6 +4,7 @@ import { parallelJobs } from "./capacity.ts";
 import { startLogin } from "./codex.ts";
 import { loadConfig } from "./config.ts";
 import { Db } from "./db.ts";
+import { loadServerModule } from "./extension.ts";
 import { Github } from "./github.ts";
 import { createSandboxes } from "./provider.ts";
 import { startWorker } from "./worker.ts";
@@ -23,16 +24,19 @@ export async function serve(): Promise<void> {
     return cached.gh;
   };
   const sandboxes = await createSandboxes(config);
+  const serverModule = await loadServerModule(config.serverModule);
+  if (serverModule) console.log(JSON.stringify({ level: "info", message: `server module: ${serverModule.name}` }));
   const parallel = sandboxes ? await parallelJobs(config.maxParallel, sandboxes) : null;
   const app = createApp({
     config,
     db,
     github,
     githubReady: () => !!githubApp(config, db),
+    module: serverModule,
     ...(sandboxes && parallel ? { startCodexLogin: (userId: number) => startLogin(db, sandboxes, config, userId), parallel: parallel.jobs } : {}),
   });
   if (sandboxes && parallel) {
-    startWorker({ db, sandboxes, github, config }, parallel.jobs);
+    startWorker({ db, sandboxes, github, config, module: serverModule }, parallel.jobs);
     console.log(JSON.stringify({ level: "info", message: `sandboxes: ${sandboxes.kind}` }));
     console.log(JSON.stringify({ level: "info", message: `parallel jobs: ${parallel.jobs} (${parallel.why})` }));
   } else console.error(JSON.stringify({ level: "warn", message: "no sandbox provider (SANDBOX_PROVIDER): jobs stay queued" }));
