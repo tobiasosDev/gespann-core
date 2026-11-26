@@ -201,6 +201,18 @@ test("merge gate: a person releases a held PR by comment, by Ready for review, o
   assert.equal(gh.checks.at(-1)?.conclusion, "neutral");
 });
 
+test("merge gate: a run that starts after the approval keeps the head's check neutral", async () => {
+  const { db, gh, send, project } = setup();
+  gh.current = pr();
+  await send("issue_comment", { action: "created", issue: { number: 7, pull_request: {} }, comment: { body: "/gespann approve", author_association: "OWNER" }, sender: person });
+  gh.current = pr({ labels: [{ name: "gespann" }] });
+  await send("pull_request", { action: "labeled", label: { name: "gespann" }, pull_request: gh.current, sender: person });
+  assert.equal(db.runForHead(project().id, 7, gh.current.head.sha)?.status, "queued", "the test still runs");
+  assert.deepEqual(gh.calls, ["check", "check"], "approved: not held as draft");
+  const approved = { id: 1, conclusion: "neutral", title: "Approved by @tobi without a passing test" };
+  assert.deepEqual(gh.checks, [approved, approved], "the new run's check too");
+});
+
 test("merge gate: an approval leaves a passed head's green check alone", async () => {
   const { db, gh, send, project } = setup();
   gh.current = pr({ labels: [{ name: "gespann" }] });
