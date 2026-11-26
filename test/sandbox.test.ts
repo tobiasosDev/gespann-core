@@ -150,9 +150,9 @@ test("a finished recording starts at the first frame that is not black; a video 
   const sb = new LocalShell();
   const seconds = (f: string) => Number(/Duration: (\d+):(\d+):([\d.]+)/.exec(spawnSync("ffmpeg", ["-i", f], { encoding: "utf8" }).stderr)!.slice(1).reduce((s, n) => s * 60 + Number(n), 0));
   const make = (f: string, filter: string) => assert.equal(spawnSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", f]).status, 0);
-  // 6 s of a black screen before the browser opens, then 3 s of a page.
+  // 6 s of a black screen before the browser opens, then 3 s of a dark page (#0a0a0a) with one line of text.
   const rec = join(dir, "recording.mp4");
-  make(rec, "color=black:s=320x240:r=5:d=6[a];testsrc=s=320x240:r=5:d=3[b];[a][b]concat=n=2:v=1");
+  make(rec, "color=black:s=320x240:r=5:d=6[a];color=0x0a0a0a:s=320x240:r=5:d=3,drawbox=x=20:y=20:w=60:h=6:color=white:t=fill[b];[a][b]concat=n=2:v=1");
   assert.ok(Math.abs(seconds(rec) - 9) < 0.5);
   assert.equal((await sb.exec(dir, finishRecordingScript(rec), 60)).exitCode, 0);
   assert.ok(Math.abs(seconds(rec) - 3) < 0.5, `trimmed to ${seconds(rec)} s`);

@@ -334,7 +334,9 @@ export function finishRecordingScript(file: string): string {
   const tmp = q(`${file}.tmp.mp4`);
   return [
     `test -s ${f} || exit 0`,
-    `o="$(ffmpeg -nostdin -hide_banner -i ${f} -vf blackdetect=d=1:pix_th=0.10 -an -f null - 2>&1)"`,
+    // Black means the empty screen: nearly every pixel at zero (all but the mouse pointer). A dark page
+    // (dark theme, a little text) is not black and stays in the video.
+    `o="$(ffmpeg -nostdin -hide_banner -i ${f} -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)"`,
     `b="$(printf '%s\\n' "$o" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)"`,
     `d="$(printf '%s\\n' "$o" | sed -n 's/.*Duration: \\([0-9]*\\):\\([0-9]*\\):\\([0-9.]*\\).*/\\1 \\2 \\3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')"`,
     // A video that is black throughout stays as it is, so the run page still shows what the tester saw.
