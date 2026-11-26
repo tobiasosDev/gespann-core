@@ -9,11 +9,13 @@ export interface Config {
   sessionSecret: string;
   /** Where PR code runs: "docker", "ssh", "module:<path>" for a provider module of your own, or "" for none. */
   sandboxProvider: string;
+  /** `SANDBOX_PROVIDER_BY_USER`: GitHub login (lowercase) → provider for that user's sandboxes, overriding `sandboxProvider`. */
+  sandboxProviderByUser: Record<string, string>;
   docker: { image: string; args: string[]; command: string[]; user: string; home: string };
   ssh: { host: string; port: string; keyFile: string; key: string; knownHosts: string; root: string };
   /** `SERVER_MODULE`: path of a module that adds pages and a say over jobs; "" for none. */
   serverModule: string;
-  /** `MAX_PARALLEL_JOBS`: how many jobs run at once; null computes it from the sandbox host. */
+  /** `MAX_PARALLEL_JOBS`: how many jobs each sandbox provider runs at once; null computes it from its host. */
   maxParallel: number | null;
   /** Days after a PR closes until its runs' screenshots and recordings are deleted; null keeps them. */
   mediaRetentionDays: number | null;
@@ -53,8 +55,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (env.GITHUB_WEBHOOK_SECRET) github.webhookSecret = env.GITHUB_WEBHOOK_SECRET;
   if (env.GITHUB_CLIENT_ID) github.clientId = env.GITHUB_CLIENT_ID;
   if (env.GITHUB_CLIENT_SECRET) github.clientSecret = env.GITHUB_CLIENT_SECRET;
+  const isSpec = (s: string) => ["docker", "ssh", ""].includes(s) || /^module:.+/.test(s);
   const sandboxProvider = env.SANDBOX_PROVIDER ?? "";
-  if (!["docker", "ssh", ""].includes(sandboxProvider) && !/^module:.+/.test(sandboxProvider)) throw new Error(`SANDBOX_PROVIDER ${sandboxProvider} is not docker, ssh or module:<path>`);
+  if (!isSpec(sandboxProvider)) throw new Error(`SANDBOX_PROVIDER ${sandboxProvider} is not docker, ssh or module:<path>`);
+  // "tobi=ssh, ops=module:/app/mine.ts": these users' sandboxes come from their own provider.
+  const sandboxProviderByUser: Record<string, string> = {};
+  for (const pair of (env.SANDBOX_PROVIDER_BY_USER ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const at = pair.indexOf("=");
+    const login = (at < 0 ? "" : pair.slice(0, at)).trim().toLowerCase();
+    const spec = pair.slice(at + 1).trim();
+    if (at < 0 || !login || !spec || !isSpec(spec)) throw new Error(`SANDBOX_PROVIDER_BY_USER: ${pair} is not <github login>=docker, ssh or module:<path>`);
+    sandboxProviderByUser[login] = spec;
+  }
+  const specs = new Set([sandboxProvider, ...Object.values(sandboxProviderByUser)]);
   const docker = {
     image: env.SANDBOX_IMAGE ?? "",
     args: words(env.SANDBOX_DOCKER_ARGS ?? ""),
@@ -70,9 +83,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     knownHosts: (env.SSH_KNOWN_HOSTS ?? "").replace(/\\n/g, "\n"),
     root: env.SANDBOX_ROOT ?? "~/gespann-sandboxes",
   };
-  if (sandboxProvider === "docker" && !docker.image) throw new Error("SANDBOX_PROVIDER=docker needs SANDBOX_IMAGE");
-  if (sandboxProvider === "docker" && !SAFE_PATH.test(docker.home)) throw new Error("SANDBOX_HOME has to be an absolute path of letters, digits, . _ - and /");
-  if (sandboxProvider === "ssh" && !ssh.host) throw new Error("SANDBOX_PROVIDER=ssh needs SSH_HOST");
+  if (specs.has("docker") && !docker.image) throw new Error("SANDBOX_PROVIDER=docker needs SANDBOX_IMAGE");
+  if (specs.has("docker") && !SAFE_PATH.test(docker.home)) throw new Error("SANDBOX_HOME has to be an absolute path of letters, digits, . _ - and /");
+  if (specs.has("ssh") && !ssh.host) throw new Error("SANDBOX_PROVIDER=ssh needs SSH_HOST");
   const allowedUsers = (env.ALLOWED_USERS ?? "").split(",").map((l) => l.trim().toLowerCase()).filter(Boolean);
   if (env.ALLOWED_USERS !== undefined && !allowedUsers.length) throw new Error("ALLOWED_USERS is set but names no GitHub login; remove it to let everyone sign in");
   const retention = (env.MEDIA_RETENTION_DAYS ?? "10").trim().toLowerCase();
@@ -87,6 +100,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sessionSecret,
     sandboxProvider,
     serverModule: (env.SERVER_MODULE ?? "").trim(),
+    sandboxProviderByUser,
     docker,
     ssh,
     maxParallel: max ? Number(max) : null,

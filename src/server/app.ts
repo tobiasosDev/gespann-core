@@ -46,13 +46,16 @@ export type Env = { Variables: { user: User | null; session: string | null } };
 export interface AppDeps {
   config: Config;
   db: Db;
-  /** Starts the Codex device sign-in for a user (absent when the instance has no sandbox provider). */
-  startCodexLogin?: (userId: number) => void;
+  /**
+   * Starts the Codex device sign-in for a user in a sandbox of their provider; false when the user has
+   * none. Absent when the instance has no sandbox provider at all.
+   */
+  startCodexLogin?: (userId: number) => boolean | void;
   /** Throws when the instance has no GitHub App yet. */
   github: () => Github;
   githubReady: () => boolean;
-  /** How many jobs the sandbox host runs at once, for all users together; absent without sandboxes. */
-  parallel?: number;
+  /** How many jobs the user's sandbox provider runs at once, for all its users together; null without one. */
+  parallel?: (userId: number) => number | null;
   /** `SERVER_MODULE`: its routes, sidebar links and Settings cards. */
   module?: ServerModule | null;
 }
@@ -244,7 +247,7 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.post("/api/settings/codex/login", (c) => {
     if (!d.startCodexLogin) throw new HttpError(409, "this instance has no sandbox provider configured");
-    d.startCodexLogin(me(c).id);
+    if (d.startCodexLogin(me(c).id) === false) throw new HttpError(409, "this instance has no sandbox provider for your account");
     return c.json({ ok: true });
   });
 
@@ -256,14 +259,14 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
   app.get("/api/boxes", (c) => {
     const u = me(c).id;
-    const host = d.parallel ?? null;
+    const host = d.parallel?.(me(c).id) ?? null;
     const own = db.maxJobs(u);
     return c.json({ host, limit: own === null ? host : host === null ? own : Math.min(own, host), own, running: db.runningBoxes(u), queued: db.queuedJobs(u), time: db.boxTime(u) });
   });
 
   app.post("/api/boxes/limit", async (c) => {
     const { limit } = await c.req.json<{ limit?: unknown }>();
-    const host = d.parallel ?? null;
+    const host = d.parallel?.(me(c).id) ?? null;
     if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > (host ?? 999)) throw new HttpError(400, `limit: a whole number from 1 to ${host ?? 999}`);
     db.setMaxJobs(me(c).id, limit);
     return c.json({ ok: true });

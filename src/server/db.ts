@@ -422,13 +422,18 @@ export class Db {
    * and an owner never has more jobs running than the limit they set in Settings.
    */
   nextJob(): Job | undefined {
-    return this.one<Job>(
+    return this.nextJobs(1)[0];
+  }
+
+  /** The queued jobs that may start now, oldest first (see `nextJob`); the worker takes the first whose sandbox provider has room. */
+  nextJobs(limit = -1): Job[] {
+    return this.sql.prepare(
       `select j.* from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
          and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
-       order by j.id limit 1`,
-    );
+       order by j.id limit ?`,
+    ).all(limit) as unknown as Job[];
   }
 
   /** How many jobs of the user's projects may run at once; null leaves it to the sandbox host. */

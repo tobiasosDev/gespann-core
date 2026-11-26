@@ -21,10 +21,11 @@ docker run -p 3000:3000 -v gespann-data:/data \
 | `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
 | `SESSION_SECRET` | at least 32 characters; also encrypts the stored Codex sign-ins, so keep it stable |
 | `SANDBOX_PROVIDER` | `docker`, `ssh` or `module:<path>` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
+| `SANDBOX_PROVIDER_BY_USER` | other providers for some users, e.g. `tobi=ssh,ops=module:/app/own.js` ([Several providers](#several-providers)) |
 | `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
-| `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
+| `MAX_PARALLEL_JOBS` | how many jobs each sandbox provider runs at once ([Parallel jobs](#parallel-jobs)); default: computed from its host |
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `DATA_DIR` | default `/data` in the image |
 | `SERVER_MODULE` | path of a module that adds pages, Settings cards and a say over jobs ([Server module](#server-module)); default: none |
@@ -33,13 +34,13 @@ Restarting or redeploying the server never loses a job. A job whose server stops
 
 ## Sandboxes
 
-Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
+Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes. Some users can have their own provider ([Several providers](#several-providers)).
 
 ### Parallel jobs
 
 At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; a provider module can report its size with an optional `capacity()`, otherwise gespann runs 2.
 
-That number is shared by everyone on the instance. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
+That number is shared by everyone on the same provider; with [several providers](#several-providers) each counts its own jobs, and `MAX_PARALLEL_JOBS` sets the number for each. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
 
 Jobs of one project and one owner run side by side, each in its own sandbox with its own checkout. Only a project's setup runs alone. A new sandbox takes over the project's current recipe: after each setup and each fix of the copy, gespann keeps the recipe directory as `DATA_DIR/projects/<id>/recipe.tgz` and copies it into the project's other sandboxes before their next job. Its first job builds the app's images from scratch unless the host's Docker cache already has them.
 
@@ -52,6 +53,20 @@ All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign
 | `module:<path>` | whatever your module makes | a sandbox service of your own ([Your own provider](#your-own-provider)) |
 
 Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Docker and SSH sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen; a provider of your own records with `startRecording` ([Your own provider](#your-own-provider)). When a run cannot be recorded, the run page says so and the job log names the reason.
+
+### Several providers
+
+One instance can serve different users from different sandbox providers, e.g. the team's own CI server for the team and a sandbox service for everyone else:
+
+```bash
+-e SANDBOX_PROVIDER=module:/app/providers/cloud.js \
+-e SANDBOX_PROVIDER_BY_USER="tobi=ssh,ops=ssh" \
+-e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)"
+```
+
+`SANDBOX_PROVIDER_BY_USER` maps GitHub logins (any case) to a provider, written as for `SANDBOX_PROVIDER`; comma-separated. A user it names gets that provider for their projects' sandboxes and their Codex sign-in; everyone else gets `SANDBOX_PROVIDER`. Without `SANDBOX_PROVIDER`, only the named users get sandboxes and the jobs of everyone else stay queued. Each provider is made once and runs its own number of jobs at once, so a full CI server never holds up the users of the sandbox service. `docker` and `ssh` read their settings from the variables below, so each of them exists once per instance; modules can be as many as you like. The log names every provider and whom it serves, e.g. `sandboxes: ssh (tobi, ops)` and `sandboxes: cloud (everyone else)`.
+
+When a user moves to another provider, their projects' next jobs get a new sandbox there, which takes over the project's current recipe ([Parallel jobs](#parallel-jobs)) and builds the app from scratch on its first job. Their sandboxes on the old provider stay until you delete them.
 
 ### Docker
 
