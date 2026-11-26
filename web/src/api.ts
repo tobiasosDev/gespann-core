@@ -9,6 +9,8 @@ export interface Me {
 }
 
 export interface RunRow {
+  /** Queued until the PR's other checks (CI) pass; set in a project's run list. */
+  waitingForChecks?: boolean;
   id: number;
   pr: number;
   title: string | null;

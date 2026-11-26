@@ -40,7 +40,7 @@ function History({ runs }: { runs: RunRow[] }) {
 }
 
 function Progress({ run, usual }: { run: RunRow; usual: number | null }) {
-  if (run.status === "queued") return <span className="text-body text-muted-foreground">Waiting for a sandbox.</span>;
+  if (run.status === "queued") return <span className="text-body text-muted-foreground">{run.waitingForChecks ? "Waiting for CI." : "Waiting for a sandbox."}</span>;
   const elapsed = run.started ? (Date.now() - Date.parse(run.started)) / 1000 : 0;
   return (
     <div className="min-w-0">

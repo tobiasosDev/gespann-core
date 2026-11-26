@@ -79,6 +79,7 @@ test("worker: a run whose PR still runs its other checks goes back into the queu
   assert.ok(job.not_before && Date.parse(job.not_before) > Date.now(), "waits before it is taken again");
   assert.equal(t.db.nextJob(), undefined, "the queue skips it until then");
   assert.deepEqual(t.db.queuedJobs(1), { sandbox: 0, checks: 1 }, "Settings says it waits for CI, not for a sandbox");
+  assert.deepEqual([...t.db.runsWaitingForChecks(1)], [t.id], "the Runs list says so too");
   assert.equal(t.db.run_(t.id)?.status, "queued");
   assert.deepEqual(t.updates, [{ status: "queued", title: "Waiting for the other checks", summary: "gespann tests this PR once its other checks pass. Waiting for the PR's other checks: check." }]);
   assert.match(job.log, /waiting for the PR's other checks: check/);
