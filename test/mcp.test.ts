@@ -155,6 +155,26 @@ test("MCP: an agent reads the newest run of its PR: status, issues, review, scre
   assert.match(log, /copy up\n.*verdict: FAIL/);
 });
 
+test("MCP: a run with merge conflicts tells the agent to update the branch; it is not a FAIL", async () => {
+  const { db, tobi, shop, call } = setup();
+  const { token } = db.createToken(tobi.id, "x");
+  const run = db.createRun({ project_id: shop, pr: 8, title: "Sizes", head: "9".repeat(40), base: "b".repeat(40), base_ref: "main", token: "5".repeat(32) });
+  db.updateRun(run, { status: "done", outcome: null, conflict: JSON.stringify(["web/src/pages/Project.tsx"]) });
+  const r = (await call(token, "get_run", { repo: "acme/shop", pr: 8 })).structuredContent;
+  assert.equal(r.outcome, null);
+  assert.deepEqual(r.conflict, ["web/src/pages/Project.tsx"]);
+  assert.deepEqual(r.issues, [
+    {
+      kind: "merge_conflict",
+      text: "Not tested: the PR has merge conflicts with main in `web/src/pages/Project.tsx`",
+      fix: "Merge main into the PR branch (or rebase onto it), resolve the conflicts in `web/src/pages/Project.tsx` and push. gespann tests the new head when the push starts a run; if none starts (a draft, or a PR outside the recipe's triggers), use Rerun on the run page.",
+    },
+  ]);
+  const review = (await call(token, "get_review", { run_id: run })).content[0].text as string;
+  assert.match(review, /### 🔀 gespann: not tested, merge conflict/);
+  assert.match(review, /`9999999` does not merge onto `main`/);
+});
+
 test("MCP: a user never reads runs of projects they cannot see", async () => {
   const { db, tobi, foreign, call } = setup();
   const { token } = db.createToken(tobi.id, "x");

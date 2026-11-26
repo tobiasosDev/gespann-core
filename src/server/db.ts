@@ -111,6 +111,11 @@ export interface Run {
   progress: string | null;
   /** When the screenshots and recording were deleted after the PR closed; null while they are kept. */
   media_cleared: string | null;
+  /**
+   * JSON list of the files in conflict when the PR head does not merge onto its base. Such a run is
+   * not tested: it has no outcome, and the PR's agent brings the branch up to date.
+   */
+  conflict: string | null;
 }
 
 const SCHEMA = `
@@ -136,7 +141,7 @@ create table if not exists runs (
   head text not null, base text not null, base_ref text not null,
   status text not null, outcome text, verdict text, check_run_id integer, comment_id integer,
   token text not null, files text not null default '[]',
-  created text not null, started text, finished text, error text);
+  created text not null, started text, finished text, error text, conflict text);
 create index if not exists runs_project on runs(project_id, id);
 create table if not exists jobs (
   id integer primary key, project_id integer not null references projects(id), kind text not null,
@@ -257,6 +262,7 @@ export class Db {
     const rcols = new Set((this.sql.prepare("pragma table_info(runs)").all() as { name: string }[]).map((c) => c.name));
     if (!rcols.has("progress")) this.sql.exec("alter table runs add column progress text");
     if (!rcols.has("media_cleared")) this.sql.exec("alter table runs add column media_cleared text");
+    if (!rcols.has("conflict")) this.sql.exec("alter table runs add column conflict text");
     const hcols = new Set((this.sql.prepare("pragma table_info(holds)").all() as { name: string }[]).map((c) => c.name));
     if (!hcols.has("comment_id")) this.sql.exec("alter table holds add column comment_id integer");
     const jcols = new Set((this.sql.prepare("pragma table_info(jobs)").all() as { name: string }[]).map((c) => c.name));

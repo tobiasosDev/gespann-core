@@ -12,11 +12,12 @@ const SQUARE: Record<RunResult, string> = {
   fail: "bg-bad",
   blocked: "bg-warn",
   skip: "bg-muted-foreground/50",
+  conflict: "bg-muted-foreground/25",
   running: "border-2 border-info",
   queued: "border-2 border-muted-foreground/60",
   cancelled: "border border-muted-foreground/40",
 };
-const WORD: Record<RunResult, string> = { pass: "PASS", fail: "FAIL", blocked: "BLOCKED", skip: "SKIP", running: "running", queued: "queued", cancelled: "cancelled" };
+const WORD: Record<RunResult, string> = { pass: "PASS", fail: "FAIL", blocked: "BLOCKED", skip: "SKIP", conflict: "merge conflict", running: "running", queued: "queued", cancelled: "cancelled" };
 
 /** The PR's runs as squares, oldest on the left. Each opens its run. */
 function History({ runs }: { runs: RunRow[] }) {
@@ -57,10 +58,11 @@ function Progress({ run, usual }: { run: RunRow; usual: number | null }) {
 const SECTION: Record<PrState, (n: number) => ReactNode> = {
   running: (n) => plural(n, "pull request"),
   attention: (n) => `${plural(n, "pull request")} whose latest run failed or was blocked`,
+  conflict: (n) => `${plural(n, "pull request")} not tested: ${n === 1 ? "it does" : "they do"} not merge onto the base until ${n === 1 ? "its" : "their"} agent updates the branch`,
   passing: (n) => plural(n, "pull request"),
   cancelled: (n) => `${plural(n, "pull request")} whose runs were all cancelled`,
 };
-const TITLE: Record<PrState, string> = { running: "Running", attention: "Needs a look", passing: "Passing", cancelled: "Cancelled" };
+const TITLE: Record<PrState, string> = { running: "Running", attention: "Needs a look", conflict: "Merge conflict", passing: "Passing", cancelled: "Cancelled" };
 
 function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] }) {
   if (groups.length === 0) return null;
@@ -144,6 +146,7 @@ export function PrRuns({ runs, header }: { runs: RunRow[]; header: ReactNode }) 
               </thead>
               <Section state="running" groups={running} />
               <Section state="attention" groups={of("attention")} />
+              <Section state="conflict" groups={of("conflict")} />
               <Section state="passing" groups={of("passing")} />
               <Section state="cancelled" groups={of("cancelled")} />
             </table>
@@ -159,6 +162,7 @@ const LEGEND: { key: RunResult; label: string; bar: string; text: string }[] = [
   { key: "fail", label: "Failed", bar: "bg-bad", text: "text-bad" },
   { key: "blocked", label: "Blocked", bar: "bg-warn", text: "text-warn" },
   { key: "skip", label: "Skipped", bar: "bg-muted-foreground/50", text: "text-muted-foreground" },
+  { key: "conflict", label: "Merge conflict", bar: "bg-muted-foreground/25", text: "text-muted-foreground" },
   { key: "running", label: "Running", bar: "bg-info", text: "text-info" },
   { key: "queued", label: "Queued", bar: "bg-muted-foreground/30", text: "text-muted-foreground" },
   { key: "cancelled", label: "Cancelled", bar: "bg-muted-foreground/20", text: "text-muted-foreground" },

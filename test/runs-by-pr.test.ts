@@ -49,3 +49,17 @@ test("the usual length is the median of passed runs, and the counts add up", () 
   assert.deepEqual([c.pass, c.fail, c.running], [3, 1, 1]);
   assert.equal(Object.values(c).reduce((a, b) => a + b, 0), runs.length);
 });
+
+test("a run with merge conflicts is grey: its own section and count, never a FAIL", () => {
+  const conflicted = { ...run(21, "done"), conflict: '["web/src/pages/Project.tsx"]' };
+  const runs = [conflicted, run(21, "done", "PASS"), run(22, "done", "FAIL")];
+  assert.deepEqual(
+    groupByPr(runs).map((x) => [x.pr, x.state]),
+    [
+      [21, "conflict"],
+      [22, "attention"],
+    ],
+  );
+  const c = counts(runs);
+  assert.deepEqual([c.conflict, c.fail, c.pass], [1, 1, 1]);
+});

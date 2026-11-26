@@ -201,7 +201,7 @@ Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub Ap
 
 1. A user signs in with GitHub and connects Codex once in **Settings** (`codex login --device-auth` in a short-lived sandbox). gespann keeps the resulting `auth.json` encrypted and deletes the sandbox.
 2. Adding a repository starts the setup: in the project's own sandbox, Codex reads the repo and writes `verify.yml` (see [recipe.md](recipe.md)), the scripts it calls, `NOTES.md` and `CHECKS.md`. gespann then starts and stops the copy once without Codex to check the recipe.
-3. **Start** turns on PR testing. Each matching PR (not from forks) gets the check `gespann/verify`: the sandbox merges the PR onto its base, brings the copy up, Codex tests it with the sandbox's computer-use tools, and the verdict, screenshots and a recording land on the run page and in a PR comment.
+3. **Start** turns on PR testing. Each matching PR (not from forks) gets the check `gespann/verify`: the sandbox merges the PR onto its base, brings the copy up, Codex tests it with the sandbox's computer-use tools, and the verdict, screenshots and a recording land on the run page and in a PR comment. A PR that does not merge onto its base is not tested: the run shows *conflict* in grey instead of a verdict, the check stays neutral, and the PR comment and the MCP issue `merge_conflict` name the files and tell the PR's agent to update the branch. gespann never resolves conflicts itself; a push that matches the triggers is tested again, otherwise *Rerun* tests the PR's new head.
 
 The project sandbox stops after every job, and the Codex sign-in is only inside it while a job runs.
 

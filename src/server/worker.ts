@@ -7,6 +7,7 @@ import { parseRecipe, RecipeError } from "../verify/recipe.ts";
 import { parseThumbs, sameScreens, thumbCommand, withAliases } from "../verify/similar.ts";
 import { emptyProgress, mergeTester, parseProgress, type Progress, type Stage, startStage } from "../verify/progress.ts";
 import { copyGaps, type Check, type Judged } from "../verify/verdict.ts";
+import { conflictNote } from "./comment.ts";
 import { applyGate, gated, gateLine, gateState, type GateState, runComment, skipClosedRuns, upsertComment, withPrLock } from "./gate.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
@@ -355,6 +356,17 @@ function lastJson<T>(text: string): T | undefined {
   return undefined;
 }
 
+/** Marks the files in conflict in the output of a failed merge. */
+const UNMERGED = "gespann-unmerged: ";
+
+class MergeConflict extends Error {
+  readonly files: string[];
+  constructor(files: string[]) {
+    super(`PR head has merge conflicts in ${files.join(", ")}`);
+    this.files = files;
+  }
+}
+
 const CONCLUSION = { PASS: "success", SKIP: "neutral", BLOCKED: "neutral", FAIL: "failure" } as const;
 
 /** Changes the run's live progress. Never throws: progress is for the page, the run goes on without it. */
@@ -410,10 +422,15 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     await git(d, b, p, `-C ${b.repo} fetch --quiet origin ${q(run.head)} ${q(run.base)}`);
     const merge = await d.sandboxes.exec(
       b.id,
-      `cd ${b.repo} && git checkout --quiet --force --detach ${run.base} && git clean -fdq && git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit ${run.head} 2>&1`,
+      // On a failed merge the files in conflict follow, one per line, and the merge is undone.
+      `cd ${b.repo} && git checkout --quiet --force --detach ${run.base} && git clean -fdq && { git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit ${run.head} 2>&1 || { s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/${UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }; }`,
       120,
     );
-    if (merge.exitCode !== 0) throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
+    if (merge.exitCode !== 0) {
+      const files = merge.stdout.split("\n").filter((l) => l.startsWith(UNMERGED)).map((l) => l.slice(UNMERGED.length));
+      if (files.length) throw new MergeConflict(files);
+      throw new Error(`PR head does not merge onto ${run.base_ref}: ${merge.stdout.slice(-500)}`);
+    }
     const pr = await gh.pull(p.installation_id, p.repo, run.pr);
     prText = `# ${pr.title}\n\n${pr.body ?? ""}\n`;
     // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
@@ -425,8 +442,13 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     });
     if (issues.length) log(`linked ${issues.length === 1 ? "issue" : "issues"}: ${issues.map((i) => i.ref).join(", ")}`);
   } catch (err) {
-    log(`✗ ${(err as Error).message}`);
-    d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
+    if (err instanceof MergeConflict) {
+      log(`✗ ${conflictNote(run.base_ref, err.files).title}. Nothing was tested: the PR's agent brings the branch up to date, then gespann tests the new head.`);
+      d.db.updateRun(run.id, { conflict: JSON.stringify(err.files) });
+    } else {
+      log(`✗ ${(err as Error).message}`);
+      d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
+    }
   }
 
   if (job.restarts > 0) await downLeftovers(d, b, run, log);
@@ -467,7 +489,9 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
     }
   }
   let judged = a.judged;
-  const outcome = a.outcome;
+  // A run with merge conflicts tested nothing, so it has no outcome rather than a FAIL.
+  const conflict = d.db.run_(run.id)?.conflict ?? null;
+  const outcome = conflict ? null : a.outcome;
   // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
   const sizes = viewportsOf((d.db.project(p.id) ?? p).viewports).length;
   const { files, alias, complete } = await collect(d, b, run, `${dir}/out`, log, sizes < 2);
@@ -481,7 +505,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const error = d.db.run_(run.id)?.error ?? null;
   d.db.updateRun(run.id, { status: error && !judged?.verdict ? "failed" : "done", outcome, verdict: judged ? JSON.stringify(judged) : null, files: JSON.stringify(files), finished: new Date().toISOString() });
   await stopSandbox(d, b);
-  await report(d, p, { ...run, outcome, error }, judged, files, log);
+  await report(d, p, { ...run, outcome, error, conflict }, judged, files, log);
 }
 
 /**
@@ -732,7 +756,8 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
       log(`merge gate: ${state}`);
     }
     const body = runComment(d.config.baseUrl, run, judged, files, gateText);
-    const conclusion = !judged?.verdict
+    const conflict = run.conflict ? conflictNote(run.base_ref, JSON.parse(run.conflict) as string[]) : null;
+    const conclusion = conflict || !judged?.verdict
       ? "neutral" // gespann itself failed (sandbox, copy, Codex): never a FAIL on the PR
       : outcome === "FAIL" && (state !== "off" || !isShadow(p))
         ? "failure"
@@ -745,7 +770,7 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
         .updateCheck(p.installation_id, p.repo, checkId, {
           status: "completed",
           conclusion,
-          title: !judged?.verdict ? `gespann could not test this PR: ${(run.error ?? "no verdict").slice(0, 160)}` : `${outcome}${judged.verdict.summary ? `: ${judged.verdict.summary.slice(0, 200)}` : ""}`,
+          title: conflict ? conflict.title.slice(0, 200) : !judged?.verdict ? `gespann could not test this PR: ${(run.error ?? "no verdict").slice(0, 160)}` : `${outcome}${judged.verdict.summary ? `: ${judged.verdict.summary.slice(0, 200)}` : ""}`,
           summary: body.slice(0, 60_000),
         })
         .catch((err: Error) => log(`could not complete the GitHub check: ${err.message}`));
@@ -754,7 +779,8 @@ async function report(d: Deps, p: Project, run: Run, judged: Judged | null, file
     // one PR run side by side; one of an older push that ends last must not replace the newer result.
     const current = pull?.head.sha === run.head;
     if (!current) log(pull ? "the PR has a newer push: its comment stays with the newer run" : "could not read the PR: its comment stays as it is");
-    else if ((outcome !== "SKIP" && judged?.verdict) || state === "failed" || state === "skipped") {
+    // A PR with merge conflicts gets the comment too: it tells the PR's agent to update the branch.
+    else if ((outcome !== "SKIP" && judged?.verdict) || conflict || state === "failed" || state === "skipped") {
       const commentId = await upsertComment(gate, p, run.pr, body).catch((err: Error) => {
         log(`could not comment on the PR: ${err.message}`);
         return null;
