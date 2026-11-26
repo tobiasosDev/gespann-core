@@ -9,7 +9,7 @@ import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
 import type { Github } from "../src/server/github.ts";
 import { createSandboxes } from "../src/server/provider.ts";
-import { Docker, prelude, type ProcessStatus, type Ran, runLong, type Sandboxes, ShellSandboxes, spawnCollect, Ssh, words } from "../src/server/sandbox.ts";
+import { Docker, finishRecordingScript, prelude, type ProcessStatus, type Ran, runLong, type Sandboxes, ShellSandboxes, spawnCollect, Ssh, words } from "../src/server/sandbox.ts";
 import { processJob } from "../src/server/worker.ts";
 
 /** The shell layer on this machine: each sandbox is a temp directory used as HOME. */
@@ -141,6 +141,26 @@ test("shell sandboxes: the screen recording starts on the sandbox's DISPLAY, end
     protected override readonly sharedScreen = true;
   }
   await assert.rejects(new SharedRecording(env({ DISPLAY: ":77" })).startRecording(bare, join(bare, "r.mp4")), /no screen of its own/);
+});
+
+const hasFfmpeg = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0;
+
+test("a finished recording starts at the first frame that is not black; a video black throughout stays whole", { skip: hasFfmpeg ? false : "no ffmpeg" }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "gespann-rec-"));
+  const sb = new LocalShell();
+  const seconds = (f: string) => Number(/Duration: (\d+):(\d+):([\d.]+)/.exec(spawnSync("ffmpeg", ["-i", f], { encoding: "utf8" }).stderr)!.slice(1).reduce((s, n) => s * 60 + Number(n), 0));
+  const make = (f: string, filter: string) => assert.equal(spawnSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", f]).status, 0);
+  // 6 s of a black screen before the browser opens, then 3 s of a page.
+  const rec = join(dir, "recording.mp4");
+  make(rec, "color=black:s=320x240:r=5:d=6[a];testsrc=s=320x240:r=5:d=3[b];[a][b]concat=n=2:v=1");
+  assert.ok(Math.abs(seconds(rec) - 9) < 0.5);
+  assert.equal((await sb.exec(dir, finishRecordingScript(rec), 60)).exitCode, 0);
+  assert.ok(Math.abs(seconds(rec) - 3) < 0.5, `trimmed to ${seconds(rec)} s`);
+
+  const black = join(dir, "black.mp4");
+  make(black, "color=black:s=320x240:r=5:d=4");
+  assert.equal((await sb.exec(dir, finishRecordingScript(black), 60)).exitCode, 0);
+  assert.ok(Math.abs(seconds(black) - 4) < 0.5, `kept ${seconds(black)} s`);
 });
 
 const hasDocker = spawnSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 }).status === 0;
