@@ -164,7 +164,7 @@ export function Sandboxes() {
       />
       <div className="space-y-4 px-4 py-4">
         {host === null || limit === null ? (
-          <p className="text-body text-warn">This instance has no sandbox provider, so no job runs. Set SANDBOX_PROVIDER on the server.</p>
+          <p className="text-body text-warn">Your account has no sandbox provider on this instance, so your jobs wait. The server sets it with SANDBOX_PROVIDER or SANDBOX_PROVIDER_BY_USER.</p>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-3">

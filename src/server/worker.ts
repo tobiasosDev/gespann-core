@@ -53,7 +53,7 @@ function box(sb: Sandboxes, slot: Slot): Box {
  */
 async function ensureSandbox(d: Deps, p: Project, job: Job, log: (s: string) => void): Promise<Box> {
   let slot = d.db.takeSlot(p.id, job.id);
-  // A sandbox deleted by hand, or made by the provider the instance used before, is replaced.
+  // A sandbox deleted by hand, or made by a provider the owner used before, is replaced.
   while (slot && !(await d.sandboxes.exists(slot.sandbox_id))) {
     log(`sandbox ${slot.sandbox_id} no longer exists on ${d.sandboxes.kind}; creating a new one`);
     d.db.dropSlot(slot.id);
@@ -930,21 +930,40 @@ function tracked(sb: Sandboxes, onStart: (sandboxId: string, processId: number) 
   });
 }
 
-/** Polls the queue. Jobs run side by side, each in its own sandbox, up to `parallel` at once. */
-export function startWorker(d: Deps, parallel = 2): () => void {
+/** Which sandboxes a project owner's jobs use, and how many jobs that provider runs at once; null: none (the job waits). */
+export type Route = (ownerId: number) => { key: string; sandboxes: Sandboxes; parallel: number } | null;
+
+/**
+ * Polls the queue. Jobs run side by side, each in its own sandbox; each sandbox provider runs up to
+ * its own number at once, so a full provider never holds up the jobs of users on another one.
+ */
+export function startWorker(d: Omit<Deps, "sandboxes"> & { sandboxes?: Sandboxes }, routeOrParallel: Route | number = 2): () => void {
+  // A number keeps the form from before several providers: everyone on `d.sandboxes`, that many at once.
+  const fixed = routeOrParallel;
+  const route: Route = typeof fixed === "number" ? () => (d.sandboxes ? { key: "", sandboxes: d.sandboxes, parallel: fixed } : null) : fixed;
   let stopped = false;
-  const running = new Set<number>();
+  const running = new Map<number, string>();
+  const busy = (key: string) => [...running.values()].filter((k) => k === key).length;
+  /** Starts the first queued job whose provider has room; false when none can start now. */
+  const startOne = (): boolean => {
+    for (const job of d.db.nextJobs()) {
+      if (running.has(job.id)) continue;
+      const owner = d.db.project(job.project_id)?.owner_id;
+      const r = owner === undefined ? null : route(owner);
+      if (!r || busy(r.key) >= r.parallel) continue;
+      if (!d.db.claimJob(job.id)) continue;
+      running.set(job.id, r.key);
+      void processJob({ ...d, sandboxes: r.sandboxes }, job).finally(() => running.delete(job.id));
+      return true;
+    }
+    return false;
+  };
   const tick = async () => {
     // Jobs of a server that stopped (a deploy, a crash) start again; this one says its jobs still run.
-    d.db.beat([...running]);
+    d.db.beat([...running.keys()]);
     for (const id of d.db.requeueStale(new Date(Date.now() - STALE_MS).toISOString())) console.log(JSON.stringify({ level: "info", message: `job ${id} was lost in a restart and is queued again` }));
-    while (!stopped && running.size < parallel) {
-      const job = d.db.nextJob();
-      if (!job || running.has(job.id)) break;
-      if (!d.db.claimJob(job.id)) continue;
-      running.add(job.id);
-      void processJob(d, job).finally(() => running.delete(job.id));
-    }
+    // One at a time: each start can change which jobs may go next (a setup runs alone, owner limits).
+    while (!stopped && startOne());
   };
   const timer = setInterval(() => void tick(), 2000);
   void tick();
