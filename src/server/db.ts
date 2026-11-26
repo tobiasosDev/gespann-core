@@ -723,6 +723,11 @@ export class Db {
     return this.one<Run>("select * from runs where project_id = ? and pr = ? and head = ? and status != 'cancelled' order by id desc limit 1", projectId, pr, head);
   }
 
+  /** The queued or running run of this PR head, if one is. */
+  liveRunForHead(projectId: number, pr: number, head: string): Run | undefined {
+    return this.one<Run>("select * from runs where project_id = ? and pr = ? and head = ? and status in ('queued', 'running') order by id desc limit 1", projectId, pr, head);
+  }
+
   /** gespann keeps one comment per PR and edits it with each new result. */
   prComment(projectId: number, pr: number): number | null {
     return (
