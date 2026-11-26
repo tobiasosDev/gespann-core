@@ -125,7 +125,7 @@ export function SettingsPage() {
   const isCustom = customOpen || (!!c.model && !known);
   const selectValue = isCustom ? "__custom__" : (c.model ?? "");
   const customValue = customDraft ?? (c.model && !known ? c.model : "");
-  const selected = c.models.find((m) => m.id === c.model);
+  const selected = isCustom ? undefined : c.models.find((m) => m.id === c.model);
   const recommended = c.models.find((m) => m.recommended);
   const act = async (path: string, body: unknown = {}) => {
     setBusy(true);
