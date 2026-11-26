@@ -103,7 +103,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           ["Head", <Mono key="h">{r.head.slice(0, 12)}</Mono>],
           ["Base", <Mono key="b">{`${r.base_ref} @ ${r.base.slice(0, 7)}`}</Mono>],
           ["Duration", <Mono key="d">{duration(r.started, r.finished)}</Mono>],
-          ["Started", <span key="s">{ago(r.started ?? r.created)}</span>],
+          ["Started", <Mono key="s">{ago(r.started ?? r.created)}</Mono>],
         ].map(([k, val]) => (
           <div key={k as string} className="bg-card px-4 py-3">
             <div className="text-[12px] text-muted-foreground">{k}</div>
