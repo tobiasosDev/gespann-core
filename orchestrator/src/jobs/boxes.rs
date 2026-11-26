@@ -142,12 +142,12 @@ pub(crate) fn with_env(b: &Sbx, command: &str) -> String {
     format!(". {}/env.sh 2>/dev/null; {command}", b.gespann)
 }
 
-pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, model: Option<&str>) -> String {
+pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, model: Option<&str>, effort: &str) -> String {
     let m = model.filter(|m| !m.is_empty()).map(|m| format!(" -m {}", q(m))).unwrap_or_default();
     with_env(
         b,
         &format!(
-            "cd {} && codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check{m} -c model_reasoning_effort=high -o {} - < {} > {} 2>&1",
+            "cd {} && codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check{m} -c model_reasoning_effort={effort} -o {} - < {} > {} 2>&1",
             b.repo,
             q(last_file),
             q(prompt_file),
@@ -352,5 +352,12 @@ mod tests {
         assert_eq!(js_num(30.0), "30");
         assert_eq!(js_num(37.5), "37.5");
         assert_eq!(js_code(None), "null");
+    }
+
+    #[test]
+    fn codex_exec_passes_requested_reasoning_effort() {
+        let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
+        assert!(codex_exec(&b, "/p", "/l", "/j", None, "medium").contains("-c model_reasoning_effort=medium"));
+        assert!(codex_exec(&b, "/p", "/l", "/j", Some("gpt-5"), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
     }
 }

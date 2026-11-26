@@ -34,7 +34,7 @@ test("ci stage: a red check skips, a running one waits, green goes; no checks ge
   assert.deepEqual(ciStep({ ...none, failed: ["check"], pending: ["e2e"] }, 0), { kind: "skip", reason: "the PR's other checks failed first (check); gespann tests once they pass" });
   assert.deepEqual(ciStep({ ...none, pending: ["check"] }, 5 * 60_000), { kind: "wait", ms: CI_POLL_MS, line: "waiting for the PR's other checks: check" });
   assert.deepEqual(ciStep({ ...none, passed: ["check"] }, 0), { kind: "go" });
-  assert.deepEqual(ciStep(none, 20_000), { kind: "wait", ms: CI_GRACE_MS - 20_000, line: "no other checks yet: waiting a minute for CI to report" });
+  assert.deepEqual(ciStep(none, 20_000), { kind: "wait", ms: CI_GRACE_MS - 20_000, line: "no other checks yet: waiting 30 s for CI to report" });
   assert.deepEqual(ciStep(none, CI_GRACE_MS), { kind: "go" });
   const late = ciStep({ ...none, pending: ["a", "b", "c", "d", "e", "f", "g"] }, CI_MAX_WAIT_MS);
   assert.equal(late.kind, "go");

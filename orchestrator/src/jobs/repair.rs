@@ -89,7 +89,7 @@ async fn fix(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gaps: &[Value], backu
         .await?;
     cx.note("repair.log.codex", "Codex fixes the copy").await;
     let cancelled = || cx.stopped();
-    let command = codex_exec(b, prompt_file, last_file, &format!("{}/repair.jsonl", b.gespann), p.model.as_deref());
+    let command = codex_exec(b, prompt_file, last_file, &format!("{}/repair.jsonl", b.gespann), p.model.as_deref(), "high");
     let r = with_codex(cx.ctx, &cx.jr, "repair.signin", p.owner_id, &b.id, || long(cx, b, "repair.codex", &command, Duration::from_secs(60 * 60), &cancelled)).await?;
     // Codex may have left its own copy up; it may also have touched the checkout.
     tear_down(cx, b, "repair.teardown", None).await?;

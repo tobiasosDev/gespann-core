@@ -7,7 +7,7 @@ use std::fmt;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
-use futures::FutureExt;
+use futures::{stream, FutureExt, StreamExt};
 use rusqlite::types::Value as Sql;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -314,65 +314,61 @@ async fn stop(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
     Ok(())
 }
 
-/// The PR merged onto its base in the checkout, then its text and issues. Both once: after a
-/// takeover the checkout holds the running copy's build, and the tester was given this text.
+/// The PR merged onto its base in the checkout, and its text and issues in parallel. Both once:
+/// after a takeover the checkout holds the running copy's build, and the tester was given this text.
 async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<(Context, String)> {
     let sb = cx.sb();
-    let base: String = cx
-        .jr
-        .step("merge", || async move {
-            ensure_repo(cx, b, p).await?;
-            // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was
-            // at the last push, so a rerun after newer merges would otherwise test the PR without them.
-            let tracking = format!("refs/remotes/origin/{}", run.base_ref);
-            git(cx, b, p, &format!("-C {} fetch --quiet origin {} {}", b.repo, q(&run.head), q(&format!("+refs/heads/{}:{tracking}", run.base_ref))), 600).await?;
-            let read = sb.exec(&b.id, &format!("cd {} && git rev-parse --verify --quiet {}", b.repo, q(&format!("{tracking}^{{commit}}"))), 30).await?;
-            let tip = read.stdout.trim().to_string();
-            if read.exit_code != Some(0) || tip.len() != 40 || !tip.chars().all(|c| c.is_ascii_hexdigit()) {
-                bail!("could not read {} after fetching it: {}", run.base_ref, tail(&read.stdout, 300));
+    let merge_fut = cx.jr.step("merge", || async move {
+        ensure_repo(cx, b, p).await?;
+        // The PR is tested on its base branch as it is now. GitHub's base commit of a PR stays where it was
+        // at the last push, so a rerun after newer merges would otherwise test the PR without them.
+        let tracking = format!("refs/remotes/origin/{}", run.base_ref);
+        git(cx, b, p, &format!("-C {} fetch --quiet origin {} {}", b.repo, q(&run.head), q(&format!("+refs/heads/{}:{tracking}", run.base_ref))), 600).await?;
+        let read = sb.exec(&b.id, &format!("cd {} && git rev-parse --verify --quiet {}", b.repo, q(&format!("{tracking}^{{commit}}"))), 30).await?;
+        let tip = read.stdout.trim().to_string();
+        if read.exit_code != Some(0) || tip.len() != 40 || !tip.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("could not read {} after fetching it: {}", run.base_ref, tail(&read.stdout, 300));
+        }
+        if tip != run.base {
+            cx.log(&format!("testing on {} at {}, newer than {} from GitHub", run.base_ref, &tip[..12], cut(&run.base, 12)));
+            cx.ctx.db.update_run(run.id, &[("base", text(tip.clone()))])?;
+        }
+        let merge = sb
+            .exec(
+                &b.id,
+                // On a failed merge the files in conflict follow, one per line, and the merge is undone.
+                &format!(
+                    "cd {} && git checkout --quiet --force --detach {} && git clean -fdq && {{ git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit {} 2>&1 || {{ s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/{UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }}; }}",
+                    b.repo, tip, run.head
+                ),
+                120,
+            )
+            .await?;
+        if merge.exit_code != Some(0) {
+            let files: Vec<String> = merge.stdout.split('\n').filter_map(|l| l.strip_prefix(UNMERGED)).map(String::from).collect();
+            if !files.is_empty() {
+                return Err(MergeConflict(files).into());
             }
-            if tip != run.base {
-                cx.log(&format!("testing on {} at {}, newer than {} from GitHub", run.base_ref, &tip[..12], cut(&run.base, 12)));
-                cx.ctx.db.update_run(run.id, &[("base", text(tip.clone()))])?;
-            }
-            let merge = sb
-                .exec(
-                    &b.id,
-                    // On a failed merge the files in conflict follow, one per line, and the merge is undone.
-                    &format!(
-                        "cd {} && git checkout --quiet --force --detach {} && git clean -fdq && {{ git -c user.name=gespann -c user.email=verify@gespann.app merge --quiet --no-edit {} 2>&1 || {{ s=$?; git -c core.quotePath=false diff --name-only --diff-filter=U | sed 's/^/{UNMERGED}/'; git merge --abort >/dev/null 2>&1; exit $s; }}; }}",
-                        b.repo, tip, run.head
-                    ),
-                    120,
-                )
-                .await?;
-            if merge.exit_code != Some(0) {
-                let files: Vec<String> = merge.stdout.split('\n').filter_map(|l| l.strip_prefix(UNMERGED)).map(String::from).collect();
-                if !files.is_empty() {
-                    return Err(MergeConflict(files).into());
-                }
-                bail!("PR head does not merge onto {}: {}", run.base_ref, tail(&merge.stdout, 500));
-            }
-            Ok(tip)
-        })
-        .await?;
-    let c = cx
-        .jr
-        .step("context", || async move {
-            let c = cx.ctx.ui.context(run.id).await?;
-            // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
-            // diff and PR text alone, as for a PR without issues, and the run says so.
-            if let Some(unread) = &c.unread {
-                cx.log(&format!("✗ {unread}"));
-            }
-            if !c.issues.is_empty() {
-                let refs = c.issues.iter().map(|i| i.reference.as_str()).collect::<Vec<_>>().join(", ");
-                cx.log(&format!("linked {}: {refs}", if c.issues.len() == 1 { "issue" } else { "issues" }));
-            }
-            Ok(c)
-        })
-        .await?;
-    Ok((c, base))
+            bail!("PR head does not merge onto {}: {}", run.base_ref, tail(&merge.stdout, 500));
+        }
+        Ok(tip)
+    });
+    let context_fut = cx.jr.step("context", || async move {
+        let c = cx.ctx.ui.context(run.id).await?;
+        // The issues the PR resolves set its goal. When GitHub does not list them, the tester judges from
+        // diff and PR text alone, as for a PR without issues, and the run says so.
+        if let Some(unread) = &c.unread {
+            cx.log(&format!("✗ {unread}"));
+        }
+        if !c.issues.is_empty() {
+            let refs = c.issues.iter().map(|i| i.reference.as_str()).collect::<Vec<_>>().join(", ");
+            cx.log(&format!("linked {}: {refs}", if c.issues.len() == 1 { "issue" } else { "issues" }));
+        }
+        Ok(c)
+    });
+    let (base, c): (Result<String>, Result<Context>) = tokio::join!(merge_fut, context_fut);
+    let base = base?;
+    Ok((c?, base))
 }
 
 /// A run lost in a restart of the TypeScript worker may have left its copy up: finish tears it down
@@ -423,7 +419,8 @@ async fn read_tester(cx: &Cx<'_>, b: &Sbx, run_id: i64, file: &str) {
 async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &str, pr: &Context, n: u32) -> Result<Attempt> {
     let sb = cx.sb();
     let k = |s: &str| format!("a{n}.{s}");
-    if let Err(e) = attempt_tester(cx, p, run, b, gid, dir, pr, n).await {
+    let mut recording = false;
+    if let Err(e) = attempt_tester(cx, p, run, b, gid, dir, pr, n, &mut recording).await {
         cx.log(&format!("✗ {e:#}"));
         if !cx.stopped() {
             cx.ctx.db.update_run(run.id, &[("error", text(cut(&format!("{e:#}"), 4000)))])?;
@@ -433,7 +430,23 @@ async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &
     stage(cx, run.id, n, Stage::Verdict).await;
     let wait = if cx.stopped() { 0 } else { 600 };
     let command = with_env(b, &format!("cd {} && gespann verify finish --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir} --wait {wait}", b.repo, b.recipe, run.pr, run.head, run.base));
-    let fin = long(cx, b, &k("finish"), &command, Duration::from_secs(30 * 60), &never).await.unwrap_or_else(|e| LongResult { exit_code: None, tail: format!("{e:#}"), timed_out: false });
+    let rec = format!("{dir}/out/recording.mp4");
+    let rec = &rec;
+    // The recording is already closed; trimming leading black frames runs alongside copy teardown.
+    let (fin, _) = tokio::join!(
+        async { long(cx, b, &k("finish"), &command, Duration::from_secs(30 * 60), &never).await.unwrap_or_else(|e| LongResult { exit_code: None, tail: format!("{e:#}"), timed_out: false }) },
+        async {
+            if recording {
+                let _ = cx
+                    .jr
+                    .step(&k("record.finish"), || async move {
+                        let _ = sb.exec(&b.id, &finish_recording_script(rec), 300).await;
+                        Ok(())
+                    })
+                    .await;
+            }
+        }
+    );
     let result = sb.read_file(&b.id, &format!("{dir}/work/result.json")).await.ok().flatten();
     let teardown = last_json::<Finished>(&fin.tail).unwrap_or_default().teardown_errors;
     if !teardown.is_empty() {
@@ -456,7 +469,7 @@ async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &
 
 /// The part of an attempt that may fail: the copy up, the prompt, the tester and its recording.
 #[allow(clippy::too_many_arguments)]
-async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &str, pr: &Context, n: u32) -> Result<()> {
+async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &str, pr: &Context, n: u32, recording_out: &mut bool) -> Result<()> {
     let (db, sb) = (&cx.ctx.db, cx.sb());
     let k = |s: &str| format!("a{n}.{s}");
     // Fresh each time: a run that starts again must not show a lost attempt's proof. Once per attempt:
@@ -561,11 +574,12 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
             }
         })
         .await?;
+    *recording_out = recording;
     cx.note(&k("log.tester"), "the tester is working").await;
     let progress_file = format!("{dir}/work/progress.json");
     let progress_file = &progress_file;
     let tick = |_tail: String| read_tester(cx, b, run.id, progress_file).boxed();
-    let command = codex_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), p.model.as_deref());
+    let command = codex_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), p.model.as_deref(), "medium");
     let tester_key = k("tester");
     let tester = with_codex(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, || {
         cx.jr.long(sb, &b.id, &tester_key, &command, Long { timeout: Duration::from_secs_f64(minutes * 60.0), cancelled: &cancelled, on_tick: Some(&tick) })
@@ -580,7 +594,6 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
                 if let Err(e) = sb.stop_recording(&b.id).await {
                     cx.log(&format!("could not stop the recording: {e:#}"));
                 }
-                let _ = sb.exec(&b.id, &finish_recording_script(rec), 300).await;
                 Ok(())
             })
             .await?;
@@ -643,11 +656,18 @@ async fn collect(cx: &Cx<'_>, b: &Sbx, run: &Run, out: &str, dedupe: bool) -> Re
     names.sort_by_key(|f| !is_video(f));
     let dir = format!("{}/runs/{}", cx.ctx.cfg.data_dir, run.id);
     std::fs::create_dir_all(&dir)?;
+    let downloads: Vec<(String, Result<Vec<u8>>)> = stream::iter(names.iter().take(60).cloned())
+        .map(|f| async move {
+            let data = sb.download(&b.id, &format!("{out}/{f}")).await;
+            (f, data)
+        })
+        .buffered(4)
+        .collect()
+        .await;
     let mut saved = vec![];
-    for f in names.iter().take(60) {
-        let copied = async { anyhow::Ok(std::fs::write(format!("{dir}/{f}"), sb.download(&b.id, &format!("{out}/{f}")).await?)?) };
-        match copied.await {
-            Ok(()) => saved.push(f.clone()),
+    for (f, res) in downloads {
+        match res.and_then(|bytes| Ok(std::fs::write(format!("{dir}/{f}"), bytes)?)) {
+            Ok(()) => saved.push(f),
             Err(e) => cx.log(&format!("could not copy {f}: {e:#}")),
         }
     }

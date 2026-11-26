@@ -72,14 +72,14 @@ export function testerPrompt(t: TesterInput): string {
     t.criteria.trim() || DEFAULT_CHECKS,
     "",
     "Steps:",
-    `1. Read the PR text in ${t.work}/pr.md and the change with \`git diff ${t.base}...${t.head}\` in this checkout. Decide which behaviour a user can observe. If nothing observable changed (CI, tests, tooling, docs only), write the verdict SKIP and stop after step 5.`,
+    `1. Read the PR text in ${t.work}/pr.md${issues.length ? `, ${t.work}/issues.md,` : ""} and the change with \`git diff ${t.base}...${t.head}\` in one command. Decide which behaviour a user can observe. If nothing observable changed (CI, tests, tooling, docs only), write the verdict SKIP and stop after step 5.`,
     ...(issues.length
       ? [
           `   This PR says it resolves ${issues.length === 1 ? "the issue" : "the issues"} ${issues.join(", ")}. Read ${t.work}/issues.md: title and description of each. The description says what the change has to achieve; that is the goal, not what the PR text claims. Write down each issue's goal in one sentence. A SKIP needs every goal met as well, judged from the diff.`,
         ]
       : []),
-    `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Before each action, state the result you expect.`,
-    `   People watch the run live. As soon as the plan stands, write it to ${t.work}/progress.json, exactly this shape: {"checks":[{"expect":"...","result":null}],"now":"what you are doing, in a few plain words"}. Rewrite the whole file as you go: set the "result" of the check you start to "running", update "now" with every new action (e.g. "Opening the settings page"), and when a check is done set its "result" ("pass", "fail" or "blocked") and a short "observed". It only shows progress; verdict.json stays the result.`,
+    `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Do not read unrelated source files once the diff is clear. Before each action, state the result you expect.`,
+    `   People watch the run live. As soon as the plan stands, write it to ${t.work}/progress.json, exactly this shape: {"checks":[{"expect":"...","result":null}],"now":"what you are doing, in a few plain words"}. Update the file only when a check starts ("result": "running", updating "now") and when a check finishes ("result": "pass" | "fail" | "blocked", with a short "observed"), not between individual clicks; when a check finishes, combine taking its screenshot and updating progress.json in one shell command. It only shows progress; verdict.json stays the result.`,
     `3. Drive the change in the copy the way a user would, with the computer tools: open ${t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
     ...(t.testerNote ? [`   ${t.testerNote}`] : []),
     ...(sizes.length

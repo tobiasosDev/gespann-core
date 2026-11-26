@@ -87,7 +87,7 @@ pub fn finish_recording_script(file: &str) -> String {
         r#"d="$(printf '%s\n' "$o" | sed -n 's/.*Duration: \([0-9]*\):\([0-9]*\):\([0-9.]*\).*/\1 \2 \3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')""#.to_string(),
         // A video that is black throughout stays as it is. Re-encoded, not copied: a copy can only start
         // at a keyframe, and those are far apart in this video.
-        format!(r#"{{ [ -n "$b" ] && [ -n "$d" ] && awk -v b="$b" -v d="$d" 'BEGIN {{ exit !(b < d - 0.5) }}' && ffmpeg -nostdin -loglevel error -y -ss "$b" -i {f} -an -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp}; }} ||"#),
+        format!(r#"{{ [ -n "$b" ] && [ -n "$d" ] && awk -v b="$b" -v d="$d" 'BEGIN {{ exit !(b < d - 0.5) }}' && ffmpeg -nostdin -loglevel error -y -ss "$b" -i {f} -an -c:v libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp}; }} ||"#),
         format!("  ffmpeg -nostdin -loglevel error -y -i {f} -c copy -movflags +faststart {tmp} ||"),
         // A failed ffmpeg may leave half a file: keep the original recording then.
         format!("  {{ rm -f {tmp}; exit 0; }}"),
