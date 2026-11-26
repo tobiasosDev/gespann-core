@@ -67,6 +67,49 @@ export interface LinkedIssue {
 
 const MAX_ISSUES = 5;
 
+/** The name of gespann's own check; it never waits for itself. */
+export const CHECK_NAME = "gespann/verify";
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  app?: { slug?: string } | null;
+}
+
+export interface CommitStatus {
+  context: string;
+  state: string;
+}
+
+/** The PR head's other checks: the fast stages that must pass before an agent spends a sandbox on it. */
+export interface OtherChecks {
+  pending: string[];
+  failed: string[];
+  passed: string[];
+  /** False when the app may not read commit statuses (permission "Commit statuses: read"); only check runs count then. */
+  statuses: boolean;
+}
+
+const FAILED = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale", "error"]);
+
+export function otherChecks(runs: CheckRun[], statuses: CommitStatus[] | null, slug?: string): OtherChecks {
+  const out: OtherChecks = { pending: [], failed: [], passed: [], statuses: statuses !== null };
+  for (const r of runs) {
+    if (r.name === CHECK_NAME || (slug && r.app?.slug === slug)) continue;
+    if (r.status !== "completed") out.pending.push(r.name);
+    else if (FAILED.has(r.conclusion ?? "")) out.failed.push(r.name);
+    else out.passed.push(r.name);
+  }
+  for (const s of statuses ?? []) {
+    if (s.context === CHECK_NAME) continue;
+    if (s.state === "pending") out.pending.push(s.context);
+    else if (FAILED.has(s.state)) out.failed.push(s.context);
+    else out.passed.push(s.context);
+  }
+  return out;
+}
+
 /**
  * Issues the PR text closes with GitHub's keywords: `Fixes #12`, `closes owner/repo#3`,
  * `Resolves https://github.com/owner/repo/issues/4`. A bare mention (`#12`, `Refs #12`) is no goal of this PR.
@@ -219,9 +262,28 @@ export class Github {
     return out;
   }
 
+  /**
+   * Check runs (newest per name) and commit statuses on a commit, without gespann's own. A source GitHub
+   * refuses for good (403, 404) counts as none; any other error throws, so the caller asks again later.
+   */
+  async otherChecks(installationId: number, repo: string, sha: string): Promise<OtherChecks> {
+    const refused = (err: unknown) => {
+      if (err instanceof GithubError && (err.status === 403 || err.status === 404)) return null;
+      throw err;
+    };
+    const runs: CheckRun[] = [];
+    for (let page = 1; page <= 5; page++) {
+      const r = await this.asInstallation<{ check_runs: CheckRun[] }>(installationId, "GET", `/repos/${repo}/commits/${sha}/check-runs?filter=latest&per_page=100&page=${page}`).catch(refused);
+      runs.push(...(r?.check_runs ?? []));
+      if ((r?.check_runs.length ?? 0) < 100) break;
+    }
+    const statuses = await this.asInstallation<{ statuses: CommitStatus[] }>(installationId, "GET", `/repos/${repo}/commits/${sha}/status?per_page=100`).then((r) => r.statuses, refused);
+    return otherChecks(runs, statuses, this.app.slug);
+  }
+
   async createCheck(installationId: number, repo: string, headSha: string, detailsUrl: string): Promise<number> {
     const r = await this.asInstallation<{ id: number }>(installationId, "POST", `/repos/${repo}/check-runs`, {
-      name: "gespann/verify",
+      name: CHECK_NAME,
       head_sha: headSha,
       status: "queued",
       details_url: detailsUrl,
@@ -277,7 +339,7 @@ export function appManifest(baseUrl: string, name: string): Record<string, unkno
     public: true,
     // contents: write only because GitHub requires it to switch a PR to draft and back (the merge
     // gate); the token handed into sandboxes is narrowed to contents: read.
-    default_permissions: { checks: "write", contents: "write", metadata: "read", pull_requests: "write", issues: "write" },
+    default_permissions: { checks: "write", contents: "write", metadata: "read", pull_requests: "write", issues: "write", statuses: "read" },
     // issue_comment: "/gespann approve" releases a PR the merge gate holds.
     default_events: ["pull_request", "issue_comment"],
   };

@@ -1,8 +1,8 @@
 import { ExternalLink, Lock } from "lucide-react";
 import { useState } from "react";
-import { api, type RepoGroup, useResource } from "../api.ts";
+import { api, type RepoGroup } from "../api.ts";
 import { Button, Card, CardHeader, Empty, Input, LinkButton } from "../components/ui.tsx";
-import { navigate } from "../nav.tsx";
+import { navigate, useResource } from "../live.ts";
 
 export function NewProject({ installUrl }: { installUrl: string | null }) {
   const { data, error } = useResource<{ groups: RepoGroup[] }>("/repos");
@@ -12,7 +12,7 @@ export function NewProject({ installUrl }: { installUrl: string | null }) {
     setBusy(repo);
     try {
       const r = await api<{ id: number }>("/projects", { installation, repo });
-      navigate(`/projects/${r.id}`);
+      navigate(`/projects/${r.id}/setup`);
     } finally {
       setBusy(null);
     }

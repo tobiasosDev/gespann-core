@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ComponentProps, HTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { cn } from "../cn.ts";
 
 export { cn };
@@ -46,7 +46,7 @@ export function Badge({ tone = "muted", children, dot }: { tone?: Tone; children
   );
 }
 
-export function Card({ className, ...p }: HTMLAttributes<HTMLDivElement>) {
+export function Card({ className, ...p }: ComponentProps<"div">) {
   return <div className={cn("rounded-lg border border-border bg-card", className)} {...p} />;
 }
 

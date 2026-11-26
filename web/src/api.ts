@@ -1,5 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
-
 export type Outcome = "PASS" | "FAIL" | "BLOCKED" | "SKIP";
 
 export interface Me {
@@ -66,7 +64,10 @@ export interface Boxes {
   /** Your own limit; null when you take what the host allows. */
   own: number | null;
   running: RunningBox[];
+  /** Jobs that wait for a free sandbox. */
   queued: number;
+  /** PR runs that wait for their PR's other checks (CI) before they need a sandbox. */
+  waitingForChecks: number;
   time: { month: string; days: { day: string; seconds: number }[]; monthSeconds: number; totalSeconds: number; jobs: number };
 }
 
@@ -164,6 +165,8 @@ export interface Progress {
 }
 
 export interface RunDetail extends RunRow {
+  /** Queued until the PR's other checks (CI) pass; it holds no sandbox meanwhile. */
+  waitingForChecks: boolean;
   project: { id: number; repo: string };
   verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[] } | null;
   files: string[];
@@ -198,32 +201,6 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
   const json = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new ApiError(res.status, json.error ?? res.statusText);
   return json as T;
-}
-
-/** Loads a resource and reloads it every `pollMs` while `live(data)` says work is running. */
-export function useResource<T>(path: string | null, live?: (d: T) => boolean, pollMs = 4000) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    if (!path) return;
-    try {
-      setData(await api<T>(path));
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [path]);
-  useEffect(() => {
-    setData(null);
-    void load();
-  }, [load]);
-  const isLive = data !== null && !!live?.(data);
-  useEffect(() => {
-    if (!isLive) return;
-    const t = setInterval(() => void load(), pollMs);
-    return () => clearInterval(t);
-  }, [isLive, load, pollMs]);
-  return { data, error, reload: load };
 }
 
 export function ago(iso: string | null): string {

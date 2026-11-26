@@ -1,10 +1,11 @@
 import { ExternalLink, RotateCw } from "lucide-react";
-import { useEffect, useState } from "react";
-import { ago, api, duration, type Progress, type RunDetail, useResource } from "../api.ts";
-import { LiveChecks, RESULT_ICON, StageStrip, useTick, waitingText } from "../components/Live.tsx";
+import { useState } from "react";
+import { ago, api, duration, type Progress, type RunDetail } from "../api.ts";
+import { LiveChecks, RESULT_ICON, StageStrip, waitingText } from "../components/Live.tsx";
+import { navigate, useResource, useTick } from "../live.ts";
 import { ShotList } from "../components/Shots.tsx";
 import { Badge, Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from "../components/ui.tsx";
-import { Link, navigate, RunStatus } from "../nav.tsx";
+import { Link, RunStatus } from "../nav.tsx";
 
 const GOAL = { met: RESULT_ICON.pass, missed: RESULT_ICON.fail, blocked: RESULT_ICON.blocked };
 const GOAL_TONE = { met: "ok", missed: "bad", blocked: "warn" } as const;
@@ -26,14 +27,12 @@ function liveSummary(p: Progress): string {
   return `The tester planned ${p.checks.length} checks after reading the change. ${parts.join(", ")}.`;
 }
 
-export function Run({ id, onProject }: { id: number; onProject?: (project: number) => void }) {
-  const { data: r, error } = useResource<RunDetail>(`/runs/${id}`, (d) => d.status === "queued" || d.status === "running");
+const runLive = (d: RunDetail) => d.status === "queued" || d.status === "running";
+
+export function Run({ id }: { id: number }) {
+  const { data: r, error } = useResource<RunDetail>(`/runs/${id}`, runLive);
   const [busy, setBusy] = useState(false);
   const [fullLog, setFullLog] = useState(false);
-  const projectId = r?.project.id;
-  useEffect(() => {
-    if (projectId) onProject?.(projectId);
-  }, [projectId, onProject]);
   useTick(r?.status === "running");
   if (error) return <p className="text-bad">{error}</p>;
   if (!r) return <p className="text-muted-foreground">Loading…</p>;
@@ -112,7 +111,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
         ))}
       </Card>
 
-      {live && <StageStrip progress={r.status === "running" ? r.progress : null} queued={r.status === "queued"} />}
+      {live && <StageStrip progress={r.status === "running" ? r.progress : null} queued={r.status === "queued"} checks={r.waitingForChecks} />}
 
       {v?.summary && <p className="mb-4 max-w-3xl text-body">{v.summary}</p>}
       {conflict && (
@@ -185,7 +184,7 @@ export function Run({ id, onProject }: { id: number; onProject?: (project: numbe
           {(!v || v.checks.length === 0) && livePlan ? (
             <LiveChecks progress={livePlan} />
           ) : !v || v.checks.length === 0 ? (
-            <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued") : "No checks."}</Empty>
+            <Empty>{live ? waitingText(r.status === "running" ? r.progress : null, r.status === "queued", r.waitingForChecks) : "No checks."}</Empty>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-body">

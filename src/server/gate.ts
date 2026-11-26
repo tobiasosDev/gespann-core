@@ -54,6 +54,7 @@ export async function skipClosedRuns(d: Pick<GateDeps, "db" | "github">, p: Proj
   return runs;
 }
 
+// eslint-disable-next-line no-restricted-syntax -- lock: serializes webhook handling inside one process; after a restart events re-read the PR
 const locks = new Map<string, Promise<unknown>>();
 
 /**

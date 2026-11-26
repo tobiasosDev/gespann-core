@@ -272,7 +272,7 @@ test("worker: a PR run in a sandbox without the recipe (replaced, even after a s
   const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
   db.updateProject(p, { sandbox_id: "sandbox-old", setup: "ready", recipe: "version: 1" });
   const sb = new FakeSandboxes();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   // A suggestion made the new sandbox first; the PR run after it still finds no recipe there.
   sb.files.set("/srv/fresh/gespann/suggested-checks.md", "Sign in works.");
   await processJob({ db, sandboxes: sb, github: () => github, config }, db.job(db.enqueue(p, "suggest"))!);
@@ -360,7 +360,7 @@ test("restart: lost jobs go back into the queue with their run and setup, stop w
   db.updateProject(p, { setup: "ready", recipe: "version: 1" });
   sb.files.set("/srv/fresh/gespann/project/verify.yml", "version: 1");
   sb.files.set("/srv/fresh/gespann/runs/000000000000/work/state.json", "{}");
-  const prGithub = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
+  const prGithub = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   await processJob({ db, sandboxes: sb, github: () => prGithub, config }, db.job(rj)!);
   const cmds = sb.commands.join("\n");
   assert.match(db.job(rj)?.log ?? "", /taking down the copy that the attempt before the restart left up/);
@@ -488,6 +488,7 @@ test("worker: a PR that does not merge onto its base is not tested: no FAIL, a n
   const comments: string[] = [];
   const github = {
     installationToken: async () => "tok",
+    otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }),
     pull: async () => ({ number: 4, title: "t", body: "", state: "open", head: { sha: head }, labels: [] }),
     linkedIssues: async () => [],
     updateCheck: async (_i: number, _r: string, _id: number, f: { status: string; conclusion?: string; title?: string; summary?: string }) => void (f.status === "completed" && checks.push(f)),
@@ -543,7 +544,7 @@ test("parallel: two PR runs of one project run at once in two sandboxes; the new
   }
   const sb = new Pool();
   sb.files.set("/srv/first/gespann/project/verify.yml", "version: 1");
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);
@@ -620,6 +621,7 @@ test("worker: a newer push stops the PR's running test: the tester is killed, th
   const checks: [number, string | undefined, string | undefined][] = [];
   const comments: unknown[] = [];
   const github = {
+    otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }),
     installationToken: async () => "tok",
     pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h2" }, labels: [] }),
     linkedIssues: async () => [],
@@ -764,7 +766,7 @@ test("parallel: two PR runs that both find no recipe anywhere prepare the enviro
     }
   }
   const sb = new Pool();
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }), linkedIssues: async () => [] } as unknown as Github;
   const jobs = [4, 5].map((pr, i) => {
     const run = db.createRun({ project_id: p, pr, title: "t", head: `h${pr}`, base: "b", base_ref: "main", token: String(i).repeat(32) });
     const id = db.enqueue(p, "run", run);
@@ -817,7 +819,7 @@ test("worker: a PR run records when each stage starts and what the tester writes
   }
   const sb = new Tester();
   sb.files.set("/srv/fresh/gespann/project/verify.yml", recipe);
-  const github = { installationToken: async () => "tok", pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
+  const github = { installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), pull: async () => ({ title: "t", body: "", state: "open", head: { sha: "h" }, labels: [] }) } as unknown as Github;
   const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "3".repeat(32) });
   const job = db.job(db.enqueue(p, "run", run))!;
   db.claimJob(job.id);

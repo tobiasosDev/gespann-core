@@ -1,21 +1,16 @@
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { JobRow, Outcome, ProjectRow, RunRow } from "./api.ts";
 import { Badge } from "./components/ui.tsx";
+import { navigate } from "./live.ts";
 
-export function navigate(to: string): void {
-  history.pushState(null, "", to);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  window.scrollTo(0, 0);
+/** Projects whose setup or newest run still changes, so their list keeps reloading. */
+export function projectsBusy(d: { projects: ProjectRow[] }): boolean {
+  return d.projects.some((p) => p.setup === "running" || p.setup === "queued" || p.last?.status === "running" || p.last?.status === "queued");
 }
 
-export function usePath(): string {
-  const [path, setPath] = useState(location.pathname);
-  useEffect(() => {
-    const on = () => setPath(location.pathname);
-    window.addEventListener("popstate", on);
-    return () => window.removeEventListener("popstate", on);
-  }, []);
-  return path;
+/** A project opens on Setup until it tests PRs, on Runs after that. */
+export function landing(p: Pick<ProjectRow, "setup" | "active">): "runs" | "setup" {
+  return p.setup === "ready" && p.active ? "runs" : "setup";
 }
 
 /** Plain links that stay inside the app. */

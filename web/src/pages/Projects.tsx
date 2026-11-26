@@ -1,7 +1,8 @@
 import { GitPullRequest, Plus } from "lucide-react";
-import { ago, type ProjectRow, useResource } from "../api.ts";
+import { ago, type ProjectRow } from "../api.ts";
 import { Button, Card, Empty, Mono } from "../components/ui.tsx";
-import { Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
+import { navigate, useResource } from "../live.ts";
+import { landing, Link, projectsBusy, ProjectStatus, RunStatus } from "../nav.tsx";
 
 // One grid for the whole list: every row is a subgrid, so status, PR, verdict
 // and time line up in the same column from the first row to the last.
@@ -9,7 +10,7 @@ import { Link, navigate, ProjectStatus, RunStatus } from "../nav.tsx";
 const row = "col-span-full grid grid-cols-subgrid items-center gap-y-1.5 px-4";
 
 export function Projects() {
-  const { data, error } = useResource<{ projects: ProjectRow[] }>("/projects", (d) => d.projects.some((p) => p.setup === "running" || p.last?.status === "running"));
+  const { data, error } = useResource<{ projects: ProjectRow[] }>("/projects", projectsBusy);
   return (
     <>
       <div className="mb-4 flex items-center justify-between">
@@ -31,7 +32,7 @@ export function Projects() {
               <span className="text-right">Tested</span>
             </div>
             {data.projects.map((p) => (
-              <Link key={p.id} to={`/projects/${p.id}`} className={`${row} border-b border-border py-3 last:border-0 hover:bg-accent`}>
+              <Link key={p.id} to={`/projects/${p.id}/${landing(p)}`} className={`${row} border-b border-border py-3 last:border-0 hover:bg-accent`}>
                 <span className="col-span-full truncate font-medium sm:col-span-1">{p.repo}</span>
                 <span className="flex">
                   <ProjectStatus p={p} />

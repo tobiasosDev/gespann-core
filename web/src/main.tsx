@@ -1,9 +1,10 @@
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { api, type Me, type ProjectRow, useResource } from "./api.ts";
+import type { Me, ProjectRow, RunDetail } from "./api.ts";
 import { type Section, Sidebar } from "./components/Sidebar.tsx";
 import { LinkButton } from "./components/ui.tsx";
-import { Logo, usePath } from "./nav.tsx";
+import { usePath, useResource } from "./live.ts";
+import { landing, Logo, projectsBusy } from "./nav.tsx";
 import { NewProject } from "./pages/NewProject.tsx";
 import { Project } from "./pages/Project.tsx";
 import { Projects } from "./pages/Projects.tsx";
@@ -45,24 +46,12 @@ function SignIn({ me }: { me: Me }) {
   );
 }
 
-/** A bare project URL opens Setup until the project tests PRs, Runs after that. */
-function landing(p: Pick<ProjectRow, "setup" | "active">): "runs" | "setup" {
-  return p.setup === "ready" && p.active ? "runs" : "setup";
-}
-
 function Signed({ me, path }: { me: Me; path: string }) {
-  const { data, error, reload } = useResource<{ projects: ProjectRow[] }>("/projects", (d) => d.projects.some((p) => p.setup === "running" || p.setup === "queued" || p.last?.status === "running"));
+  const { data, error, reload } = useResource<{ projects: ProjectRow[] }>("/projects", projectsBusy);
   const projects = data?.projects ?? null;
-  const [runProject, setRunProject] = useState<number | null>(null);
-  useEffect(() => void reload(), [path, reload]);
-  // A bare project URL gets its tab written into the address bar, so reload and back keep it.
-  const bare = path.match(/^\/projects\/(\d+)$/);
-  const bareTab = bare ? projects?.find((p) => p.id === Number(bare[1])) : undefined;
-  useEffect(() => {
-    if (!bare || !bareTab) return;
-    history.replaceState(null, "", `/projects/${bare[1]}/${landing(bareTab)}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }, [bare?.[1], bareTab]);
+  // The run page and the sidebar share this request; the sidebar only needs the run's project.
+  const runId = path.match(/^\/runs\/(\d+)$/)?.[1];
+  const runProject = useResource<RunDetail>(runId ? `/runs/${runId}` : null).data?.project.id ?? null;
 
   let m: RegExpMatchArray | null;
   let section: Section = { kind: "projects" };
@@ -80,7 +69,7 @@ function Signed({ me, path }: { me: Me; path: string }) {
     if (!tab && error) page = <p className="text-bad">{error}</p>;
   } else if ((m = path.match(/^\/runs\/(\d+)$/))) {
     section = runProject ? { kind: "project", id: runProject, tab: "runs" } : { kind: "projects" };
-    page = <Run id={Number(m[1])} onProject={setRunProject} />;
+    page = <Run id={Number(m[1])} />;
   } else if (path === "/settings") {
     section = { kind: "settings" };
     page = <SettingsPage />;
@@ -92,12 +81,12 @@ function Signed({ me, path }: { me: Me; path: string }) {
   );
 }
 
+const SIGNED_OUT: Me = { user: null, githubReady: false, installUrl: null };
+
 function App() {
   const path = usePath();
-  const [me, setMe] = useState<Me | null>(null);
-  useEffect(() => {
-    api<Me>("/me").then(setMe, () => setMe({ user: null, githubReady: false, installUrl: null }));
-  }, []);
+  const { data, error } = useResource<Me>("/me");
+  const me = data ?? (error ? SIGNED_OUT : null);
   if (!me) return null;
   if (!me.user) return <SignIn me={me} />;
   return <Signed me={me} path={path} />;

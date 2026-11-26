@@ -69,7 +69,7 @@ test("a PR closed while its run waited is skipped, not refused", async () => {
   const p = db.createProject({ owner_id: u.id, installation_id: 9, repo: "acme/shop", repo_id: 1, default_branch: "main" });
   let asked = 0;
   const module: ServerModule = { name: "test", admit: () => { asked++; return "no plan"; } };
-  const github = { pull: async () => ({ number: 4, state: "closed", merged: true, head: { sha: "h" } }), installationToken: async () => "tok", updateCheck: async () => undefined } as unknown as Github;
+  const github = { pull: async () => ({ number: 4, state: "closed", merged: true, head: { sha: "h" } }), installationToken: async () => "tok", otherChecks: async () => ({ pending: [], failed: [], passed: ["ci"], statuses: true }), updateCheck: async () => undefined } as unknown as Github;
   const run = db.createRun({ project_id: p, pr: 4, title: "t", head: "h", base: "b", base_ref: "main", token: "0".repeat(32) });
   const job = db.job(db.enqueue(p, "run", run))!;
   const sandboxes = new Proxy({}, { get: () => () => { throw new Error("no sandbox in this test"); } }) as Sandboxes;

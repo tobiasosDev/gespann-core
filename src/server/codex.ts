@@ -29,6 +29,7 @@ export function open(secret: string, sealed: string): string {
   return Buffer.concat([d.update(body), d.final()]).toString("utf8");
 }
 
+// eslint-disable-next-line no-restricted-syntax -- lock: a restart ends the sign-in it guards, failPendingLogins marks it failed
 const running = new Set<number>();
 
 /** Starts the device-code sign-in for a user in the background; the UI polls the user's state. */
@@ -97,6 +98,7 @@ export function refreshDue(auth: string, now = Date.now()): boolean {
 }
 
 /** Owners whose sign-in one job may be refreshing right now; the others wait for it. */
+// eslint-disable-next-line no-restricted-syntax -- lock: a lost entry only means one more token refresh
 const refreshing = new Map<number, Promise<void>>();
 
 /**

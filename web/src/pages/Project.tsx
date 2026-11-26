@@ -1,11 +1,12 @@
 import { Check, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { ago, api, type ProjectDetail, useResource } from "../api.ts";
+import { useState, type ReactNode } from "react";
+import { ago, api, type ProjectDetail } from "../api.ts";
 import { PrRuns, RunsPanel } from "../components/PrRuns.tsx";
 import { ScreenSizes } from "../components/ScreenSizes.tsx";
 import { ShotList } from "../components/Shots.tsx";
 import { Button, Card, CardHeader, Input, Log, Mono, Textarea } from "../components/ui.tsx";
-import { JobStatus, navigate, ProjectStatus } from "../nav.tsx";
+import { navigate, useResource } from "../live.ts";
+import { JobStatus, ProjectStatus } from "../nav.tsx";
 
 type StepState = "done" | "running" | "failed" | "todo";
 
@@ -32,11 +33,10 @@ function Step({ n, title, state, summary, action, children }: { n: number; title
   );
 }
 
+const jobsBusy = (d: ProjectDetail) => d.jobs.some((j) => j.status === "queued" || j.status === "running");
+
 export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setup"; onChange?: () => void }) {
-  const { data: p, error, reload } = useResource<ProjectDetail>(
-    `/projects/${id}`,
-    (d) => d.jobs.some((j) => j.status === "queued" || j.status === "running"),
-  );
+  const { data: p, error, reload } = useResource<ProjectDetail>(`/projects/${id}`, jobsBusy);
   const [criteria, setCriteria] = useState("");
   const [model, setModel] = useState("");
   const [editing, setEditing] = useState(false);
@@ -44,12 +44,6 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const [busy, setBusy] = useState(false);
   /** Shown at once on a click; the server's list takes over again after the save. */
   const [sizes, setSizes] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (p && !editing) {
-      setCriteria(p.criteria);
-      setModel(p.model ?? "");
-    }
-  }, [p, editing]);
 
   if (error) return <p className="text-bad">{error}</p>;
   if (!p) return <p className="text-muted-foreground">Loading…</p>;
@@ -63,6 +57,11 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
       await reload();
       onChange?.();
     }
+  };
+  const edit = (text: string) => {
+    setCriteria(text);
+    setModel(p.model ?? "");
+    setEditing(true);
   };
   const setupJob = p.jobs.find((j) => j.kind === "setup");
   const suggestJob = p.jobs.find((j) => j.kind === "suggest");
@@ -131,7 +130,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                 <Button size="sm" disabled={busy || suggesting || codex !== "done"} onClick={() => post("/suggest")} title={codex !== "done" ? "Connect Codex in Settings first" : undefined}>
                   {suggesting ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Sparkles className="size-3.5" />} Suggest checks
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                <Button size="sm" variant="outline" onClick={() => edit(p.criteria)}>
                   Edit
                 </Button>
               </div>
@@ -147,10 +146,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               <div className="mt-2 flex gap-2">
                 <Button
                   size="sm"
-                  onClick={() => {
-                    setCriteria(p.suggestion ?? "");
-                    setEditing(true);
-                  }}
+                  onClick={() => edit(p.suggestion ?? "")}
                 >
                   Review and use
                 </Button>

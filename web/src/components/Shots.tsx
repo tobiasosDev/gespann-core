@@ -1,5 +1,5 @@
 import { Check, ChevronLeft, ChevronRight, ExternalLink, Maximize2, Minus, Scan, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useRef, useState } from "react";
 import { cn } from "./ui.tsx";
 
 export type ShotResult = "pass" | "fail" | "blocked";
@@ -60,7 +60,6 @@ export function ShotList({ shots, className }: { shots: Shot[]; className?: stri
 /** Full-screen viewer: fit to screen or actual size, arrow keys and swipe between shots. */
 function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: number; onIndex: (i: number) => void; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const strip = useRef<HTMLDivElement>(null);
   const [actual, setActual] = useState(false);
   const swipe = useRef<{ x: number; y: number } | null>(null);
   const shot = shots[index];
@@ -74,27 +73,26 @@ function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: 
     [index, many, onIndex, shots.length],
   );
 
-  useEffect(() => {
-    const d = ref.current;
+  const attach = useCallback((d: HTMLDialogElement | null) => {
+    ref.current = d;
     if (!d) return;
-    d.showModal();
+    if (!d.open) d.showModal();
     const root = document.documentElement;
     const before = root.style.overflow;
     root.style.overflow = "hidden";
     return () => {
+      ref.current = null;
       root.style.overflow = before;
       if (d.open) d.close();
     };
   }, []);
-
-  useEffect(() => {
-    strip.current?.querySelector<HTMLElement>(`[data-i="${index}"]`)?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
-  }, [index]);
+  // A new callback per index, so React calls it again and the strip scrolls the current thumbnail into view.
+  const current = useCallback((b: HTMLButtonElement | null) => b?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" }), [index]);
 
   if (!shot) return null;
   return (
     <dialog
-      ref={ref}
+      ref={attach}
       aria-label={`Screenshot ${index + 1} of ${shots.length}`}
       // StrictMode closes and reopens the dialog once in development; only a real close ends the viewer.
       onClose={(e) => {
@@ -183,12 +181,12 @@ function ShotViewer({ shots, index, onIndex, onClose }: { shots: Shot[]; index: 
           <span className="min-w-0 [overflow-wrap:anywhere]">{shot.caption}</span>
         </p>
         {many && (
-          <div ref={strip} className="mx-auto mt-3 flex max-w-3xl gap-2 overflow-x-auto pb-1">
+          <div className="mx-auto mt-3 flex max-w-3xl gap-2 overflow-x-auto pb-1">
             {shots.map((s, i) => (
               <button
                 key={s.src}
+                ref={i === index ? current : undefined}
                 type="button"
-                data-i={i}
                 onClick={() => {
                   setActual(false);
                   onIndex(i);

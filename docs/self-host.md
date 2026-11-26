@@ -211,7 +211,7 @@ export default (env) => ({
 
 ## GitHub App
 
-Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
+Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, commit statuses read, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
 
 ## How a project works
 
@@ -247,4 +247,6 @@ The OAuth side follows the MCP authorization spec: `401` with `resource_metadata
 ## Merge gate
 
 The gate is a per-project setting (*Merge gate* on the project page), off for new projects. When it is on, a PR with the label `gespann` cannot be merged until gespann's test of its current commit passes. gespann turns the PR into a draft, which GitHub does not merge, and back to ready for review once the test passes. This works on every GitHub plan, also on private repositories without required checks. A person releases a PR without a passing test by commenting `/gespann approve` (needs the `issue_comment` event; apps created before it was added need it ticked under the app's *Permissions & events*), by clicking *Ready for review*, or by removing the label. A new push needs a new pass or approval. GitHub lets an app switch a PR to draft only with *Contents: Read and write*; apps created before the gate need that permission raised and the installation needs to accept it. Without it, PRs are still tested but not held. Sandboxes only ever get a read-only token.
+
+A run starts only after the PR's other checks passed (see the recipe docs). CI that reports through check runs (GitHub Actions) is seen with the app's checks permission. CI that reports commit statuses (Buildkite, Jenkins, CircleCI) needs *Commit statuses: Read-only*; apps created before it was added need it ticked under *Permissions & events*, and the installation needs to accept it. Until then those statuses are not waited for.
 
