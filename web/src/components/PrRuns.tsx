@@ -74,10 +74,10 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
     // Running PRs sit in the side panel on wide screens and in a strip above the table below that.
     <tbody className={state === "running" ? "hidden panel:table-row-group" : undefined}>
       <tr className="border-b border-border">
-        {/* Phones: the explanation goes small under the title, so the title stays one line that is easy to spot while scrolling. */}
-        <th colSpan={7} scope="colgroup" className="pt-6 pr-3 pb-2 pl-4 text-left font-semibold sm:px-4 sm:pt-4">
-          {TITLE[state]}{" "}
-          <span className="mt-0.5 block text-small font-normal text-muted-foreground sm:mt-0 sm:ml-1.5 sm:inline sm:text-body">{SECTION[state](groups.length)}</span>
+        {/* Phones show only the title and the count: the explanation would take as much room as the rows, and the run page says it too. */}
+        <th colSpan={7} scope="colgroup" className="pt-5 pr-3 pb-2 pl-4 text-left font-semibold sm:px-4 sm:pt-4">
+          {TITLE[state]} <span className="ml-1 font-normal text-muted-foreground tabular-nums sm:hidden">{groups.length}</span>
+          <span className="ml-1.5 hidden font-normal text-muted-foreground sm:inline">{SECTION[state](groups.length)}</span>
         </th>
       </tr>
       {groups.map((g) => (
@@ -85,9 +85,9 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
           <td className="hidden px-4 py-2.5 sm:table-cell">
             <RunStatus run={g.latest} />
           </td>
-          <td className="relative py-3 pr-3 pl-4 break-words sm:static sm:w-full sm:max-w-0 sm:truncate sm:px-4 sm:py-2.5">
+          <td className="relative py-2.5 pr-3 pl-4 break-words sm:static sm:w-full sm:max-w-0 sm:truncate sm:px-4 sm:py-2.5">
             {/* Phones: a stripe in the result's color instead of a badge, the title first, then one quiet line in plain text. */}
-            <span aria-hidden="true" className={cn("absolute inset-y-3 left-0 w-1 rounded-r-full sm:hidden", LOOK[result(g.latest)].bar, state === "closed" && "opacity-40")} />
+            <span aria-hidden="true" className={cn("absolute inset-y-2.5 left-0 w-1 rounded-r-full sm:hidden", LOOK[result(g.latest)].bar, state === "closed" && "opacity-40")} />
             {/* The title is the row's link, so keyboard users reach every row at every width. */}
             <Link to={`/runs/${g.latest.id}`} className="block leading-snug hover:underline sm:inline sm:leading-normal" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
               <Mono className="hidden text-muted-foreground sm:inline">#{g.pr} </Mono>

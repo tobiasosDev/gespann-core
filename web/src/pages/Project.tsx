@@ -343,7 +343,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                 header={
                   <CardHeader
                     title="Pull requests"
-                    description="Each pull request once, with all its runs. Select a row to open its latest run."
+                    // Phones: the list explains itself, the line would only push it down.
+                    description={<span className="hidden sm:inline">Each pull request once, with all its runs. Select a row to open its latest run.</span>}
                     action={
                       <form
                         className="flex w-full items-center gap-2 sm:w-auto"
