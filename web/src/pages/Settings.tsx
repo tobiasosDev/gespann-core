@@ -1,6 +1,7 @@
 import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { ago, api, type Settings, type Tokens, useResource } from "../api.ts";
+import { ModuleSections } from "../components/ModuleSections.tsx";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Sandboxes } from "./Sandboxes.tsx";
 
@@ -126,6 +127,7 @@ export function SettingsPage() {
   return (
     <>
       <h1 className="mb-4 text-title font-semibold">Settings</h1>
+      <ModuleSections />
       <Card>
         <CardHeader
           title="Codex"

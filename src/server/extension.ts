@@ -23,9 +23,34 @@ export interface ModuleJobEnd extends ModuleJob {
   seconds: number;
 }
 
+/** One line of a module's card on the Settings page. */
+export type SettingsRow =
+  | { kind: "text"; text: string; tone?: "muted" | "warn" | "bad" }
+  /** A bar filled to `value` of `max`, with a line of text above it. */
+  | { kind: "meter"; label: string; value: number; max: number }
+  /** POSTs to `action` (a path under /api/). */
+  | { kind: "button"; label: string; action: string; primary?: boolean; danger?: boolean }
+  /** A number field; its button POSTs `{ [name]: number }` to `action` (a path under /api/). */
+  | { kind: "number"; label: string; name: string; value: number; min?: number; max?: number; step?: number; prefix?: string; button: string; action: string };
+
+/**
+ * A card on the Settings page. The page renders it with its own components; the module only
+ * describes it. Its actions answer JSON: `{ redirect }` leaves for that URL, `{ error }` shows the
+ * message under the card, anything else reloads the card.
+ */
+export interface SettingsSection {
+  /** Anchor on the Settings page: `/settings#<id>` scrolls to the card. */
+  id: string;
+  title: string;
+  description?: string;
+  badge?: { text: string; tone?: "ok" | "bad" | "warn" | "info" | "muted" };
+  rows: SettingsRow[];
+}
+
 /**
  * What `SERVER_MODULE=<path>` adds to the server. Every part is optional: pages of its own, links to
- * them in the sidebar, a say in whether a job starts, and a note when a job gave its sandbox back.
+ * them in the sidebar, cards on the Settings page, a say in whether a job starts, and a note when a
+ * job gave its sandbox back.
  */
 export interface ServerModule {
   /** Name for logs. */
@@ -36,6 +61,8 @@ export interface ServerModule {
   routes?(app: Hono<any>, helpers: { user(c: Context): ModuleUser | null }): void;
   /** Links in the sidebar, for signed-in users. A link to a page the module serves opens in the same tab. */
   readonly links?: { label: string; href: string }[];
+  /** Cards on the Settings page for the signed-in user, above the instance's own. */
+  settings?(user: ModuleUser): Promise<SettingsSection[]> | SettingsSection[];
   /** Before a job takes a sandbox. A string is the reason it does not start; it fails with that reason. */
   admit?(job: ModuleJob): Promise<string | null> | string | null;
   /** After a job ended and gave its sandbox back. Errors are logged, never fail the job. */

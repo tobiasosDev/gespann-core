@@ -33,6 +33,21 @@ export interface Settings {
   codex: { state: CodexState; account: string | null; login: { url: string | null; code: string | null; lines: string } | null };
 }
 
+/** A server module's card on the Settings page (SettingsSection in src/server/extension.ts). */
+export type SettingsRow =
+  | { kind: "text"; text: string; tone?: "muted" | "warn" | "bad" }
+  | { kind: "meter"; label: string; value: number; max: number }
+  | { kind: "button"; label: string; action: string; primary?: boolean; danger?: boolean }
+  | { kind: "number"; label: string; name: string; value: number; min?: number; max?: number; step?: number; prefix?: string; button: string; action: string };
+
+export interface SettingsSection {
+  id: string;
+  title: string;
+  description?: string;
+  badge?: { text: string; tone?: "ok" | "bad" | "warn" | "info" | "muted" };
+  rows: SettingsRow[];
+}
+
 export interface RunningBox {
   job_id: number;
   kind: "login" | "setup" | "run" | "suggest";

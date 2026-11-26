@@ -52,7 +52,7 @@ export interface AppDeps {
   githubReady: () => boolean;
   /** How many jobs the sandbox host runs at once, for all users together; absent without sandboxes. */
   parallel?: number;
-  /** `SERVER_MODULE`: its routes and sidebar links. */
+  /** `SERVER_MODULE`: its routes, sidebar links and Settings cards. */
   module?: ServerModule | null;
 }
 
@@ -224,6 +224,21 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.get("/api/settings", (c) => {
     const codex = db.codex(me(c).id);
     return c.json({ codex: { state: codex?.codex_state ?? "none", account: codex?.codex_account ?? null, login: codex?.codex_login ? JSON.parse(codex.codex_login) : null } });
+  });
+
+  // The server module's cards. A module that fails costs only its own cards, not the page.
+  app.get("/api/settings/sections", async (c) => {
+    // Per-user plan and usage: never from a cache.
+    c.header("Cache-Control", "no-store");
+    const m = d.module;
+    if (!m?.settings) return c.json({ sections: [] });
+    try {
+      return c.json({ sections: await m.settings({ id: me(c).id, login: me(c).login }) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(JSON.stringify({ level: "error", at: `${m.name} settings`, message }));
+      return c.json({ sections: [], error: `${m.name} could not load: ${message}` });
+    }
   });
 
   app.post("/api/settings/codex/login", (c) => {
