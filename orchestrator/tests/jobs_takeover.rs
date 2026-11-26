@@ -247,7 +247,8 @@ async fn world(kind: &str, refuse: Option<&'static str>) -> World {
     let data = tempfile::tempdir().unwrap();
     let sb = Arc::new(FakeSandboxes::default());
     let cfg = Config { base_url: "https://gespann.test".into(), ui_url: url.clone(), data_dir: data.path().to_string_lossy().into(), session_secret: SECRET.into(), gespann_ref: "main".into(), ..Default::default() };
-    let ctx = Arc::new(Ctx { db, sb: sb.clone(), ui: Ui::new(&url, SECRET).with_patience(Duration::from_secs(5)), cfg, locks: Locks::default() });
+    let pool = gespann_orchestrator::sandbox::pool::Pool::single(sb.clone(), gespann_orchestrator::worker::Parallel { jobs: 1, why: "test".into() });
+    let ctx = Arc::new(Ctx { db, pool, ui: Ui::new(&url, SECRET).with_patience(Duration::from_secs(5)), cfg, locks: Locks::default() });
     World { ctx, sb, seen, _data: data }
 }
 

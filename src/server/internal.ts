@@ -16,14 +16,38 @@ export function internalToken(sessionSecret: string): string {
   return createHash("sha256").update(`gespann-internal:${sessionSecret}`).digest("hex");
 }
 
-/** What the orchestrator writes to `settings.orchestrator` every 10 s. */
-export interface OrchestratorState {
+/** One sandbox provider of the orchestrator and whom it serves (`SANDBOX_PROVIDER_BY_USER`). */
+export interface OrchestratorProvider {
+  spec: string;
   kind: string;
   parallel: number;
   why: string;
+  /** Lower-case GitHub logins this provider serves by name. */
+  logins: string[];
+  /** Serves everyone not named. */
+  default: boolean;
+}
+
+/** What the orchestrator writes to `settings.orchestrator` every 10 s. */
+export interface OrchestratorState {
+  /** The default provider's kind and size (null without one). */
+  kind: string | null;
+  parallel: number | null;
+  why: string | null;
+  /** Every provider; missing from orchestrators before several providers. */
+  providers?: OrchestratorProvider[];
   instance: string;
   /** Its last beat: an ISO time, or milliseconds since 1970. */
   beat: string | number;
+}
+
+/** How many jobs at once the sandbox provider of this user runs; null when none serves them or the orchestrator has not said. */
+export function hostSizeFor(s: OrchestratorState | null, login: string): number | null {
+  if (!s) return null;
+  if (!Array.isArray(s.providers)) return typeof s.parallel === "number" ? s.parallel : null;
+  const l = login.toLowerCase();
+  const p = s.providers.find((x) => x.logins?.includes(l)) ?? s.providers.find((x) => x.default);
+  return p && typeof p.parallel === "number" ? p.parallel : null;
 }
 
 /** The orchestrator counts as present while its last beat is younger than this. */

@@ -16,7 +16,7 @@ import type { Db, Project, User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
-import { mountInternal, orchestratorPresent, orchestratorState } from "./internal.ts";
+import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
@@ -116,8 +116,9 @@ export function createApp(d: AppDeps): Hono<Env> {
   const secure = config.baseUrl.startsWith("https://");
   // ALLOWED_USERS closes the instance to everyone else, including users who signed in before.
   const allowed = (login: string) => !config.allowedUsers.length || config.allowedUsers.includes(login.toLowerCase());
-  // Read per request: the orchestrator publishes its host size while it runs.
-  const hostSize = (): number | null => orchestratorState(db)?.parallel ?? null;
+  // Read per request: the orchestrator publishes each sandbox provider's size while it runs; a user's
+  // number is the one of the provider that serves them.
+  const hostSize = (login: string): number | null => hostSizeFor(orchestratorState(db), login);
 
   // The orchestrator's API comes first: it has its own token and needs no session.
   mountInternal(app, d);
@@ -287,7 +288,7 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
   // The most a user may choose: the host's number, lowered by the server module's cap (e.g. a plan's).
   const ceiling = (u: User) => {
-    const host = hostSize();
+    const host = hostSize(u.login);
     const cap = capFor(d.module, { id: u.id, login: u.login });
     const most = [host, cap?.jobs].filter((n): n is number => typeof n === "number");
     return { host, cap, most: most.length ? Math.min(...most) : null };

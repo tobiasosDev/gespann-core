@@ -187,7 +187,7 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
             None => {
                 cx.log(&format!("✗ {e:#}"));
                 if !cx.stopped() {
-                    db.update_run(run.id, &[("error", text(cut(&format!("{e:#}"), 4000)))])?;
+                    db.update_run(run.id, &[("error", text(cut(&cx.public(&format!("{e:#}")), 4000)))])?;
                 }
             }
         },
@@ -435,7 +435,7 @@ async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &
     if let Err(e) = attempt_tester(cx, p, run, b, gid, dir, pr, n, &mut recording).await {
         cx.log(&format!("✗ {e:#}"));
         if !cx.stopped() {
-            cx.ctx.db.update_run(run.id, &[("error", text(cut(&format!("{e:#}"), 4000)))])?;
+            cx.ctx.db.update_run(run.id, &[("error", text(cut(&cx.public(&format!("{e:#}")), 4000)))])?;
         }
     }
 

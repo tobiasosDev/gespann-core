@@ -25,12 +25,14 @@ pub(crate) struct Cx<'a> {
     pub ctx: &'a Ctx,
     pub jr: Journal,
     pub job: &'a Job,
+    /// The sandbox provider of the project's owner.
+    pub sb: Arc<dyn Sandboxes>,
 }
 
 impl Cx<'_> {
     /// A line for the job log, which the UI and MCP show.
     pub fn log(&self, line: &str) {
-        let _ = self.ctx.db.append_log(self.job.id, line);
+        let _ = self.ctx.db.append_log(self.job.id, &self.public(line));
     }
 
     /// A log line written once under `key`: after a takeover it does not claim again that a step starts.
@@ -45,7 +47,12 @@ impl Cx<'_> {
     }
 
     pub fn sb(&self) -> &dyn Sandboxes {
-        &*self.ctx.sb
+        &*self.sb
+    }
+
+    /// `Sandboxes::public`: an error as users may read it (job log, run error, setup error).
+    pub fn public(&self, text: &str) -> String {
+        self.sb.public(text)
     }
 
     /// The job was cancelled, or a newer push superseded its run: what it still runs stops, and it reports nothing.
@@ -93,7 +100,18 @@ pub async fn process(ctx: Arc<Ctx>, job: Job) {
         // The lease runs out and another pass picks the job up again.
         Err(e) => return crate::log("error", &format!("job {}: could not read its project: {e:#}", job.id)),
     };
-    let cx = Cx { ctx, jr: Journal::new(ctx.db.clone(), job.id), job: &job };
+    let sb = match ctx.sandboxes_for(p.owner_id) {
+        Ok(sb) => sb,
+        Err(e) => {
+            // The worker starts only jobs whose owner has a provider; this one was taken over after the
+            // owner's provider left the config. It waits in the queue, journal kept, like every job of a
+            // user without a provider, and goes on where it was once a provider serves them again.
+            crate::log("warn", &format!("job {}: {e:#}; it waits in the queue", job.id));
+            let _ = ctx.db.with(|c| c.execute("update jobs set status = 'queued', owner = null, heartbeat = null where id = ? and status = 'running'", [job.id]));
+            return;
+        }
+    };
+    let cx = Cx { ctx, jr: Journal::new(ctx.db.clone(), job.id), job: &job, sb };
     match body(&cx, &p).await {
         Ok(Flow::Ended) => {}
         Ok(Flow::Done) => {
@@ -183,6 +201,8 @@ async fn body(cx: &Cx<'_>, p: &Project) -> Result<Flow> {
 /// reports the failure on its PR.
 async fn failed(cx: &Cx<'_>, p: &Project, message: &str) {
     let (ctx, job) = (cx.ctx, cx.job);
+    // The error reaches the job log, the run page, the PR comment and MCP.
+    let message = &cx.public(message);
     cx.log(&format!("✗ {message}"));
     release_slots(cx).await;
     if job.kind == "run" && cx.stopped() {

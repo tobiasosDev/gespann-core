@@ -128,6 +128,10 @@ impl ShellSandboxes for Ssh {
 
 #[async_trait]
 impl Sandboxes for Ssh {
+    fn public(&self, text: &str) -> String {
+        public_text(&self.o.host, text)
+    }
+
     fn kind(&self) -> &str {
         "ssh"
     }
@@ -263,5 +267,94 @@ mod tests {
         assert!(a.contains("ControlPath=/tmp/gsp-x/%C") && a.contains("StrictHostKeyChecking=yes") && a.contains("UserKnownHostsFile=/kh"), "{a}");
         assert!(a.ends_with("-i /k -o IdentitiesOnly=yes -p 2222 ci@h"), "{a}");
         assert_eq!(s.root_expr(), r#""$HOME"/'r'"#);
+    }
+}
+
+/// `Ssh::public`: the host becomes "the sandbox host" where it stands as a whole name (`user@host`
+/// always; the bare host only when it is an address or a domain, so an alias like `ci` never touches
+/// `npm ci`), and every sandbox directory only its name: gespann names each one `gespann-…`, under any
+/// `SANDBOX_ROOT` (`/home/ci/gespann-sandboxes/gespann-acme-shop-x1` → `gespann-acme-shop-x1`).
+pub fn public_text(host: &str, text: &str) -> String {
+    static DIR: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    // A path that starts a word (not the `//github.com/…` of a URL), up to its last `gespann-…` part:
+    // the sandbox (a root named `gespann-sandboxes` comes before it).
+    let dir = DIR.get_or_init(|| regex::Regex::new(r#"(^|[\s'"(=:])~?(?:/[A-Za-z0-9._-]+)*/(gespann-[A-Za-z0-9._-]+)"#).expect("regex"));
+    // Directories first: a host name inside a path must not split it before it is shortened.
+    let mut out = dir.replace_all(text, "${1}${2}").into_owned();
+    let bare = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let named = |h: &str| h.contains('.') || h.contains(':');
+    if host.contains('@') || named(host) {
+        out = replace_name(&out, host);
+    }
+    // Also with another user in front (`runner@ci.example.com`).
+    if bare != host && named(bare) {
+        out = replace_name(&out, bare);
+    }
+    out
+}
+
+/// Replaces every whole occurrence of the host name `h`: not inside a longer name (before it no
+/// letter, digit, `.`, `_` or `-`; after it none of those, and a dot only as punctuation).
+fn replace_name(text: &str, h: &str) -> String {
+    let name = |c: char| c.is_ascii_alphanumeric() || "._-".contains(c);
+    let mut out = String::new();
+    let mut last = 0;
+    for (i, _) in text.match_indices(h) {
+        if i < last {
+            continue;
+        }
+        let before = text[..i].chars().next_back();
+        let mut after = text[i + h.len()..].chars();
+        let next = after.next();
+        let whole_before = before.is_none_or(|c| !name(c));
+        let whole_after = match next {
+            None => true,
+            Some('.') => after.next().is_none_or(|c| !c.is_ascii_alphanumeric()),
+            Some(c) => !name(c),
+        };
+        if whole_before && whole_after {
+            out.push_str(&text[last..i]);
+            out.push_str("the sandbox host");
+            last = i + h.len();
+        }
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+#[cfg(test)]
+mod public_tests {
+    use super::public_text;
+
+    const HOST: &str = "ci@192.0.2.1";
+
+    #[test]
+    fn job_logs_name_neither_the_host_nor_its_directories() {
+        let p = |t: &str| public_text(HOST, t);
+        assert_eq!(p("ssh ci@192.0.2.1: Connection refused"), "ssh the sandbox host: Connection refused");
+        assert_eq!(p("could not create the sandbox directory on ci@192.0.2.1: disk full"), "could not create the sandbox directory on the sandbox host: disk full");
+        assert_eq!(p("created sandbox /home/ci/gespann-sandboxes/gespann-acme-shop-x1 (ssh)"), "created sandbox gespann-acme-shop-x1 (ssh)");
+        assert_eq!(p("cd ~/gespann-sandboxes/gespann-acme-shop-x1/repo failed on 192.0.2.1."), "cd gespann-acme-shop-x1/repo failed on the sandbox host.");
+        // SANDBOX_ROOT=~, and a root behind a symlink (the directory is the physical path).
+        assert_eq!(p("created sandbox /home/ci/gespann-acme-shop-x1 (ssh)"), "created sandbox gespann-acme-shop-x1 (ssh)");
+        assert_eq!(p("sandbox directory /mnt/disk2/sbx/gespann-login-7 is gone"), "sandbox directory gespann-login-7 is gone");
+        assert_eq!(p("npm ci failed: exit 1"), "npm ci failed: exit 1");
+    }
+
+    #[test]
+    fn other_text_stays_as_it_is() {
+        let p = |t: &str| public_text(HOST, t);
+        assert_eq!(p("fetch https://github.com/acme/gespann-core failed"), "fetch https://github.com/acme/gespann-core failed");
+        assert_eq!(p("10.192.0.2.15 and 192.0.2.10 are other hosts"), "10.192.0.2.15 and 192.0.2.10 are other hosts");
+        // A host alias without a domain: only `user@alias` is replaced, never the word on its own.
+        assert_eq!(public_text("gespann@ci", "npm ci failed on gespann@ci"), "npm ci failed on the sandbox host");
+        assert_eq!(public_text("ci", "npm ci failed: ssh ci timed out"), "npm ci failed: ssh ci timed out");
+        // A domain inside a longer one is another host.
+        let d = |t: &str| public_text("ci.example.com", t);
+        assert_eq!(d("ssh ci.example.com: refused; mirror ci.example.com.au is up"), "ssh the sandbox host: refused; mirror ci.example.com.au is up");
+        assert_eq!(d("runner@ci.example.com: Permission denied (publickey)"), "runner@the sandbox host: Permission denied (publickey)");
+        assert_eq!(d("ci.example.com,ci.example.com"), "the sandbox host,the sandbox host");
+        assert_eq!(d("sandbox directory /mnt/ci.example.com/sbx/gespann-login-7 is gone"), "sandbox directory gespann-login-7 is gone");
+        assert_eq!(p("PATH=/usr/bin:/mnt/disk2/sbx/gespann-login-7/bin"), "PATH=/usr/bin:gespann-login-7/bin");
     }
 }

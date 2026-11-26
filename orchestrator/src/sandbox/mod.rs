@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 pub mod docker;
+pub mod pool;
+pub mod remote;
 pub mod scripts;
 pub mod shell;
 pub mod ssh;
@@ -58,10 +60,10 @@ pub struct CreateOpts {
     pub ttl_seconds: Option<u64>,
 }
 
-/// A sandbox provider: Docker or SSH.
+/// A sandbox provider: Docker, SSH, or a sandbox service over HTTP (`remote`).
 #[async_trait]
 pub trait Sandboxes: Send + Sync {
-    /// "ssh" or "docker", for logs.
+    /// "ssh", "docker" or the sandbox service's own name, for logs.
     fn kind(&self) -> &str;
     /// The new sandbox's id (SSH: its absolute directory; Docker: the container name).
     async fn create(&self, opts: CreateOpts) -> Result<String>;
@@ -103,6 +105,20 @@ pub trait Sandboxes: Send + Sync {
     fn tester_note(&self) -> Option<String> {
         None
     }
+    /// `text` as users may read it in a job log, a run's error or Settings: without the provider's
+    /// internals (an SSH host's address, its directories). The orchestrator's own log keeps them.
+    fn public(&self, text: &str) -> String {
+        text.to_string()
+    }
+    /// How many jobs the provider itself allows at once (a sandbox service's quota), when it says.
+    fn max_jobs(&self) -> Option<u32> {
+        None
+    }
+    /// Background processes are polled no more often than this; a sandbox service with many jobs
+    /// asks for fewer calls.
+    fn min_poll(&self) -> Duration {
+        Duration::ZERO
+    }
 }
 
 /// A fresh handle for a background command, as the TypeScript `start` makes them (`Date.now() * 100 + n`).
@@ -112,11 +128,12 @@ pub fn new_handle() -> u64 {
     now * 100 + SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 100
 }
 
-/// The provider `SANDBOX_PROVIDER` names; None when the instance has none.
-pub fn from_config(cfg: &Config) -> Result<Option<Arc<dyn Sandboxes>>> {
-    match cfg.sandbox_provider.as_str() {
+/// The provider one spec names (`docker`, `ssh` or `remote`); None for "" (none).
+pub async fn from_spec(cfg: &Config, spec: &str) -> Result<Option<Arc<dyn Sandboxes>>> {
+    match spec {
         "docker" => Ok(Some(Arc::new(docker::Docker::new(cfg.docker.clone())))),
         "ssh" => Ok(Some(Arc::new(ssh::Ssh::new(ssh_options(cfg)?)))),
+        "remote" => Ok(Some(Arc::new(remote::Remote::connect(&cfg.remote.url, &cfg.remote.token).await?))),
         _ => Ok(None),
     }
 }
@@ -203,7 +220,7 @@ pub async fn wait_long(sb: &dyn Sandboxes, id: &str, pid: u64, opts: WaitOpts<'_
     let mut failing_since: Option<Instant> = None;
     let mut tail = String::new();
     // A zero poll means the default.
-    let poll = if opts.poll.is_zero() { Duration::from_secs(2) } else { opts.poll };
+    let poll = if opts.poll.is_zero() { Duration::from_secs(2) } else { opts.poll }.max(sb.min_poll());
     loop {
         // Short polls: every run waits on several of these, and each wait loses half an interval on average.
         tokio::time::sleep(poll).await;

@@ -88,7 +88,7 @@ impl Journal {
             }
         };
         let deadline = deadline_of(&proc, opts.timeout);
-        let r = wait_long(sb, &proc.sandbox_id, proc.pid, WaitOpts { deadline, cancelled: opts.cancelled, on_tick: opts.on_tick, poll: self.poll }).await?;
+        let r = wait_long(sb, &proc.sandbox_id, proc.pid, WaitOpts { deadline, cancelled: opts.cancelled, on_tick: opts.on_tick, poll: self.poll.max(sb.min_poll()) }).await?;
         self.db.step_put(self.job_id, key, &serde_json::to_string(&r)?)?;
         Ok(r)
     }

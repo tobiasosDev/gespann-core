@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use tokio::task::{Id, JoinSet};
 
+use crate::sandbox::Sandboxes;
 use crate::Ctx;
 
 /// A running job whose orchestrator has not beaten for this long is taken over.
@@ -38,12 +39,16 @@ pub fn jobs_for(cpus: u32, memory_gb: f64) -> u32 {
     by_cpu.min(by_mem).max(1)
 }
 
-/// MAX_PARALLEL_JOBS, else 4 CPUs and 8 GB per job of the host, else 2.
-pub async fn parallel_jobs(ctx: &Ctx) -> Parallel {
-    if let Some(max) = ctx.cfg.max_parallel {
+/// How many jobs one provider runs at once: MAX_PARALLEL_JOBS, else what a sandbox service allows,
+/// else 4 CPUs and 8 GB per job of the host, else 2.
+pub async fn parallel_jobs(max_parallel: Option<u32>, sb: &dyn Sandboxes) -> Parallel {
+    if let Some(max) = max_parallel {
         return Parallel { jobs: max, why: "MAX_PARALLEL_JOBS".into() };
     }
-    match ctx.sb.capacity().await {
+    if let Some(n) = sb.max_jobs() {
+        return Parallel { jobs: n.max(1), why: format!("the sandbox service allows {n} at once") };
+    }
+    match sb.capacity().await {
         Ok(None) => Parallel { jobs: DEFAULT_PARALLEL, why: "default: the sandbox provider does not report its size".into() },
         Ok(Some((cpus, mem))) if cpus > 0 && mem > 0.0 => Parallel {
             jobs: jobs_for(cpus, mem),
@@ -63,10 +68,11 @@ fn ago(secs: i64) -> String {
     (chrono::Utc::now() - chrono::Duration::seconds(secs)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
-/// The jobs this instance runs, by task.
+/// The jobs this instance runs, by task, and the provider each one holds a place on.
 struct Running {
     tasks: JoinSet<()>,
     jobs: HashMap<Id, i64>,
+    provider: HashMap<i64, Option<usize>>,
 }
 
 impl Running {
@@ -76,10 +82,15 @@ impl Running {
     fn has(&self, id: i64) -> bool {
         self.jobs.values().any(|&j| j == id)
     }
-    fn spawn(&mut self, ctx: &Arc<Ctx>, job: crate::db::Job) {
+    /// Jobs running on provider `i`.
+    fn on(&self, i: usize) -> u32 {
+        self.provider.values().filter(|p| **p == Some(i)).count() as u32
+    }
+    fn spawn(&mut self, ctx: &Arc<Ctx>, job: crate::db::Job, provider: Option<usize>) {
         let id = job.id;
         let handle = self.tasks.spawn(crate::jobs::process(ctx.clone(), job));
         self.jobs.insert(handle.id(), id);
+        self.provider.insert(id, provider);
     }
     /// Forgets the jobs whose task ended. A task that panicked loses its lease, so the job is
     /// picked up again (and fails once it was taken over `MAX_TAKEOVERS` times).
@@ -90,6 +101,7 @@ impl Running {
                 Err(e) => (e.id(), Some(e.to_string())),
             };
             let Some(job) = self.jobs.remove(&task) else { continue };
+            self.provider.remove(&job);
             if let Some(p) = panic {
                 crate::log("error", &format!("job {job} crashed the orchestrator's task: {p}"));
                 let _ = ctx.db.with(|c| c.execute("update jobs set owner = null, heartbeat = null where id = ? and owner = ? and status = 'running'", rusqlite::params![job, instance]));
@@ -100,8 +112,8 @@ impl Running {
 
 /// Runs until `shutdown` is cancelled, then stops claiming, aborts its job tasks (their background
 /// processes keep running), releases its leases and returns.
-pub async fn run(ctx: Arc<Ctx>, parallel: Parallel, instance: String, shutdown: tokio_util::sync::CancellationToken) {
-    let mut running = Running { tasks: JoinSet::new(), jobs: HashMap::new() };
+pub async fn run(ctx: Arc<Ctx>, instance: String, shutdown: tokio_util::sync::CancellationToken) {
+    let mut running = Running { tasks: JoinSet::new(), jobs: HashMap::new(), provider: HashMap::new() };
     let mut logins: JoinSet<()> = JoinSet::new();
     let mut signing_in: HashMap<Id, i64> = HashMap::new();
     let mut last_publish: Option<Instant> = None;
@@ -134,7 +146,7 @@ pub async fn run(ctx: Arc<Ctx>, parallel: Parallel, instance: String, shutdown: 
             };
             signing_in.remove(&task);
         }
-        if let Err(e) = tick(&ctx, &parallel, &instance, &mut running) {
+        if let Err(e) = tick(&ctx, &instance, &mut running) {
             crate::log("error", &format!("queue: {e:#}"));
         }
         // Codex sign-ins the UI started: one per user at a time.
@@ -155,7 +167,7 @@ pub async fn run(ctx: Arc<Ctx>, parallel: Parallel, instance: String, shutdown: 
         }
         if last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_EVERY) {
             last_publish = Some(Instant::now());
-            let state = serde_json::json!({ "kind": ctx.sb.kind(), "parallel": parallel.jobs, "why": parallel.why, "instance": instance, "beat": crate::db::now() });
+            let state = published(&ctx, &instance);
             if let Err(e) = ctx.db.set_setting("orchestrator", &state.to_string()) {
                 crate::log("error", &format!("settings.orchestrator: {e:#}"));
             }
@@ -174,27 +186,75 @@ pub async fn run(ctx: Arc<Ctx>, parallel: Parallel, instance: String, shutdown: 
 }
 
 /// One pass: beat, take over stale jobs, claim queued ones.
-fn tick(ctx: &Arc<Ctx>, parallel: &Parallel, instance: &str, running: &mut Running) -> anyhow::Result<()> {
+fn tick(ctx: &Arc<Ctx>, instance: &str, running: &mut Running) -> anyhow::Result<()> {
     ctx.db.beat(instance, &running.ids())?;
+    let mut owners: HashMap<i64, Option<usize>> = HashMap::new();
+    let mut provider_of = |owner: i64| -> anyhow::Result<Option<usize>> {
+        if let Some(p) = owners.get(&owner) {
+            return Ok(*p);
+        }
+        let p = ctx.pool.index_for(ctx.db.user_login(owner)?.as_deref());
+        owners.insert(owner, p);
+        Ok(p)
+    };
     for job in ctx.db.adopt_stale(instance, &ago(STALE_SECS))? {
         if running.has(job.id) {
             continue;
         }
         crate::log("info", &format!("job {} was running when its orchestrator stopped; picking it up where it was", job.id));
-        running.spawn(ctx, job);
+        // A job that was running counts on its provider even when that is full now.
+        let p = ctx.db.project(job.project_id)?.map(|p| provider_of(p.owner_id)).transpose()?.flatten();
+        running.spawn(ctx, job, p);
     }
-    while (running.jobs.len() as u32) < parallel.jobs {
-        let Some(job) = ctx.db.next_job()? else { break };
-        if running.has(job.id) {
-            break;
+    // One at a time: each start can change which jobs may go next (a setup runs alone, owner limits).
+    // Paged, so jobs waiting for a full provider never hide the jobs of another one behind them.
+    'claim: loop {
+        let mut after = 0;
+        loop {
+            let page = ctx.db.next_jobs(after, CANDIDATES)?;
+            let Some((last, _)) = page.last() else { break 'claim };
+            after = last.id;
+            for (job, owner) in page {
+                if running.has(job.id) {
+                    continue;
+                }
+                // No provider serves the owner: the job waits. A full provider holds up only its own users.
+                let Some(p) = provider_of(owner)? else { continue };
+                if running.on(p) >= ctx.pool.get(p).parallel.jobs {
+                    continue;
+                }
+                if !ctx.db.claim_job(job.id, instance)? {
+                    continue;
+                }
+                let job = ctx.db.job(job.id)?.unwrap_or(job);
+                running.spawn(ctx, job, Some(p));
+                continue 'claim;
+            }
         }
-        if !ctx.db.claim_job(job.id, instance)? {
-            continue;
-        }
-        let job = ctx.db.job(job.id)?.unwrap_or(job);
-        running.spawn(ctx, job);
     }
     Ok(())
+}
+
+/// Queued jobs looked at per pass for one whose provider has room.
+const CANDIDATES: u32 = 500;
+
+/// `settings.orchestrator`: the default provider's size at the top (what Settings read before several
+/// providers), and every provider with whom it serves.
+fn published(ctx: &Ctx, instance: &str) -> serde_json::Value {
+    let all = ctx.pool.providers();
+    let main = all.iter().find(|p| p.default).or(all.first());
+    let providers: Vec<serde_json::Value> = all
+        .iter()
+        .map(|p| serde_json::json!({ "spec": p.spec, "kind": p.sb.kind(), "parallel": p.parallel.jobs, "why": p.parallel.why, "logins": p.logins, "default": p.default }))
+        .collect();
+    serde_json::json!({
+        "kind": main.map(|p| p.sb.kind().to_string()),
+        "parallel": main.map(|p| p.parallel.jobs),
+        "why": main.map(|p| p.parallel.why.clone()),
+        "providers": providers,
+        "instance": instance,
+        "beat": crate::db::now(),
+    })
 }
 
 /// Delivers due outbox items; a failed one waits longer each time.
