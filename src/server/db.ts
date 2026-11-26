@@ -589,6 +589,11 @@ export class Db {
     this.run("update jobs set status = 'done', started = null, heartbeat = null, finished = ? where id = ?", now(), id);
   }
 
+  /** The run passed its PR's other checks: after a restart it is no longer shown as waiting for CI. */
+  passedChecks(id: number): void {
+    this.run("update jobs set not_before = null where id = ?", id);
+  }
+
   /** Runs of the project that wait in the queue for their PR's other checks (CI), not for a sandbox. */
   runsWaitingForChecks(projectId: number): Set<number> {
     return new Set(this.all<{ run_id: number }>("select run_id from jobs where project_id = ? and status = 'queued' and run_id is not null and not_before is not null", projectId).map((j) => j.run_id));
