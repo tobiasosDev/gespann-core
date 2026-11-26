@@ -5,6 +5,10 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
+  /* From here the sidebar shows project names; below it (down to md) it folds into a rail of icons. */
+  --breakpoint-sidebar: 90rem;
+  /* From here the Runs page shows the side panel with the running run and the recent results. */
+  --breakpoint-panel: 112.5rem;
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", ui-monospace, monospace;
   --color-background: var(--background);

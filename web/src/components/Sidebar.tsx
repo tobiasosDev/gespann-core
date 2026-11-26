@@ -1,5 +1,5 @@
 import { BookOpen, Check, ChevronRight, FolderGit2, History, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { api, type Me, type ProjectRow } from "../api.ts";
 import { Link, Logo, usePath } from "../nav.tsx";
 import { cn } from "./ui.tsx";
@@ -165,9 +165,95 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
 
   return (
     <>
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 border-r border-border bg-card md:block">{nav}</aside>
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-72 border-r border-border bg-card sidebar:block">{nav}</aside>
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-[60px] border-r border-border bg-card md:block sidebar:hidden">
+        <Rail me={me} section={section} projects={projects} />
+      </aside>
       <MobileBar section={section}>{nav}</MobileBar>
     </>
+  );
+}
+
+/** Two letters for a repository in the rail: "gespann-core" gives "gc", "acurio" gives "ac". */
+function initials(repo: string): string {
+  const name = repo.split("/").pop() ?? repo;
+  const parts = name.split(/[-_.]+/).filter(Boolean);
+  return (parts.length > 1 ? `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}` : name.slice(0, 2)).toLowerCase();
+}
+
+function railClass(active?: boolean) {
+  return cn(
+    "relative flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+    active && "bg-accent text-foreground",
+  );
+}
+
+/** Between md and the sidebar breakpoint the sidebar folds into a rail of icons, so the page keeps the width. */
+function Rail({ me, section, projects }: { me: Me; section: Section; projects: ProjectRow[] | null }) {
+  const current = section.kind === "project" ? section.id : null;
+  const tab = section.kind === "project" ? section.tab : null;
+  return (
+    <nav className="flex h-full flex-col items-center gap-1 py-4" aria-label="Main">
+      <Link to="/projects" className="mb-3 flex size-10 items-center justify-center" aria-label="gespann, all projects" title="All projects">
+        <Logo />
+      </Link>
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto">
+        {projects?.map((p) => {
+          const here = p.id === current;
+          return (
+            <Fragment key={p.id}>
+              <Link
+                to={`/projects/${p.id}`}
+                className={cn(railClass(here), "border font-mono text-[12px]", here ? "border-foreground/25" : "border-border")}
+                title={`${p.repo}, ${DOT_LABEL[projectDot(p)]}`}
+                aria-label={p.repo}
+                aria-current={here && tab === null ? "page" : undefined}
+              >
+                {initials(p.repo)}
+                <span className="absolute top-1 right-1 flex">
+                  <StatusDot tone={projectDot(p)} label={DOT_LABEL[projectDot(p)]} />
+                </span>
+              </Link>
+              {here && (
+                <>
+                  <Link to={`/projects/${p.id}/runs`} className={railClass(tab === "runs")} title="Runs" aria-label="Runs" aria-current={tab === "runs" ? "page" : undefined}>
+                    <History className="size-4" />
+                  </Link>
+                  <Link to={`/projects/${p.id}/setup`} className={railClass(tab === "setup")} title="Setup" aria-label="Setup" aria-current={tab === "setup" ? "page" : undefined}>
+                    <Wrench className="size-4" />
+                  </Link>
+                  <span className="my-1 h-px w-7 bg-border" aria-hidden="true" />
+                </>
+              )}
+            </Fragment>
+          );
+        })}
+        <Link to="/projects/new" className={railClass(section.kind === "new")} title="Add project" aria-label="Add project">
+          <Plus className="size-4" />
+        </Link>
+      </div>
+      <div className="flex flex-col items-center gap-1 border-t border-border pt-3">
+        <Link to="/settings" className={railClass(section.kind === "settings")} title="Settings" aria-label="Settings" aria-current={section.kind === "settings" ? "page" : undefined}>
+          <Settings className="size-4" />
+        </Link>
+        <a href="https://github.com/tobiasosDev/gespann-core" target="_blank" rel="noreferrer" className={railClass()} title="Docs" aria-label="Docs">
+          <BookOpen className="size-4" />
+        </a>
+        {me.user && (
+          <button
+            className={cn(railClass(), "cursor-pointer")}
+            title={`Sign out ${me.user.login}`}
+            aria-label={`Sign out ${me.user.login}`}
+            onClick={async () => {
+              await api("/logout", {});
+              location.href = "/";
+            }}
+          >
+            <LogOut className="size-4" />
+          </button>
+        )}
+      </div>
+    </nav>
   );
 }
 
