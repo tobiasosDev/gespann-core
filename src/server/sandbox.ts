@@ -89,6 +89,8 @@ export async function runLong(
   command: string,
   opts: { timeoutMs: number; onTick?: (tail: string) => void | Promise<void>; isCancelled?: () => boolean; pollMs?: number },
 ): Promise<{ exitCode: number | null; tail: string; timedOut: boolean }> {
+  // Cancelled while the caller prepared (a sign-in, a recording): the command never starts.
+  if (opts.isCancelled?.()) return { exitCode: null, tail: "", timedOut: true };
   const pid = await sb.start(id, command);
   const until = Date.now() + opts.timeoutMs;
   let lastAlive = Date.now();

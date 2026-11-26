@@ -624,6 +624,17 @@ export class Db {
     return runs;
   }
 
+  /**
+   * A newer push supersedes the PR's queued and running runs: one test per PR at a time, the newest.
+   * A running run's job keeps its sandbox until the worker sees the cancel and has torn the copy down.
+   */
+  supersedeRuns(projectId: number, pr: number): Run[] {
+    const reason = "superseded by a newer push";
+    const running = this.all<Run>("select * from runs where project_id = ? and pr = ? and status = 'running'", projectId, pr);
+    for (const r of running) this.run("update runs set status = 'cancelled', finished = ?, error = ? where id = ?", now(), reason, r.id);
+    return [...this.cancelQueuedRuns(projectId, pr, reason), ...running];
+  }
+
   run_(id: number): Run | undefined {
     return this.one<Run>("select * from runs where id = ?", id);
   }

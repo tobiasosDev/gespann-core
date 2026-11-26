@@ -499,7 +499,7 @@ async function queueRun(d: AppDeps, p: Project, pr: PullRequest): Promise<number
   // PR code runs in the project's sandbox next to the Codex sign-in: only branches of the repo itself, never forks.
   if (pr.head.repo?.full_name !== pr.base.repo.full_name) throw new HttpError(409, "pull requests from forks are not tested");
   // All database changes happen before the first await, so a newer push cannot interleave.
-  const superseded = d.db.cancelQueuedRuns(p.id, pr.number);
+  const superseded = d.db.supersedeRuns(p.id, pr.number);
   const token = randomBytes(16).toString("hex");
   const runId = d.db.createRun({ project_id: p.id, pr: pr.number, title: pr.title.slice(0, 300), head: pr.head.sha, base: pr.base.sha, base_ref: pr.base.ref, token });
   for (const old of superseded) {

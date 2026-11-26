@@ -77,6 +77,9 @@ async function ensureSandbox(d: Deps, p: Project, job: Job, log: (s: string) => 
   return b;
 }
 
+/** The job was cancelled, or a newer push superseded its run: what it still runs stops, and it reports nothing. */
+const stopped = (d: Deps, job: Job): boolean => d.db.job(job.id)?.status === "cancelled" || (!!job.run_id && d.db.run_(job.run_id)?.status === "cancelled");
+
 const bundleFile = (d: Deps, projectId: number) => join(d.config.dataDir, "projects", String(projectId), "recipe.tgz");
 
 /**
@@ -280,7 +283,7 @@ async function setup(d: Deps, job: Job, p: Project, log: (s: string) => void, ag
     const r = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, sb.id, () =>
       runLong(d.sandboxes, sb.id, codexExec(sb, `${sb.gespann}/setup-prompt.txt`, `${sb.gespann}/setup-last.txt`, `${sb.gespann}/setup.jsonl`, p.model), {
         timeoutMs: 120 * 60_000,
-        isCancelled: () => d.db.job(job.id)?.status === "cancelled",
+        isCancelled: () => stopped(d, job),
       }),
     );
     const last = (await d.sandboxes.readFile(b.id, `${b.gespann}/setup-last.txt`)) ?? "";
@@ -302,7 +305,7 @@ async function setup(d: Deps, job: Job, p: Project, log: (s: string) => void, ag
     } catch {
       log("no setup-proof.png");
     }
-    await checkCopy(d, b, log);
+    await checkCopy(d, b, log, () => stopped(d, job));
     await saveBundle(d, p, b);
     // Codex's concrete checks become the project's checks unless the team wrote their own.
     const own = d.db.project(p.id)?.criteria.trim();
@@ -394,7 +397,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   const started = new Date().toISOString();
   d.db.updateRun(run.id, { status: "running", started, progress: JSON.stringify(startStage(emptyProgress(), "sandbox", started)) });
   const progress = (title: string, summary: string) =>
-    run.check_run_id ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
+    run.check_run_id && !stopped(d, job) ? gh.updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "in_progress", title, summary: `${summary} Follow it at ${runUrl}.` }).catch(() => undefined) : undefined;
   await progress("Testing the change", "An agent is testing this PR on a production-near copy.");
   let b = await ensureSandbox(d, p, job, log);
   // A new sandbox, or one with an older recipe, takes over the project's current one; a replaced
@@ -413,7 +416,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
       b = await ensureSandbox(d, d.db.project(p.id) ?? current, job, log);
     });
   }
-  const cancelled = () => d.db.job(job.id)?.status === "cancelled";
+  const cancelled = () => stopped(d, job);
   let prText: string | null = null;
   let issues: LinkedIssue[] = [];
   let unread: string | null = null;
@@ -447,14 +450,14 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
       d.db.updateRun(run.id, { conflict: JSON.stringify(err.files) });
     } else {
       log(`✗ ${(err as Error).message}`);
-      d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
+      if (!stopped(d, job)) d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
     }
   }
 
   if (job.restarts > 0) await downLeftovers(d, b, run, log);
   let dir = `${b.gespann}/runs/${runId}`;
   let a: Attempt = { judged: null, outcome: "FAIL", clean: true };
-  if (prText !== null) {
+  if (prText !== null && !cancelled()) {
     a = await attempt(d, job, p, run, b, runId, dir, prText, issues, log, 1);
     const gaps = copyGaps(a.judged);
     if (gaps.length && a.clean && !cancelled()) {
@@ -471,8 +474,8 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
         progressOf(d, run.id)((x) => startStage(x, "copy", new Date().toISOString(), 2));
         return repair(d, job, p, run, b, gaps, log);
       });
+      if (fixed) await progress("Testing the change again", "The copy was fixed; the agent tests this PR again.");
       if (fixed && !cancelled()) {
-        await progress("Testing the change again", "The copy was fixed; the agent tests this PR again.");
         // gespann run ids are 12 hex characters: the second attempt takes the next 12 of the token.
         const again = run.token.slice(12, 24);
         const before = d.db.run_(run.id)?.error ?? null;
@@ -483,11 +486,17 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
           dir = `${b.gespann}/runs/${again}`;
         } else {
           log("the second test produced no verdict; the result of the first test stands");
-          d.db.updateRun(run.id, { error: before });
+          if (!cancelled()) d.db.updateRun(run.id, { error: before });
         }
       }
     }
   }
+  // The newer push's run reports; this one only frees its sandbox.
+  const stop = async () => {
+    log("stopped: a newer push supersedes this run");
+    await stopSandbox(d, b);
+  };
+  if (cancelled()) return stop();
   let judged = a.judged;
   // A run with merge conflicts tested nothing, so it has no outcome rather than a FAIL.
   const conflict = d.db.run_(run.id)?.conflict ?? null;
@@ -495,6 +504,7 @@ async function verifyRun(d: Deps, job: Job, p: Project, run: Run, log: (s: strin
   // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
   const sizes = viewportsOf((d.db.project(p.id) ?? p).viewports).length;
   const { files, alias, complete } = await collect(d, b, run, `${dir}/out`, log, sizes < 2);
+  if (cancelled()) return stop();
   if (complete) await dropProof(d, b, run);
   if (judged) judged = withAliases(judged, alias);
   // A verdict without the issue goals says why, on the run page and over MCP.
@@ -572,7 +582,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
     stage("copy");
     const prep = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify prepare --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir}`), {
       timeoutMs: 60 * 60_000,
-      isCancelled: () => d.db.job(job.id)?.status === "cancelled",
+      isCancelled: () => stopped(d, job),
     });
     const prepared = lastJson<{ ok: boolean; url?: string; error?: string }>(prep.tail);
     if (!prepared?.ok || !prepared.url) throw new Error(`the copy did not come up: ${prepared?.error ?? prep.tail.slice(-800)}`);
@@ -617,7 +627,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
       tester = await withCodex(d.db, d.sandboxes, d.config, p.owner_id, b.id, () =>
         runLong(d.sandboxes, b.id, codexExec(b, `${dir}/work/prompt.txt`, `${dir}/work/last.txt`, `${dir}/work/codex.jsonl`, p.model), {
           timeoutMs: minutes * 60_000,
-          isCancelled: () => d.db.job(job.id)?.status === "cancelled",
+          isCancelled: () => stopped(d, job),
           onTick: readTester,
         }),
       );
@@ -628,14 +638,14 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
         await d.sandboxes.exec(b.id, finishRecordingScript(rec), 300).catch(() => undefined);
       }
     }
-    log(tester.timedOut ? `the tester ran out of time (${minutes} min)` : `the tester finished (exit ${tester.exitCode})`);
+    log(stopped(d, job) ? "the tester was stopped" : tester.timedOut ? `the tester ran out of time (${minutes} min)` : `the tester finished (exit ${tester.exitCode})`);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
-    d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
+    if (!stopped(d, job)) d.db.updateRun(run.id, { error: (err as Error).message.slice(0, 4000) });
   }
 
   stage("verdict");
-  const fin = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify finish --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir} --wait 600`), { timeoutMs: 30 * 60_000 }).catch((err: Error) => ({ tail: err.message, exitCode: null, timedOut: false }));
+  const fin = await runLong(d.sandboxes, b.id, withEnv(b, `cd ${b.repo} && gespann verify finish --recipe ${b.recipe} --pr ${run.pr} --head ${run.head} --base ${run.base} --run ${runId} --dir ${dir} --wait ${stopped(d, job) ? 0 : 600}`), { timeoutMs: 30 * 60_000 }).catch((err: Error) => ({ tail: err.message, exitCode: null, timedOut: false }));
   const result = (await d.sandboxes.readFile(b.id, `${dir}/work/result.json`).catch(() => null)) ?? null;
   const teardownErrors = lastJson<{ teardownErrors?: string[] }>(fin.tail)?.teardownErrors ?? [];
   if (teardownErrors.length) log(`✗ the copy did not go down cleanly: ${teardownErrors.join("; ").slice(0, 800)}`);
@@ -655,7 +665,7 @@ async function attempt(d: Deps, job: Job, p: Project, run: Run, b: Box, runId: s
  */
 async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Check[], log: (s: string) => void): Promise<boolean> {
   const backup = `${b.gespann}/project.before-repair`;
-  const cancelled = () => d.db.job(job.id)?.status === "cancelled";
+  const cancelled = () => stopped(d, job);
   const merged = (await d.sandboxes.exec(b.id, `cd ${b.repo} && git rev-parse HEAD`, 30)).stdout.trim();
   if (!/^[0-9a-f]{40}$/.test(merged)) {
     log("✗ could not read the merged checkout; the result of the first test stands");
@@ -837,11 +847,15 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
     }
     // Stopped and freed while the job still counts as running, so no other job takes a sandbox mid-stop.
     await releaseSlots(d, job);
-    d.db.endJob(job.id, d.db.job(job.id)?.status === "cancelled" ? "cancelled" : "done");
+    d.db.endJob(job.id, stopped(d, job) ? "cancelled" : "done");
     await ended(d, job, p);
   } catch (err) {
     log(`✗ ${(err as Error).message}`);
     await releaseSlots(d, job);
+    if (job.kind === "run" && stopped(d, job)) {
+      d.db.endJob(job.id, "cancelled");
+      return ended(d, job, p);
+    }
     d.db.endJob(job.id, "failed", (err as Error).message.slice(0, 4000));
     if (job.kind === "setup" && d.db.project(p.id)?.setup === "queued") d.db.updateProject(p.id, { setup: "failed", setup_error: (err as Error).message.slice(0, 4000) });
     if (job.kind === "run" && job.run_id) {
