@@ -112,7 +112,7 @@ create table if not exists settings (key text primary key, value text not null);
 create table if not exists users (
   id integer primary key, github_id integer unique not null, login text not null,
   name text, avatar text, created text not null,
-  codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text,
+  codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text, codex_model text,
   repos_synced text, max_jobs integer, job_cap integer);
 create table if not exists projects (
   id integer primary key, owner_id integer not null references users(id), installation_id integer not null,
@@ -251,10 +251,12 @@ fn ensure_own(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             }
         }
     }
-    // The UI adds users.job_cap too; an orchestrator that opens the file first must not fail on it.
-    if let Err(e) = conn.execute_batch("alter table users add column job_cap integer") {
-        if !e.to_string().contains("duplicate column") {
-            return Err(e);
+    // The UI adds users.job_cap and users.codex_model too; an orchestrator that opens the file first must not fail on them.
+    for col in ["job_cap integer", "codex_model text"] {
+        if let Err(e) = conn.execute_batch(&format!("alter table users add column {col}")) {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
         }
     }
     // job_procs from before `acked`: every process in it was started and confirmed.
@@ -320,6 +322,13 @@ impl Db {
     /// The owner's sealed Codex sign-in.
     pub fn codex_auth(&self, user_id: i64) -> Result<Option<String>> {
         Ok(self.with(|c| c.query_row("select codex_auth from users where id = ?", [user_id], |r| r.get::<_, Option<String>>(0)).optional())?.flatten())
+    }
+    /// The owner's chosen Codex model from Settings; None means Codex's default.
+    pub fn codex_model(&self, user_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .with(|c| c.query_row("select codex_model from users where id = ?", [user_id], |r| r.get::<_, Option<String>>(0)).optional())?
+            .flatten()
+            .filter(|m| !m.is_empty()))
     }
     /// Sets `codex_state`, `codex_login`, `codex_auth`, `codex_account` as given.
     pub fn set_codex(&self, user_id: i64, fields: Fields) -> Result<()> {

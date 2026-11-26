@@ -142,6 +142,15 @@ pub(crate) fn with_env(b: &Sbx, command: &str) -> String {
     format!(". {}/env.sh 2>/dev/null; {command}", b.gespann)
 }
 
+/// Effective Codex model for a project: its own override first, otherwise the owner's model from Settings.
+pub(crate) fn model_for(cx: &Cx<'_>, p: &Project) -> Option<String> {
+    p.model
+        .as_deref()
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .or_else(|| cx.ctx.db.codex_model(p.owner_id).ok().flatten())
+}
+
 pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, model: Option<&str>, effort: &str) -> String {
     let m = model.filter(|m| !m.is_empty()).map(|m| format!(" -m {}", q(m))).unwrap_or_default();
     with_env(

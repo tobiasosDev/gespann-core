@@ -97,7 +97,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           state={codex}
           summary={
             codex === "done"
-              ? `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}.`
+              ? `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}${p.codex_model ? ` · model ${p.codex_model}` : ""}.`
               : p.own
                 ? "Connect your ChatGPT plan once in Settings. It is used for all your projects."
                 : "The project owner has not connected Codex yet."
@@ -168,7 +168,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
             >
               <Textarea value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder={p.default_checks} />
               <div className="flex items-center gap-2">
-                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model (empty = Codex default)" className="max-w-64 font-mono" />
+                <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder={p.codex_model ? `Model (empty = ${p.codex_model})` : "Model (empty = Codex default)"} className="max-w-64 font-mono" />
                 <Button type="submit" size="sm" disabled={busy}>
                   Save
                 </Button>

@@ -29,8 +29,20 @@ export interface RunRow {
 
 export type CodexState = "none" | "pending" | "connected" | "failed";
 
+export interface CodexModel {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface Settings {
-  codex: { state: CodexState; account: string | null; login: { url: string | null; code: string | null; lines: string } | null };
+  codex: {
+    state: CodexState;
+    account: string | null;
+    model: string | null;
+    models: CodexModel[];
+    login: { url: string | null; code: string | null; lines: string } | null;
+  };
 }
 
 /** A server module's card on the Settings page (SettingsSection in src/server/extension.ts). */
@@ -122,6 +134,7 @@ export interface ProjectDetail extends ProjectRow {
   /** Codex sign-in of the project's owner (Settings). */
   codex: CodexState;
   codex_account: string | null;
+  codex_model: string | null;
   own: boolean;
   criteria: string;
   default_checks: string;

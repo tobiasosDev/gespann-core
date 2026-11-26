@@ -21,6 +21,18 @@ import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { recordPrState } from "./pulls.ts";
 
+/** Codex models offered in Settings; users may also keep Codex's default or enter a custom model slug. */
+const CODEX_MODELS = [
+  { id: "gpt-6.2-sol", name: "GPT-6.2-Sol", description: "Fast, go-to model for coding and everyday work" },
+  { id: "gpt-6.2-astra", name: "GPT-6.2-Astra", description: "Most capable model for complex coding" },
+  { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", description: "Strong at visual understanding and computer use" },
+  { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", description: "Previous generation coding model" },
+  { id: "gpt-6-astra", name: "GPT-6-Astra", description: "Previous generation complex coding model" },
+  { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks" },
+] as const;
+
+const MODEL_RE = /^[A-Za-z0-9._:-]{1,80}$/;
+
 /** The built React app: dist/web, next to dist/server when built, or ../../dist/web from src. */
 const WEB = [new URL("../web/", import.meta.url), new URL("../../dist/web/", import.meta.url)].map((u) => fileURLToPath(u)).find((p) => existsSync(join(p, "index.html")));
 
@@ -226,7 +238,15 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.get("/api/settings", (c) => {
     const codex = db.codex(me(c).id);
-    return c.json({ codex: { state: codex?.codex_state ?? "none", account: codex?.codex_account ?? null, login: codex?.codex_login ? JSON.parse(codex.codex_login) : null } });
+    return c.json({
+      codex: {
+        state: codex?.codex_state ?? "none",
+        account: codex?.codex_account ?? null,
+        model: codex?.codex_model ?? null,
+        models: CODEX_MODELS,
+        login: codex?.codex_login ? JSON.parse(codex.codex_login) : null,
+      },
+    });
   });
 
   // The server module's cards. A module that fails costs only its own cards, not the page.
@@ -254,6 +274,14 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.post("/api/settings/codex/logout", (c) => {
     db.setCodex(me(c).id, { codex_state: "none", codex_login: null, codex_auth: null, codex_account: null });
     return c.json({ ok: true });
+  });
+
+  app.post("/api/settings/codex/model", async (c) => {
+    const body = await c.req.json<{ model?: unknown }>();
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
+    db.setCodex(me(c).id, { codex_model: model || null });
+    return c.json({ ok: true, model: model || null });
   });
 
   // Sandboxes: what runs now, how many jobs may run at once, and the sandbox time (the billing basis).
@@ -335,6 +363,7 @@ export function createApp(d: AppDeps): Hono<Env> {
       ...rest,
       codex: owner?.codex_state ?? "none",
       codex_account: owner?.codex_account ?? null,
+      codex_model: owner?.codex_model ?? null,
       own: p.owner_id === me(c).id,
       default_checks: DEFAULT_CHECKS,
       viewports: viewportsOf(p.viewports).map((v) => v.id),
@@ -364,7 +393,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     const p = project(c);
     const body = await c.req.json<{ criteria?: string; model?: string }>();
     const model = String(body.model ?? "").trim();
-    if (model && !/^[A-Za-z0-9._:-]{1,80}$/.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
+    if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model: letters, digits, . _ : - only");
     db.updateProject(p.id, { criteria: String(body.criteria ?? "").slice(0, 8000), model: model || null, suggestion: null });
     return c.json({ ok: true });
   });

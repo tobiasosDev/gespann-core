@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use serde_json::json;
 
-use super::boxes::{codex_exec, ensure_repo, ensure_sandbox, git, js_code, long, stop_sandbox, write_prompt, Sbx};
+use super::boxes::{codex_exec, ensure_repo, ensure_sandbox, git, js_code, long, model_for, stop_sandbox, write_prompt, Sbx};
 use super::{cut, never, tail, Cx};
 use crate::codex::with_codex;
 use crate::db::{text, Project};
@@ -40,7 +40,8 @@ async fn run_suggest(cx: &Cx<'_>, p: &Project, b: &Sbx) -> Result<()> {
         })
         .await?;
     cx.note("suggest.log.codex", "Codex reads the repository and proposes checks").await;
-    let command = codex_exec(b, &prompt_file, &format!("{}/suggest-last.txt", b.gespann), &format!("{}/suggest.jsonl", b.gespann), p.model.as_deref(), "medium");
+    let model = model_for(cx, p);
+    let command = codex_exec(b, &prompt_file, &format!("{}/suggest-last.txt", b.gespann), &format!("{}/suggest.jsonl", b.gespann), model.as_deref(), "medium");
     let r = with_codex(cx.ctx, &cx.jr, "suggest.signin", p.owner_id, &b.id, || long(cx, b, "suggest.codex", &command, Duration::from_secs(20 * 60), &never)).await?;
     let text_of = match sb.read_file(&b.id, &out).await? {
         Some(t) => Some(t),
