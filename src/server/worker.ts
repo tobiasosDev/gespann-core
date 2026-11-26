@@ -750,9 +750,10 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
         return d.db.endJob(job.id, "cancelled");
       }
-      await admit(d, job, p);
+      const refused = await admit(d, job, p).then(() => null, (err: Error) => err);
       // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");
+      if (refused) throw refused;
       await verifyRun(d, job, p, run, log);
     }
     // Stopped and freed while the job still counts as running, so no other job takes a sandbox mid-stop.

@@ -76,6 +76,15 @@ test("a PR closed while its run waited is skipped, not refused", async () => {
   await processJob({ db, sandboxes, github: () => github, config, module }, job);
   assert.equal(db.job(job.id)?.status, "cancelled");
   assert.equal(asked, 0, "the module is not asked about a run that does not happen");
+
+  // Superseded while the module was deciding: the run stays cancelled, the refusal is dropped.
+  const open = { ...github, pull: async () => ({ state: "open", merged: false, head: { sha: "h" } }) } as unknown as Github;
+  const run2 = db.createRun({ project_id: p, pr: 5, title: "t", head: "h", base: "b", base_ref: "main", token: "1".repeat(32) });
+  const job2 = db.job(db.enqueue(p, "run", run2))!;
+  const slow: ServerModule = { name: "slow", admit: async () => { db.cancelQueuedRuns(p, 5); db.updateRun(run2, { status: "cancelled" }); return "no plan"; } };
+  await processJob({ db, sandboxes, github: () => open, config, module: slow }, job2);
+  assert.equal(db.job(job2.id)?.status, "cancelled");
+  assert.equal(db.run_(run2)?.status, "cancelled");
 });
 
 test("the module's routes see the signed-in user and come before the web app; its links show in /api/me", async () => {
