@@ -1,5 +1,5 @@
-//! Small pieces of `src/verify/` the orchestrator needs: screen sizes (`viewports.ts`), live progress
-//! (`progress.ts`), same-screen screenshots (`similar.ts`) and copy gaps (`verdict.ts` `copyGaps`).
+//! What the orchestrator reads from a run: screen sizes (as `src/verify/viewports.ts` stores them), live
+//! progress (read by the UI as `src/verify/progress.ts`), same-screen screenshots and copy gaps.
 //! Verdicts stay `serde_json::Value`: the in-sandbox CLI writes and judges them.
 
 use std::collections::BTreeMap;
@@ -244,7 +244,7 @@ pub fn parse_progress(raw: Option<&str>) -> Option<Progress> {
     serde_json::from_str(raw.filter(|r| !r.is_empty())?).ok()
 }
 
-// ---- similar.ts
+// ---- same-screen screenshots
 
 /// Side of the grey thumbnail two screenshots are compared on.
 pub const THUMB: usize = 24;

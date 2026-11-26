@@ -11,8 +11,8 @@ import { Db } from "../src/server/db.ts";
 import type { ModuleJobEnd, ServerModule } from "../src/server/extension.ts";
 import type { Github, LinkedIssue, PullRequest } from "../src/server/github.ts";
 import { internalToken } from "../src/server/internal.ts";
-import type { Sandboxes } from "../src/server/sandbox.ts";
-import { issuesText, processJob } from "../src/server/worker.ts";
+import { endJob, startJob } from "./jobs.ts";
+import { issuesText } from "../src/server/jobs.ts";
 import { repairPrompt, setupPrompt, suggestPrompt, testerPrompt } from "../src/verify/prompt.ts";
 import { parseRecipe, recipeLine } from "../src/verify/recipe.ts";
 import { judge } from "../src/verify/verdict.ts";
@@ -86,18 +86,16 @@ function setup(over: { module?: ServerModule; env?: NodeJS.ProcessEnv } = {}) {
   return { config, db, u, p, run, gh, server, call };
 }
 
-test("internal API: 401 without the token or with a wrong one, in either worker mode", async () => {
-  for (const WORKER of ["builtin", "external"]) {
-    const { server, run } = setup({ env: { WORKER } });
-    assert.equal((await server.request(`/internal/runs/${run}/pull`)).status, 401);
-    assert.equal((await server.request(`/internal/runs/${run}/pull`, { headers: { Authorization: `Bearer ${internalToken("other")}` } })).status, 401);
-    assert.equal((await server.request(`/internal/jobs/1/admit`, { method: "POST", headers: { Authorization: internalToken(SECRET) } })).status, 401, "the Bearer prefix is part of it");
-    assert.equal((await server.request(`/internal/runs/${run}/pull`, { headers: AUTH })).status, 200);
-  }
+test("internal API: 401 without the token or with a wrong one", async () => {
+  const { server, run } = setup();
+  assert.equal((await server.request(`/internal/runs/${run}/pull`)).status, 401);
+  assert.equal((await server.request(`/internal/runs/${run}/pull`, { headers: { Authorization: `Bearer ${internalToken("other")}` } })).status, 401);
+  assert.equal((await server.request(`/internal/jobs/1/admit`, { method: "POST", headers: { Authorization: internalToken(SECRET) } })).status, 401, "the Bearer prefix is part of it");
+  assert.equal((await server.request(`/internal/runs/${run}/pull`, { headers: AUTH })).status, 200);
   assert.equal(internalToken("s"), createHash("sha256").update("gespann-internal:s").digest("hex"));
 });
 
-test("internal API: pull, skip-closed, check, git-token and context ask GitHub as the worker does", async () => {
+test("internal API: pull, skip-closed, check, git-token and context ask GitHub", async () => {
   const { db, p, run, gh, call } = setup();
   assert.deepEqual((await call("GET", `/internal/runs/${run}/pull`)).body, { pull: { state: "open", merged: false, head: "a".repeat(40) } });
   assert.deepEqual((await call("GET", `/internal/runs/999/pull`)).status, 404);
@@ -146,7 +144,7 @@ test("internal API: await-checks lets a green PR go, puts a running CI back into
   const { db, p, run, gh, call } = setup();
   const job = () => {
     const id = db.enqueue(p, "run", run);
-    db.claimJob(id);
+    startJob(db, id);
     return id;
   };
   const go = job();
@@ -184,11 +182,11 @@ test("internal API: report completes the check and comments from the run as the 
   assert.match(db.job(job)?.log ?? "", /the PR has a newer push: its comment stays with the newer run/);
 });
 
-test("internal API: admit answers as the worker decides; ended tells the module once per job, across both workers", async () => {
+test("internal API: admit asks the server module; ended tells it once per job", async () => {
   const ends: ModuleJobEnd[] = [];
   let answer: () => string | null = () => null;
   const module: ServerModule = { name: "billing", admit: () => answer(), jobEnded: (e) => void ends.push(e) };
-  const { db, p, call, config } = setup({ module });
+  const { db, p, call } = setup({ module });
   const job = db.enqueue(p, "suggest");
   assert.deepEqual((await call("POST", `/internal/jobs/${job}/admit`)).body, { refused: null });
   answer = () => "choose a plan first";
@@ -204,22 +202,13 @@ test("internal API: admit answers as the worker decides; ended tells the module 
   // Not ended yet: nothing to tell, and a later call still tells it.
   assert.deepEqual((await call("POST", `/internal/jobs/${job}/ended`)).body, {});
   assert.equal(ends.length, 0);
-  db.startJob(job);
-  db.endJob(job, "done");
+  startJob(db, job);
+  endJob(db, job, "done");
   await call("POST", `/internal/jobs/${job}/ended`);
   await call("POST", `/internal/jobs/${job}/ended`);
   assert.equal(ends.length, 1);
   assert.deepEqual([ends[0]?.jobId, ends[0]?.status, ends[0]?.owner.login], [job, "done", "tobi"]);
   assert.ok(db.job(job)?.ended_noted);
-
-  // The builtin worker marks it too: the internal call afterwards bills nothing more.
-  answer = () => "no plan";
-  const job2 = db.job(db.enqueue(p, "suggest"))!;
-  const sandboxes = new Proxy({}, { get: () => () => { throw new Error("no sandbox in this test"); } }) as Sandboxes;
-  await processJob({ db, sandboxes, github: () => ({}) as Github, config, module }, job2);
-  assert.equal(ends.length, 2);
-  await call("POST", `/internal/jobs/${job2.id}/ended`);
-  assert.equal(ends.length, 2);
 
   // A module that fails is asked again: 503, and the end stays unnoted until it went through.
   const { call: c3, db: db3, p: p3 } = setup({
@@ -233,8 +222,8 @@ test("internal API: admit answers as the worker decides; ended tells the module 
   });
   let down = true;
   const job3 = db3.enqueue(p3, "suggest");
-  db3.startJob(job3);
-  db3.endJob(job3, "done");
+  startJob(db3, job3);
+  endJob(db3, job3, "done");
   assert.equal((await c3("POST", `/internal/jobs/${job3}/ended`)).status, 503);
   assert.equal(db3.job(job3)?.ended_noted, null);
   down = false;
@@ -245,13 +234,13 @@ test("internal API: admit answers as the worker decides; ended tells the module 
   let bills = 0;
   const { call: c4, db: db4, p: p4 } = setup({ module: { name: "billing", jobEnded: () => new Promise<void>((ok) => setTimeout(() => (bills++, ok()), 50)) } });
   const job4 = db4.enqueue(p4, "suggest");
-  db4.startJob(job4);
-  db4.endJob(job4, "done");
+  startJob(db4, job4);
+  endJob(db4, job4, "done");
   await Promise.all([c4("POST", `/internal/jobs/${job4}/ended`), c4("POST", `/internal/jobs/${job4}/ended`)]);
   assert.equal(bills, 1);
 });
 
-test("WORKER=external: the server module's caps go into users.job_cap for the orchestrator", () => {
+test("the server module's caps go into users.job_cap for the orchestrator", () => {
   const { db, u } = setup();
   const other = db.upsertUser({ github_id: 2, login: "eve", name: null, avatar: null });
   db.publishJobCaps((owner) => (owner.login === "tobi" ? 2 : null));
@@ -261,14 +250,8 @@ test("WORKER=external: the server module's caps go into users.job_cap for the or
   assert.equal(cap(u.id), null);
 });
 
-test("WORKER: builtin by default, external on request, anything else is refused", () => {
-  assert.equal(loadConfig({}).worker, "builtin");
-  assert.equal(loadConfig({ WORKER: "external" }).worker, "external");
-  assert.throws(() => loadConfig({ WORKER: "rust" }), /WORKER rust is not builtin or external/);
-});
-
-test("WORKER=external: host size from settings.orchestrator, Codex sign-in only while the orchestrator beats", async () => {
-  const { db, u, server } = setup({ env: { WORKER: "external" } });
+test("host size from settings.orchestrator, Codex sign-in only while the orchestrator beats", async () => {
+  const { db, u, server } = setup();
   db.createSession("s".repeat(64), u.id);
   const h = { Cookie: `gs=${"s".repeat(64)}`, "x-gespann": "1" };
   const boxes = async () => (await (await server.request("/api/boxes", { headers: h })).json()) as { host: number | null };
@@ -286,14 +269,6 @@ test("WORKER=external: host size from settings.orchestrator, Codex sign-in only 
   db.setCodex(u.id, { codex_state: "failed", codex_login: "{}" });
   assert.equal((await login()).status, 200);
   assert.deepEqual([db.codex(u.id)?.codex_state, db.codex(u.id)?.codex_login], ["pending", null]);
-
-  // Builtin keeps the static host size and ignores the setting.
-  const builtin = setup();
-  builtin.db.setSetting("orchestrator", JSON.stringify({ kind: "ssh", parallel: 3, why: "", instance: "i", beat: new Date().toISOString() }));
-  builtin.db.createSession("s".repeat(64), builtin.u.id);
-  const plain = createApp({ config: builtin.config, db: builtin.db, github: () => builtin.gh as unknown as Github, githubReady: () => true, parallel: 2 });
-  assert.equal(((await (await plain.request("/api/boxes", { headers: h })).json()) as { host: number }).host, 2);
-  assert.equal((await plain.request("/api/settings/codex/login", { method: "POST", headers: h })).status, 409, "no sandbox provider");
 });
 
 const BIN = join(import.meta.dirname, "..", "src", "bin.ts");

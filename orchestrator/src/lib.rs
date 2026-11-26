@@ -25,8 +25,8 @@ pub struct Ctx {
     pub locks: Locks,
 }
 
-/// In-process locks by name and id, where the TypeScript worker used maps of promises
-/// (`bootstrapping`, `recovering`, `repairing`, Codex `refreshing`). One orchestrator runs at a time.
+/// In-process locks by name and id (a project's first recipe, a recovery, a repair, a Codex refresh).
+/// One orchestrator runs at a time.
 #[derive(Default)]
 pub struct Locks {
     map: Mutex<HashMap<(String, i64), LockCell>>,

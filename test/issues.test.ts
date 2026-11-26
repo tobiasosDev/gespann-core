@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { renderComment } from "../src/server/comment.ts";
 import { closingRefs, Github } from "../src/server/github.ts";
-import { issuesText } from "../src/server/worker.ts";
+import { issuesText } from "../src/server/jobs.ts";
 import { testerPrompt } from "../src/verify/prompt.ts";
 import { parseRecipe } from "../src/verify/recipe.ts";
 import { finish, prepare } from "../src/verify/run.ts";

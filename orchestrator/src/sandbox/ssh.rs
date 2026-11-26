@@ -1,6 +1,5 @@
-//! A Linux machine you already run, e.g. a CI server, reached over SSH (class Ssh in
-//! src/server/sandbox.ts). Each sandbox is a directory under `root` that serves as `HOME` for everything
-//! gespann runs there, so projects keep their checkout, recipe and Codex sign-in apart. They share the
+//! A Linux machine you already run, e.g. a CI server, reached over SSH. Each sandbox is a directory
+//! under `root` that serves as `HOME` for everything gespann runs there, so projects keep their checkout, recipe and Codex sign-in apart. They share the
 //! machine's user, tools and Docker engine.
 
 use std::sync::atomic::AtomicU64;

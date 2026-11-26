@@ -1,6 +1,5 @@
 //! Where PR code runs: one directory (SSH) or container (Docker) per project sandbox, kept between jobs.
-//! A port of `src/server/sandbox.ts`; the shell scripts must stay byte-compatible with it, because
-//! sandboxes made by the TypeScript worker are taken over as they are.
+//! The shell scripts stay byte-compatible with the former TypeScript worker's, so sandboxes it made keep working.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -59,7 +58,7 @@ pub struct CreateOpts {
     pub ttl_seconds: Option<u64>,
 }
 
-/// The `Sandboxes` interface of `src/server/sandbox.ts`, minus provider modules.
+/// A sandbox provider: Docker or SSH.
 #[async_trait]
 pub trait Sandboxes: Send + Sync {
     /// "ssh" or "docker", for logs.
@@ -122,7 +121,7 @@ pub fn from_config(cfg: &Config) -> Result<Option<Arc<dyn Sandboxes>>> {
     }
 }
 
-/// Writes the key and known_hosts under DATA_DIR/ssh, as `createSandboxes` in provider.ts does.
+/// Writes the key and known_hosts under DATA_DIR/ssh.
 fn ssh_options(cfg: &Config) -> Result<ssh::SshOptions> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let s = &cfg.ssh;

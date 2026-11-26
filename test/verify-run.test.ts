@@ -129,45 +129,7 @@ replay: { misses: /tmp/misses }
   }
 });
 
-test("screenshots of the same screen are kept once and the verdict points at the kept one", async () => {
-  const { sameScreens, withAliases, parseThumbs, THUMB } = await import("../src/verify/similar.ts");
-  const page = (v: number, dot = 0) => {
-    const b = Buffer.alloc(THUMB * THUMB, v);
-    for (let i = 0; i < dot; i++) b[i] = 0;
-    return b;
-  };
-  const thumbs = parseThumbs(
-    [
-      ["01-modal.png", page(200)],
-      ["02-modal-other-option.png", page(200, 5)], // 5 of 576 pixels differ: same screen
-      ["03-checkout.png", page(120)],
-      ["broken.png", Buffer.alloc(3)],
-    ]
-      .map(([n, b]) => `${n} ${(b as Buffer).toString("base64")}`)
-      .join("\n"),
-  );
-  assert.equal(thumbs.size, 3);
-  const alias = sameScreens(thumbs);
-  assert.deepEqual([...alias], [["02-modal-other-option.png", "01-modal.png"]]);
-  const judged = withAliases(
-    {
-      outcome: "PASS",
-      problems: [],
-      verdict: {
-        verdict: "PASS",
-        summary: "",
-        proof: ["01-modal.png", "02-modal-other-option.png", "03-checkout.png"],
-        checks: [{ expect: "b", observed: "b", result: "pass", proof: ["02-modal-other-option.png"] }],
-      },
-    },
-    alias,
-  );
-  assert.deepEqual(judged.verdict?.proof, ["01-modal.png", "03-checkout.png"]);
-  assert.deepEqual(judged.verdict?.checks[0]?.proof, ["01-modal.png"]);
-});
-
-test("a check blocked by a gap in the copy carries the fix; only a clean BLOCKED verdict asks for a repair", async () => {
-  const { copyGaps } = await import("../src/verify/verdict.ts");
+test("a check blocked by a gap in the copy carries the fix, and the repair prompt names it", async () => {
   const { repairPrompt } = await import("../src/verify/prompt.ts");
   const verdict = (kind: string, checks: object[]) => judge(JSON.stringify({ verdict: kind, summary: "s", checks, proof: [] }), () => true);
   const blocked = verdict("BLOCKED", [
@@ -177,14 +139,6 @@ test("a check blocked by a gap in the copy carries the fix; only a clean BLOCKED
   ]);
   assert.equal(blocked.outcome, "BLOCKED");
   assert.deepEqual(blocked.verdict?.checks.map((c) => c.fix), ["build and serve apps/landing", undefined, undefined]);
-  assert.deepEqual(copyGaps(blocked).map((c) => c.expect), ["pricing on the landing page"]);
-  // A failed check means the change is broken: no repair, the FAIL is reported.
-  const failed = verdict("FAIL", [
-    { expect: "a", observed: "landing missing", result: "blocked", fix: "build landing" },
-    { expect: "b", observed: "wrong price", result: "fail" },
-  ]);
-  assert.deepEqual(copyGaps(failed), []);
-  assert.deepEqual(copyGaps(null), []);
   const prompt = repairPrompt({ repo: "o/r", repoDir: "/r", projectDir: "/p", gaps: [{ expect: "e", observed: "o", fix: "build landing" }] });
   assert.match(prompt, /The copy lacks: build landing/);
   assert.match(prompt, /Do not change files in the repository/);

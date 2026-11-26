@@ -1,4 +1,4 @@
-//! One Codex sign-in per user (a port of `src/server/codex.ts`): made in a short-lived login sandbox,
+//! One Codex sign-in per user: made in a short-lived login sandbox,
 //! kept sealed in the database, written into a project sandbox only for the length of a Codex step and
 //! read back afterwards, because Codex refreshes it in place.
 

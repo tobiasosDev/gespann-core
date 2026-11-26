@@ -21,15 +21,3 @@ export function viewportsOf(stored: string | null | undefined): Viewport[] {
   const ids = new Set((stored ?? "").split(",").map((s) => s.trim()));
   return VIEWPORTS.filter((v) => ids.has(v.id));
 }
-
-/**
- * The virtual screen a run needs so the browser window fits the largest size: the window adds
- * Chromium's tab strip and toolbar (about 90 px) and sits 10 px from the screen's corner.
- * Undefined without sizes: the sandbox keeps its default screen.
- */
-export function screenFor(viewports: Viewport[]): string | undefined {
-  if (!viewports.length) return undefined;
-  const w = Math.max(1440, ...viewports.map((v) => v.width + 20));
-  const h = Math.max(900, ...viewports.map((v) => v.height + 120));
-  return `${w}x${h}x24`;
-}

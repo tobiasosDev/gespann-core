@@ -17,8 +17,7 @@ the job up where it was (see [Picking a job up again](#picking-a-job-up-again)).
 The recipe runner inside the sandbox (`gespann verify prepare|finish`, prompts, recipe checks) stays the
 TypeScript CLI that the orchestrator installs into every sandbox at `GESPANN_REF`.
 
-`WORKER=builtin` (the default for `gespann serve`) keeps the old single-process mode with the worker in
-the UI, for self-hosting without the orchestrator. `WORKER=external` turns the UI's worker off.
+The UI runs no jobs itself: without the orchestrator, jobs stay queued and Codex sign-in waits.
 
 ## Picking a job up again
 
@@ -62,13 +61,13 @@ every 10 s. The UI reads it for the host size on Settings → Sandboxes, and tre
 present (Codex sign-in possible) while `beat` is younger than 60 s.
 
 The server module's per-owner cap (`jobCap`, e.g. a plan's parallel tests) cannot be asked from the
-orchestrator: with `WORKER=external` the UI writes it to `users.job_cap` every 10 s, and the
-orchestrator starts no job of an owner who already runs that many.
+orchestrator: the UI writes it to `users.job_cap` every 10 s, and the orchestrator starts no job of an
+owner who already runs that many.
 
-Codex sign-in with `WORKER=external`: the UI only sets the user's `codex_state` to `pending`
-(`codex_login` null). The orchestrator runs the sign-in for every pending user and writes
-`codex_login`, then `codex_auth` (sealed as in `src/server/codex.ts`) or `failed`. The UI does not fail
-pending sign-ins when it starts.
+Codex sign-in: the UI only sets the user's `codex_state` to `pending` (`codex_login` null). The
+orchestrator runs the sign-in for every pending user and writes `codex_login`, then `codex_auth`
+(AES-256-GCM with a key from `SESSION_SECRET`, see `orchestrator/src/codex.rs`) or `failed`. The UI does
+not fail pending sign-ins when it starts.
 
 ## In-sandbox CLI used by the orchestrator
 
@@ -86,7 +85,6 @@ DATA_DIR=/data SESSION_SECRET=… BASE_URL=https://gespann.example.com SANDBOX_P
   orchestrator/target/release/gespann-orchestrator
 ```
 
-It reads the same variables as `gespann serve` for sandboxes (`SANDBOX_PROVIDER` docker or ssh,
-`SANDBOX_*`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus `UI_URL` and `HEALTH_PORT` (default 3001,
-`GET /healthz`). Provider modules (`module:<path>`) and a provider per user (`SANDBOX_PROVIDER_BY_USER`)
-need the builtin worker.
+It reads `DATA_DIR`, `SESSION_SECRET` and `BASE_URL` like `gespann serve`, the sandbox variables
+(`SANDBOX_PROVIDER` docker or ssh, `SANDBOX_*`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus
+`UI_URL` and `HEALTH_PORT` (default 3001, `GET /healthz`). With Docker: [self-host.md](self-host.md#run).

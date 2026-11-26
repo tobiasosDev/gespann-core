@@ -2,52 +2,68 @@
 
 > The supported way to use gespann is the hosted service at [app.gespann.app](https://app.gespann.app): sign in with GitHub and add a repository, nothing to run. This page is for running your own instance. You operate it yourself; there is no help with setup or operation, and bug reports are taken when they also happen on the hosted service.
 
-gespann is one Node process: web app, GitHub webhook and job worker. It keeps its data in SQLite under `DATA_DIR`. PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs on each user's own ChatGPT plan through Codex, so the instance pays no model costs.
+gespann is two services that share one SQLite database and its files under `DATA_DIR` (one volume, one host): the **UI** (`gespann serve`, Node: web app, MCP, GitHub webhook, everything that talks to GitHub) and the **orchestrator** (Rust: the job queue, sandboxes and every job step). A deploy of the UI leaves running tests alone. How they talk to each other: [orchestrator.md](orchestrator.md). PR code runs in sandboxes on Docker or on your own CI server over SSH ([Sandboxes](#sandboxes)); the model runs on each user's own ChatGPT plan through Codex, so the instance pays no model costs.
 
 ## Run
 
 ```bash
 docker build -t gespann .
-docker run -p 3000:3000 -v gespann-data:/data \
+docker build -f orchestrator/Dockerfile -t gespann-orchestrator .
+docker volume create gespann-data
+docker network create gespann
+SECRET=$(openssl rand -hex 32)
+docker run -d --name gespann --network gespann -p 3000:3000 -v gespann-data:/data \
   -e BASE_URL=https://gespann.example.com \
-  -e SESSION_SECRET=$(openssl rand -hex 32) \
-  -e SANDBOX_PROVIDER=ssh -e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)" \
+  -e SESSION_SECRET=$SECRET \
   -e ADMIN_TOKEN=$(openssl rand -hex 16) \
   gespann
+docker run -d --name gespann-orchestrator --network gespann -v gespann-data:/data \
+  -e BASE_URL=https://gespann.example.com -e UI_URL=http://gespann:3000 \
+  -e SESSION_SECRET=$SECRET \
+  -e SANDBOX_PROVIDER=ssh -e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)" \
+  gespann-orchestrator
 ```
+
+Both images run as uid 1000, so both can write the shared volume. The orchestrator needs no public port; it reaches the UI at `UI_URL` (default `BASE_URL`).
+
+Both services:
 
 | Variable | |
 |---|---|
 | `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
-| `SESSION_SECRET` | at least 32 characters; also encrypts the stored Codex sign-ins, so keep it stable |
-| `SANDBOX_PROVIDER` | `docker`, `ssh` or `module:<path>` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
-| `SANDBOX_PROVIDER_BY_USER` | other providers for some users, e.g. `tobi=ssh,ops=module:/app/own.js` ([Several providers](#several-providers)) |
+| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins and signs the orchestrator's calls to the UI, so keep it stable |
+| `DATA_DIR` | default `/data` in the images |
+
+The UI (`gespann serve`):
+
+| Variable | |
+|---|---|
 | `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
-| `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
-| `MAX_PARALLEL_JOBS` | how many jobs each sandbox provider runs at once ([Parallel jobs](#parallel-jobs)); default: computed from its host |
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
-| `DATA_DIR` | default `/data` in the image |
 | `SERVER_MODULE` | path of a module that adds pages, Settings cards and a say over jobs ([Server module](#server-module)); default: none |
-| `WORKER` | `builtin` (default) runs jobs in this process; `external` leaves them to the orchestrator ([Worker modes](#worker-modes)) |
 
-Restarting or redeploying the server never loses a job. A job whose server stops (a deploy, a crash) goes back into the queue about a minute later and starts again from the beginning. Before that, gespann stops the commands it left running in the sandbox and takes a copy that was still up down. While the old server keeps running during a rolling deploy, the job stays with it. A job lost in three restarts fails instead of starting again.
+The orchestrator:
 
-## Worker modes
+| Variable | |
+|---|---|
+| `SANDBOX_PROVIDER` | `docker` or `ssh` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
+| `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
+| `MAX_PARALLEL_JOBS` | how many jobs run at once ([Parallel jobs](#parallel-jobs)); default: computed from the sandbox host |
+| `UI_URL` | where it reaches the UI (default `BASE_URL`) |
+| `HEALTH_PORT` | port of its `GET /healthz` (default 3001) |
 
-`WORKER=builtin`, the default, runs everything in the one `gespann serve` process: web app, MCP, webhook and the job worker. That is all a self-hosted instance needs. Its catch: a deploy of the server stops the tests that run in it, and they start again from the beginning.
-
-`WORKER=external` turns the worker off. The separate orchestrator service runs the jobs, the sandboxes and the Codex sign-ins, on the same database and `DATA_DIR`; `gespann serve` keeps the web app, MCP, the webhook, everything that talks to GitHub and the server module, and answers the orchestrator under `/internal/` (its token comes from `SESSION_SECRET`). A deploy of the UI then leaves running tests alone. The sandbox variables (`SANDBOX_PROVIDER`, `SSH_*`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`) go to the orchestrator; Settings → Sandboxes shows the host size it reports, and Codex sign-in works while it runs. The log says `worker: external (the orchestrator runs jobs)`. How to build and run it: [orchestrator.md](orchestrator.md).
+Restarting or redeploying either service never loses a job. Every long step runs as a background process in the sandbox; when the orchestrator stops (a deploy, a crash), the next one picks each job up where it was and attaches to what still runs. While the UI is down, the orchestrator waits for it. A job taken over more than ten times fails instead of starting again.
 
 ## Sandboxes
 
-Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes. Some users can have their own provider ([Several providers](#several-providers)).
+Every project gets a sandbox that keeps its checkout, its recipe and its built images between jobs. A job writes the owner's Codex sign-in into it, runs Codex and the recipe, and deletes the sign-in again. When PRs come in while the project's sandboxes are busy, the project gets another one, so its PRs are tested side by side ([Parallel jobs](#parallel-jobs)). `SANDBOX_PROVIDER` picks where sandboxes live; nothing else changes.
 
 ### Parallel jobs
 
-At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; a provider module can report its size with an optional `capacity()`, otherwise gespann runs 2.
+At startup gespann reads the sandbox host's size and runs as many jobs at once as fit: one per 4 CPUs and 8 GB of memory, whichever allows fewer, at least one. A host with 32 CPUs and 64 GB runs 8. The log says what it chose, e.g. `parallel jobs: 7 (32 CPUs and 61 GB on the sandbox host, 4 CPUs and 8 GB per job)`. `MAX_PARALLEL_JOBS=12` sets the number yourself, e.g. when the host also runs other work or your recipes are lighter. Docker reads the engine's machine, SSH the host; when it cannot tell, gespann runs 2.
 
-That number is shared by everyone on the same provider; with [several providers](#several-providers) each counts its own jobs, and `MAX_PARALLEL_JOBS` sets the number for each. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number, or up to a server module's cap, see [Server module](#server-module)), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
+That number is shared by everyone. In Settings → Sandboxes each user sees which of their jobs hold a sandbox now, can run fewer of their own jobs at once (from 1 up to the instance's number, or up to a server module's cap, see [Server module](#server-module)), and sees their sandbox time: from the start to the end of each job of their projects, counted on the UTC day and calendar month the job started.
 
 Jobs of one project and one owner run side by side, each in its own sandbox with its own checkout. Only a project's setup runs alone. A new sandbox takes over the project's current recipe: after each setup and each fix of the copy, gespann keeps the recipe directory as `DATA_DIR/projects/<id>/recipe.tgz` and copies it into the project's other sandboxes before their next job. Its first job builds the app's images from scratch unless the host's Docker cache already has them.
 
@@ -57,23 +73,8 @@ All parallel jobs of an owner use the same Codex sign-in. Codex refreshes a sign
 |---|---|---|
 | `docker` | a container from your image, on the local engine or a remote one (`DOCKER_HOST`) | a CI server that runs Docker; isolation per project |
 | `ssh` | a directory on a Linux machine you already run, used as `HOME` | a CI server without Docker, or one that already has your toolchain |
-| `module:<path>` | whatever your module makes | a sandbox service of your own ([Your own provider](#your-own-provider)) |
 
-Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Docker and SSH sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen; a provider of your own records with `startRecording` ([Your own provider](#your-own-provider)). When a run cannot be recorded, the run page says so and the job log names the reason.
-
-### Several providers
-
-One instance can serve different users from different sandbox providers, e.g. the team's own CI server for the team and a sandbox service for everyone else:
-
-```bash
--e SANDBOX_PROVIDER=module:/app/providers/cloud.js \
--e SANDBOX_PROVIDER_BY_USER="tobi=ssh,ops=ssh" \
--e SSH_HOST=gespann@ci.example.com -e SSH_PRIVATE_KEY="$(cat gespann_ci)"
-```
-
-`SANDBOX_PROVIDER_BY_USER` maps GitHub logins (any case) to a provider, written as for `SANDBOX_PROVIDER`; comma-separated. A user it names gets that provider for their projects' sandboxes and their Codex sign-in; everyone else gets `SANDBOX_PROVIDER`. Without `SANDBOX_PROVIDER`, only the named users get sandboxes and the jobs of everyone else stay queued. Each provider is made once and runs its own number of jobs at once, so a full CI server never holds up the users of the sandbox service. `docker` and `ssh` read their settings from the variables below, so each of them exists once per instance; modules can be as many as you like. The log names every provider and whom it serves, e.g. `sandboxes: ssh (tobi, ops)` and `sandboxes: cloud (everyone else)`.
-
-When a user moves to another provider, their projects' next jobs get a new sandbox there, which takes over the project's current recipe ([Parallel jobs](#parallel-jobs)) and builds the app from scratch on its first job. Their sandboxes on the old provider stay until you delete them.
+Whatever the provider, the machine needs `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, and the `codex` CLI on `PATH`, plus what your recipe uses (often Docker). gespann installs itself there on the first job. For UI checks the tester needs a screen: a desktop (`DISPLAY`) with Chrome, and Codex configured with a computer-use or browser tool. Without one it can only test what it reaches with commands. Every run is recorded as a video of the tester's screen, shown first on the run page and linked above the screenshots in the PR comment. Sandboxes record with `ffmpeg` (x11grab) on the sandbox's `DISPLAY`, so the machine needs `ffmpeg` next to its screen. When a run cannot be recorded, the run page says so and the job log names the reason.
 
 ### Docker
 
@@ -92,9 +93,9 @@ When a user moves to another provider, their projects' next jobs get a new sandb
 | `SANDBOX_DOCKER_ARGS` | extra `docker run` arguments, quoted like a shell. Recipes that start Docker themselves need Docker inside the sandbox: `--privileged` with an image that runs its own engine, or the engine's socket mounted. The socket gives PR code control over every container on that engine, gespann's own included, so mount it only from an engine that runs nothing else |
 | `SANDBOX_USER` | user inside the container; default the image's |
 | `SANDBOX_HOME` | the sandbox's home directory (default `/home/user`); letters, digits, `. _ - /` only |
-| `DOCKER_HOST`, `DOCKER_CONTEXT` | which engine, as for the `docker` CLI. `ssh://user@host` reaches a CI server; the key comes from `~/.ssh` of the user running gespann |
+| `DOCKER_HOST`, `DOCKER_CONTEXT` | which engine, as for the `docker` CLI. `ssh://user@host` reaches a CI server; the key comes from `~/.ssh` of the user running the orchestrator |
 
-The gespann image contains the `docker` CLI. For the local engine, mount its socket and give the `node` user access: `-v /var/run/docker.sock:/var/run/docker.sock --group-add $(stat -c %g /var/run/docker.sock)`. A stopped container keeps its disk; `docker rm` deletes a sandbox, and gespann makes a new one on the next job.
+The orchestrator image contains the `docker` CLI. For the local engine, mount its socket into the orchestrator and give its user access: `-v /var/run/docker.sock:/var/run/docker.sock --group-add $(stat -c %g /var/run/docker.sock)`. A stopped container keeps its disk; `docker rm` deletes a sandbox, and gespann makes a new one on the next job.
 
 ### SSH
 
@@ -182,18 +183,9 @@ These steps set up a CI server so the tester can click through the app in a real
    env = { PLAYWRIGHT_BROWSERS_PATH = "/home/gespann/.cache/ms-playwright" }
    ```
 
-8. Check over SSH from the gespann server (the key works only from there; add your own address to `from=` for a check from elsewhere): `ssh -i gespann_ci gespann@<host> 'command -v node npm git curl docker codex playwright-mcp; echo $DISPLAY'` lists every tool and `:77`. Then set the variables above and deploy; the log line `sandboxes: ssh` confirms the provider.
+8. Check over SSH from the gespann server (the key works only from there; add your own address to `from=` for a check from elsewhere): `ssh -i gespann_ci gespann@<host> 'command -v node npm git curl docker codex playwright-mcp; echo $DISPLAY'` lists every tool and `:77`. Then set the variables above on the orchestrator and deploy; its log line `sandboxes: ssh` confirms the provider.
 
 Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo systemctl disable --now gespann-xvfb`, `sudo userdel -r gespann`.
-
-### Your own provider
-
-`SANDBOX_PROVIDER=module:/path/to/provider.js` loads an ES module whose default export gets the server's environment and returns the sandbox object (sync or async). It implements the `Sandboxes` interface in [src/server/sandbox.ts](../src/server/sandbox.ts): `create`, `exists`, `home`, `ensureRunning`, `keepAlive`, `stop`, `remove`, `exec`, `start`, `status`, `kill`, `readFile`, `writeFile`, `download`, and optionally `startRecording` and `stopRecording` for a video of the tester's screen, `jobScript(home)` for a shell script that runs before every job and may export variables through `<home>/gespann/env.sh` (for example a build cache that survives the sandbox stopping), `testerNote` for how to drive the browser your sandbox provides, and `capacity` for the host's size ([Parallel jobs](#parallel-jobs)). gespann checks the methods at startup and logs `sandboxes: <kind>`.
-
-```js
-// provider.js: read your settings from env, return the sandboxes
-export default (env) => new MySandboxes(env.MY_SANDBOX_API_KEY);
-```
 
 ## Server module
 
@@ -202,9 +194,11 @@ export default (env) => new MySandboxes(env.MY_SANDBOX_API_KEY);
 - `routes(app, { user })` mounts routes on the server's Hono app, before the web app. `user(c)` is the signed-in user (`{ id, login }`) or null. API calls under `/api/` need the header `x-gespann: 1`; your own paths guard themselves against cross-site posts.
 - `links` puts links in the sidebar for signed-in users, e.g. `[{ label: "Usage", href: "/usage" }]`.
 - `settings(user)` returns cards for the top of the Settings page: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the card. `/settings#<id>` scrolls to a card. If `settings` throws, only its cards are missing.
+The module runs in the UI; the orchestrator asks it through the UI's internal API.
+
 - `admit(job)` runs before a job takes a sandbox. Return a string and the job fails with `not started: <string>` (a PR gets a neutral check with that text); return null to let it start. `job` names the job, its kind, its project and the project's owner.
-- `jobEnded(end)` runs after a job ended and gave its sandbox back, with its status and `seconds` from start to end (the sandbox time Settings shows). Errors are logged, never fail the job.
-- `jobCap(owner)` caps how many jobs of an owner's projects run at once: return `{ jobs, reason }` or null for no cap. A job over the cap waits in the queue and starts when one of the owner's jobs ends; it does not fail. The worker asks while it picks the next job, so answer right away from memory, without a network call. Settings → Sandboxes lets the owner choose at most the cap and shows `<reason> allows <jobs> at once`. Without `jobCap`, or when it throws, there is no cap.
+- `jobEnded(end)` runs after a job ended and gave its sandbox back, with its status and `seconds` from start to end (the sandbox time Settings shows), once per job. When it throws, the orchestrator tells it again later; it never fails the job.
+- `jobCap(owner)` caps how many jobs of an owner's projects run at once: return `{ jobs, reason }` or null for no cap. A job over the cap waits in the queue and starts when one of the owner's jobs ends; it does not fail. The UI asks every 10 s and writes the caps to the database, where the orchestrator reads them when it picks the next job; answer right away from memory, without a network call. Settings → Sandboxes lets the owner choose at most the cap and shows `<reason> allows <jobs> at once`. Without `jobCap`, or when it throws, there is no cap.
 
 The log says `server module: <name>` at startup.
 

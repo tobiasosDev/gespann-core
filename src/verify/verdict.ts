@@ -122,9 +122,3 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
   if (missing.length) problems.push(`proof files missing: ${missing.join(", ")}`);
   return { verdict, outcome: problems.length ? "FAIL" : (kind as VerdictKind), problems };
 }
-
-/** Blocked checks the copy could be changed to support: the run fixes the copy and tests again. */
-export function copyGaps(j: Judged | null): Check[] {
-  if (!j?.verdict || j.problems.length || j.outcome !== "BLOCKED") return [];
-  return j.verdict.checks.filter((c) => c.result === "blocked" && c.fix);
-}

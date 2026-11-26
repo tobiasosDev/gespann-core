@@ -60,8 +60,6 @@ pub struct Job {
     pub started: Option<String>,
     pub finished: Option<String>,
     pub restarts: i64,
-    /// JSON [[sandboxId, processId], ...] the TypeScript worker recorded.
-    pub procs: String,
     pub owner: Option<String>,
 }
 
@@ -213,7 +211,6 @@ fn job_row(r: &rusqlite::Row) -> rusqlite::Result<Job> {
         started: r.get("started")?,
         finished: r.get("finished")?,
         restarts: r.get("restarts")?,
-        procs: r.get("procs")?,
         owner: r.get("owner")?,
     })
 }
@@ -608,10 +605,6 @@ impl Db {
             .map(|_| ())
         })
     }
-    /// Forgets the TypeScript worker's process list (`jobs.procs`) after its processes were stopped.
-    pub fn clear_ts_procs(&self, job_id: i64) -> Result<()> {
-        self.with(|c| c.execute("update jobs set procs = '[]' where id = ?", [job_id]).map(|_| ()))
-    }
 
     // ---- outbox
 
@@ -699,7 +692,7 @@ mod tests {
             assert!(db.claim_job(j, o).unwrap());
         }
         set(&db, "update jobs set heartbeat = '2026-01-01T00:00:00.000Z' where id in (?, ?)", [stale, mine]);
-        // A job the TypeScript worker ran: no owner.
+        // A job from before the orchestrator: no owner.
         set(&db, "update jobs set owner = null where id = ?", [orphan]);
         let before = ts(chrono::Utc::now() - chrono::Duration::seconds(60));
         let got: Vec<i64> = db.adopt_stale("me", &before).unwrap().iter().map(|j| j.id).collect();

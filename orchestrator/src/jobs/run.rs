@@ -371,7 +371,7 @@ async fn merge_and_read(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx) -> Result<
     Ok((c?, base))
 }
 
-/// A run lost in a restart of the TypeScript worker may have left its copy up: finish tears it down
+/// A run lost before it stored a step may have left its copy up: finish tears it down
 /// before the run starts again. Which copies are up is decided once: later the attempt's own copy is up.
 async fn down_leftovers(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
     let sb = cx.sb();

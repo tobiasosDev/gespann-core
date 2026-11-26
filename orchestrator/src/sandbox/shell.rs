@@ -1,6 +1,6 @@
-//! A sandbox reached through a shell (`ShellSandboxes` and `spawnCollect` in src/server/sandbox.ts):
+//! A sandbox reached through a shell:
 //! Docker and SSH only differ in how a script gets to the machine. Background commands keep their
-//! output, pid and exit code in `$HOME/.gespann-proc`, where the TypeScript worker keeps them too.
+//! output, pid and exit code in `$HOME/.gespann-proc`.
 
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
