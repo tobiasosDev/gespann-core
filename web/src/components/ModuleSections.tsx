@@ -93,7 +93,8 @@ export function ModuleSections() {
   // `/settings#plan` scrolls to that card once it is there; the page loads it after the first paint.
   const ids = data?.sections.map((s) => s.id).join(",") ?? "";
   useEffect(() => {
-    const id = decodeURIComponent(location.hash.slice(1));
+    // Raw, not decoded: card ids are plain words, and decoding throws on a link like /settings#%.
+    const id = location.hash.slice(1);
     if (id && ids.split(",").includes(id)) document.getElementById(id)?.scrollIntoView();
   }, [ids]);
   const problem = error ?? data?.error;
