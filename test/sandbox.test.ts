@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -132,7 +132,15 @@ test("shell sandboxes: the screen recording starts on the sandbox's DISPLAY, end
 
   const bare = mkdtempSync(join(tmpdir(), "gespann-shell-"));
   await assert.rejects(new Recording(env({ DISPLAY: "" })).startRecording(bare, join(bare, "r.mp4")), /no screen/);
-  await assert.rejects(new Recording({ ...process.env, PATH: "/usr/bin:/bin", DISPLAY: ":1" }).startRecording(bare, join(bare, "r.mp4")), /ffmpeg is not installed/);
+  // A PATH with nothing but bash: no ffmpeg on this machine.
+  const only = mkdtempSync(join(tmpdir(), "gespann-bin-"));
+  symlinkSync(spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).stdout.trim(), join(only, "bash"));
+  await assert.rejects(new Recording({ PATH: only, HOME: bare, DISPLAY: ":1" }).startRecording(bare, join(bare, "r.mp4")), /ffmpeg is not installed/);
+  // On a shared machine (SSH), a sandbox without a screen of its own is not recorded: the machine's screen may show other jobs.
+  class SharedRecording extends Recording {
+    protected override readonly sharedScreen = true;
+  }
+  await assert.rejects(new SharedRecording(env({ DISPLAY: ":77" })).startRecording(bare, join(bare, "r.mp4")), /no screen of its own/);
 });
 
 const hasDocker = spawnSync("docker", ["info"], { stdio: "ignore", timeout: 20_000 }).status === 0;

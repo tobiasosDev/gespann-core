@@ -606,6 +606,8 @@ async function repair(d: Deps, job: Job, p: Project, run: Run, b: Box, gaps: Che
  */
 async function collect(d: Deps, b: Box, run: Run, out: string, log: (s: string) => void): Promise<{ files: string[]; alias: Map<string, string> }> {
   const ls = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size -100M -printf '%f\\n'`, 30);
+  const big = await d.sandboxes.exec(b.id, `cd ${q(out)} 2>/dev/null && find . -maxdepth 1 -type f -size +99M -printf '%f %s\\n'`, 30).catch(() => null);
+  for (const line of big?.stdout.split("\n").filter(Boolean) ?? []) log(`✗ ${line.split(" ")[0]} is too large to keep (${Math.round(Number(line.split(" ")[1]) / 1024 ** 2)} MB, limit 100 MB)`);
   const all = ls.stdout.split("\n").filter((f) => /^[A-Za-z0-9._-]+$/.test(f) && (IMAGE.test(f) || VIDEO.test(f) || f === "verdict.json"));
   const images = all.filter((f) => IMAGE.test(f));
   const thumbs = images.length ? await d.sandboxes.exec(b.id, `cd ${q(out)} && { ${thumbCommand(images)}; }`, 120).catch(() => null) : null;

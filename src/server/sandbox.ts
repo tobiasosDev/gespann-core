@@ -275,8 +275,11 @@ export abstract class ShellSandboxes {
   }
 
   /** Records the sandbox's screen (`DISPLAY`) with ffmpeg; the machine needs both. */
+  /** True where sandboxes share a machine, so only a sandbox's own screen may be recorded. */
+  protected readonly sharedScreen: boolean = false;
+
   async startRecording(id: string, file: string): Promise<void> {
-    const r = await this.shell(id, recordScript(file), { timeoutMs: 60_000 });
+    const r = await this.shell(id, recordScript(file, this.sharedScreen), { timeoutMs: 60_000 });
     if (r.code !== 0) throw new Error(r.stderr.toString("utf8").trim().slice(0, 300) || `exit ${r.code}`);
   }
 
@@ -289,11 +292,13 @@ export abstract class ShellSandboxes {
  * Starts ffmpeg on the sandbox's screen in the background, writing an mp4 to `file`. Few frames and a
  * high CRF: the screen mostly stands still, so a long test stays a small file.
  */
-export function recordScript(file: string): string {
+export function recordScript(file: string, ownScreen = false): string {
   return [
     `p="$HOME/.gespann-recording"`,
     `command -v ffmpeg >/dev/null 2>&1 || { echo "ffmpeg is not installed on the sandbox's machine" >&2; exit 1; }`,
     `[ -n "\${DISPLAY:-}" ] || { echo "the sandbox has no screen (DISPLAY is not set)" >&2; exit 1; }`,
+    // On a shared machine the fallback DISPLAY may show other jobs' windows: record only the sandbox's own screen.
+    ...(ownScreen ? [`[ -s "$HOME/.gespann-display" ] || { echo "the sandbox has no screen of its own (Xvfb is not installed on the machine)" >&2; exit 1; }`] : []),
     stopRecordScript(),
     `mkdir -p "$(dirname ${q(file)})"; rm -f ${q(file)}`,
     `s="$(command -v setsid || true)"`,
@@ -490,6 +495,7 @@ export interface SshOptions {
  */
 export class Ssh extends ShellSandboxes implements Sandboxes {
   readonly kind = "ssh" as const;
+  protected override readonly sharedScreen = true;
   private readonly o: SshOptions;
 
   constructor(o: SshOptions) {
