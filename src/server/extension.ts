@@ -57,7 +57,6 @@ export interface ServerModule {
   readonly name: string;
   /** Mounts the module's routes. They come before the web app, so they win over its client routes. */
   // The module brings its own route types.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   routes?(app: Hono<any>, helpers: { user(c: Context): ModuleUser | null }): void;
   /** Links in the sidebar, for signed-in users. A link to a page the module serves opens in the same tab. */
   readonly links?: { label: string; href: string }[];

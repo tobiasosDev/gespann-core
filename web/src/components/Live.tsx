@@ -1,17 +1,6 @@
 import { Check, Minus, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import { duration, type Progress, type Stage, STAGES } from "../api.ts";
 import { cn } from "./ui.tsx";
-
-/** Re-renders every second while `on`, so running times count up between polls. */
-export function useTick(on: boolean): void {
-  const [, set] = useState(0);
-  useEffect(() => {
-    if (!on) return;
-    const t = setInterval(() => set((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [on]);
-}
 
 /** HH:MM:SS in UTC, like the times in the run's log right below. */
 export const clock = (iso: string) => iso.slice(11, 19);
@@ -41,7 +30,7 @@ export function currentStage(p: Progress | null): Stage | null {
 }
 
 /** Sandbox, copy up, read change, checks, verdict: done ones with their time, the current one counting. */
-export function StageStrip({ progress, queued }: { progress: Progress | null; queued: boolean }) {
+export function StageStrip({ progress, queued, checks: ciWait = false }: { progress: Progress | null; queued: boolean; checks?: boolean }) {
   const cur = queued ? null : currentStage(progress);
   const curIndex = cur ? STAGES.indexOf(cur) : -1;
   const checks = progress?.checks ?? [];
@@ -66,7 +55,7 @@ export function StageStrip({ progress, queued }: { progress: Progress | null; qu
             if (s === "checks" && checks.length) detail = `${done} of ${checks.length} · ${took}`;
             else if (s === "copy" && (progress?.attempt ?? 1) > 1) detail = `second try · ${took}`;
             else detail = took;
-          } else detail = queued && i === 0 ? "waiting for a sandbox" : "";
+          } else detail = queued && i === 0 ? (ciWait ? "waiting for CI" : "waiting for a sandbox") : "";
           return (
             <div key={s} className={cn("px-4 py-3", state === "now" && "bg-info/[0.08]")}>
               <div className={cn("flex items-center gap-2 text-body font-medium whitespace-nowrap", (state === "todo" || state === "skipped") && "text-muted-foreground")}>
@@ -165,7 +154,8 @@ export function LiveChecks({ progress }: { progress: Progress }) {
 }
 
 /** What to say in the Checks card while there is no plan yet. */
-export function waitingText(progress: Progress | null, queued: boolean): string {
+export function waitingText(progress: Progress | null, queued: boolean, checks = false): string {
+  if (queued && checks) return "The run waits for the PR's other checks to pass. It takes a sandbox once they are green; the log shows what it waits for.";
   if (queued) return "The run waits for a free sandbox. Checks appear when the tester has a plan.";
   const s = currentStage(progress);
   if (s === "read") return "The tester is reading the change. Its checks appear here as soon as it has a plan.";

@@ -261,7 +261,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     const u = me(c).id;
     const host = (typeof d.parallel === "function" ? d.parallel(me(c).id) : d.parallel) ?? null;
     const own = db.maxJobs(u);
-    return c.json({ host, limit: own === null ? host : host === null ? own : Math.min(own, host), own, running: db.runningBoxes(u), queued: db.queuedJobs(u), time: db.boxTime(u) });
+    const waiting = db.queuedJobs(u);
+    return c.json({ host, limit: own === null ? host : host === null ? own : Math.min(own, host), own, running: db.runningBoxes(u), queued: waiting.sandbox, waitingForChecks: waiting.checks, time: db.boxTime(u) });
   });
 
   app.post("/api/boxes/limit", async (c) => {
@@ -408,7 +409,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     if (!run) throw new HttpError(404, "run not found");
     const p = project(c, String(run.project_id));
     const job = db.jobs(p.id, 500).find((j) => j.run_id === run.id);
-    return c.json({ ...run, project: { id: p.id, repo: p.repo }, verdict: run.verdict ? JSON.parse(run.verdict) : null, files: JSON.parse(run.files), progress: parseProgress(run.progress), log: job?.log ?? "" });
+    return c.json({ ...run, project: { id: p.id, repo: p.repo }, verdict: run.verdict ? JSON.parse(run.verdict) : null, files: JSON.parse(run.files), progress: parseProgress(run.progress), log: job?.log ?? "", waitingForChecks: run.status === "queued" && !!job?.not_before });
   });
 
   app.post("/api/runs/:id/rerun", async (c) => {

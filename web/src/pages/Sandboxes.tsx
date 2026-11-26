@@ -1,21 +1,12 @@
 import { Minus, Plus } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api, type Boxes, duration, hours, type RunningBox, useResource } from "../api.ts";
+import { useState } from "react";
+import { api, type Boxes, duration, hours, type RunningBox } from "../api.ts";
+import { useResource, useTick } from "../live.ts";
 import { Link } from "../nav.tsx";
 import { Badge, Button, Card, CardHeader, cn } from "../components/ui.tsx";
 
 /** Up to this many jobs at once the limit is drawn as one tile per sandbox; above it, only the stepper. */
 const MAX_TILES = 12;
-
-/** Re-renders every second while `on`, so running clocks count. */
-function useTick(on: boolean) {
-  const [, set] = useState(0);
-  useEffect(() => {
-    if (!on) return;
-    const t = setInterval(() => set((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [on]);
-}
 
 const what = (b: RunningBox) => (b.kind === "run" && b.pr ? `PR #${b.pr}` : b.kind === "setup" ? "preparing the environment" : b.kind === "suggest" ? "suggesting checks" : b.kind);
 
@@ -122,12 +113,12 @@ function Days({ days }: { days: Boxes["time"]["days"] }) {
   );
 }
 
+const always = () => true;
+
 export function Sandboxes() {
-  const { data, error, reload } = useResource<Boxes>("/boxes", () => true, 5000);
+  const { data, error, at: loadedAt, reload } = useResource<Boxes>("/boxes", always, 5000);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [loadedAt, setLoadedAt] = useState(() => Date.now());
-  useEffect(() => setLoadedAt(Date.now()), [data]);
   useTick(!!data?.running.length);
   if (error) return <p className="mt-6 text-bad">{error}</p>;
   if (!data) return null;
@@ -143,7 +134,7 @@ export function Sandboxes() {
       await reload();
     }
   };
-  const { host, limit, running, queued, time } = data;
+  const { host, limit, running, queued, waitingForChecks, time } = data;
   const monthName = new Date(`${time.month}-01T00:00:00Z`).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   // The server counts running jobs up to its answer; the seconds since then are added here.
   const live = (running.length * Math.max(0, Date.now() - loadedAt)) / 1000;
@@ -185,6 +176,11 @@ export function Sandboxes() {
               {queued > 0 && (
                 <span className="text-small text-foreground">
                   {queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox.
+                </span>
+              )}
+              {waitingForChecks > 0 && (
+                <span className="text-small text-muted-foreground">
+                  {waitingForChecks === 1 ? "One PR waits" : `${waitingForChecks} PRs wait`} for its other checks to pass first.
                 </span>
               )}
               {failed && <span className="text-body text-bad">{failed}</span>}

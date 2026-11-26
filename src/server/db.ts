@@ -74,6 +74,8 @@ export interface Job {
   heartbeat: string | null;
   /** JSON [[sandboxId, processId], ...]: the background commands it started, stopped when it starts again. */
   procs: string;
+  /** Set while a run waits for its PR's other checks: not taken before then. Null: starts as soon as there is room. */
+  not_before: string | null;
 }
 
 /** One of a project's sandboxes. A job holds one at a time, so parallel jobs never share a checkout. */
@@ -274,6 +276,7 @@ export class Db {
       ["restarts", "integer not null default 0"],
       ["heartbeat", "text"],
       ["procs", "text not null default '[]'"],
+      ["not_before", "text"],
     ] as const) {
       if (!jcols.has(name)) this.sql.exec(`alter table jobs add column ${name} ${def}`);
     }
@@ -429,11 +432,12 @@ export class Db {
   nextJobs(limit = -1): Job[] {
     return this.sql.prepare(
       `select j.* from jobs j join projects p on p.id = j.project_id join users u on u.id = p.owner_id where j.status = 'queued'
+         and (j.not_before is null or j.not_before <= ?)
          and not exists (select 1 from jobs r where r.project_id = j.project_id and r.status = 'running' and (r.kind = 'setup' or j.kind = 'setup'))
          and not exists (select 1 from jobs s where s.project_id = j.project_id and s.kind = 'setup' and s.status = 'queued' and s.id < j.id)
          and (u.max_jobs is null or (select count(*) from jobs o join projects op on op.id = o.project_id where o.status = 'running' and op.owner_id = u.id) < u.max_jobs)
        order by j.id limit ?`,
-    ).all(limit) as unknown as Job[];
+    ).all(now(), limit) as unknown as Job[];
   }
 
   /** How many jobs of the user's projects may run at once; null leaves it to the sandbox host. */
@@ -455,9 +459,13 @@ export class Db {
     );
   }
 
-  /** Jobs of the user's projects that wait for a free sandbox. */
-  queuedJobs(userId: number): number {
-    return this.one<{ n: number }>("select count(*) as n from jobs j join projects p on p.id = j.project_id where p.owner_id = ? and j.status = 'queued'", userId)?.n ?? 0;
+  /** Jobs of the user's projects that wait for a free sandbox, and runs that wait for their PR's other checks first. */
+  queuedJobs(userId: number): { sandbox: number; checks: number } {
+    const r = this.one<{ sandbox: number | null; checks: number | null }>(
+      "select sum(j.not_before is null) as sandbox, sum(j.not_before is not null) as checks from jobs j join projects p on p.id = j.project_id where p.owner_id = ? and j.status = 'queued'",
+      userId,
+    );
+    return { sandbox: r?.sandbox ?? 0, checks: r?.checks ?? 0 };
   }
 
   /**
@@ -554,6 +562,16 @@ export class Db {
   /** Takes a queued job; false when another server (the old one, during a rolling deploy) took it first. */
   claimJob(id: number): boolean {
     return Number(this.sql.prepare("update jobs set status = 'running', started = coalesce(started, ?), heartbeat = ? where id = ? and status = 'queued'").run(now(), now(), id).changes) === 1;
+  }
+
+  /** Ends a job that never touched a sandbox (e.g. its PR failed CI first); it adds no sandbox time. */
+  endUnstarted(id: number): void {
+    this.run("update jobs set status = 'done', started = null, heartbeat = null, finished = ? where id = ?", now(), id);
+  }
+
+  /** Puts a running job that has not touched a sandbox back into the queue until `until`; the wait is no sandbox time. */
+  deferJob(id: number, until: string): void {
+    this.run("update jobs set status = 'queued', started = null, heartbeat = null, not_before = ? where id = ? and status = 'running'", until, id);
   }
 
   /** The worker still runs these jobs. */

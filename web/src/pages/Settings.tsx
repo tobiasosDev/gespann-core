@@ -1,9 +1,12 @@
 import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { ago, api, type Settings, type Tokens, useResource } from "../api.ts";
+import { ago, api, type Settings, type Tokens } from "../api.ts";
 import { ModuleSections } from "../components/ModuleSections.tsx";
+import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
 import { Sandboxes } from "./Sandboxes.tsx";
+
+const codexPending = (d: Settings) => d.codex.state === "pending";
 
 /** Agent sign-ins and personal tokens for the MCP endpoint, and how to connect Claude Code or Codex. */
 function AgentAccess() {
@@ -110,7 +113,7 @@ function AgentAccess() {
 }
 
 export function SettingsPage() {
-  const { data, error, reload } = useResource<Settings>("/settings", (d) => d.codex.state === "pending", 3000);
+  const { data, error, reload } = useResource<Settings>("/settings", codexPending, 3000);
   const [busy, setBusy] = useState(false);
   if (error) return <p className="text-bad">{error}</p>;
   if (!data) return <p className="text-muted-foreground">Loading…</p>;

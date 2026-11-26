@@ -1,15 +1,20 @@
-import { useEffect, useState } from "react";
-import { api, type SettingsRow, type SettingsSection, useResource } from "../api.ts";
+import { useState } from "react";
+import { api, type SettingsRow, type SettingsSection } from "../api.ts";
+import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, cn, Input } from "./ui.tsx";
 
 /** What a module action answers: leave for a URL (a checkout, a billing portal), show an error, or reload. */
 type ActionResult = { redirect?: string; error?: string };
 
 function Row({ row, busy, run }: { row: SettingsRow; busy: boolean; run: (action: string, body: unknown) => void }) {
-  const [value, setValue] = useState(row.kind === "number" ? String(row.value) : "");
-  useEffect(() => {
-    if (row.kind === "number") setValue(String(row.value));
-  }, [row]);
+  const saved = row.kind === "number" ? String(row.value) : "";
+  const [value, setValue] = useState(saved);
+  // A new value from the server replaces what is typed; the same value on the next poll leaves it alone.
+  const [seen, setSeen] = useState(saved);
+  if (seen !== saved) {
+    setSeen(saved);
+    setValue(saved);
+  }
   if (row.kind === "text")
     return <p className={cn("text-body", row.tone === "muted" ? "text-muted-foreground" : row.tone === "warn" ? "text-warn" : row.tone === "bad" ? "text-bad" : undefined)}>{row.text}</p>;
   if (row.kind === "meter") {
@@ -51,6 +56,11 @@ function Row({ row, busy, run }: { row: SettingsRow; busy: boolean; run: (action
   );
 }
 
+/** `/settings#plan` scrolls to that card when it appears; the page loads the cards after the first paint. */
+function scrollHere(el: HTMLDivElement | null): void {
+  el?.scrollIntoView();
+}
+
 function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -75,7 +85,8 @@ function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<v
     }
   };
   return (
-    <Card id={s.id} className="mb-6 scroll-mt-6">
+    // Raw, not decoded: card ids are plain words, and decoding throws on a link like /settings#%.
+    <Card id={s.id} ref={s.id === location.hash.slice(1) ? scrollHere : undefined} className="mb-6 scroll-mt-6">
       <CardHeader title={s.title} description={s.description} action={s.badge && <Badge tone={s.badge.tone}>{s.badge.text}</Badge>} />
       <div className="space-y-3 px-4 py-4">
         {s.rows.map((row, i) => (
@@ -90,13 +101,6 @@ function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<v
 /** Cards the instance's server module adds to Settings (a plan and its usage, for example). None without a module. */
 export function ModuleSections() {
   const { data, error, reload } = useResource<{ sections: SettingsSection[]; error?: string }>("/settings/sections");
-  // `/settings#plan` scrolls to that card once it is there; the page loads it after the first paint.
-  const ids = data?.sections.map((s) => s.id).join(",") ?? "";
-  useEffect(() => {
-    // Raw, not decoded: card ids are plain words, and decoding throws on a link like /settings#%.
-    const id = location.hash.slice(1);
-    if (id && ids.split(",").includes(id)) document.getElementById(id)?.scrollIntoView();
-  }, [ids]);
   const problem = error ?? data?.error;
   return (
     <>

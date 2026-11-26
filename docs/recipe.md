@@ -71,7 +71,9 @@ cleanup:
 
 ## Order
 
-A run executes the recipe in this order. Steps marked *always* run even when an earlier one failed.
+gespann is the last stage of a PR's checks. Before it takes a sandbox, a run waits until the PR head's other checks (GitHub check runs and commit statuses, for example CI's types, lint, tests and build) have passed. If one fails, the run ends as SKIP and its check says which; push a fix or start gespann again once they pass. A PR whose CI has not reported anything gets a minute for it to start; checks that still run after an hour no longer hold the test back.
+
+Then a run executes the recipe in this order. Steps marked *always* run even when an earlier one failed.
 
 1. `setup`, in order
 2. `services` start; each waits for its `ready` command

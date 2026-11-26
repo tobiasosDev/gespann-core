@@ -8,6 +8,10 @@ echo "--- toolchain"
 echo "node $(node --version), npm $(npm --version)"
 echo "--- npm ci"
 npm ci --no-audit --no-fund
+echo "+++ audit (runtime dependencies)"
+npm audit --omit=dev --audit-level=high
+echo "+++ lint"
+npm run lint
 echo "+++ typecheck"
 npm run typecheck
 echo "+++ tests"

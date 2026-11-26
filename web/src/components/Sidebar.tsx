@@ -1,7 +1,8 @@
 import { BookOpen, Check, ChevronRight, FolderGit2, History, Link2, LogOut, Menu, Plus, Settings, Wrench, X } from "lucide-react";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { api, type Me, type ProjectRow } from "../api.ts";
-import { Link, Logo, usePath } from "../nav.tsx";
+import { usePath } from "../live.ts";
+import { landing, Link, Logo } from "../nav.tsx";
 import { cn } from "./ui.tsx";
 
 type Dot = "ok" | "info" | "bad" | "warn" | "muted";
@@ -74,10 +75,12 @@ export function Sidebar({ me, section, projects }: { me: Me; section: Section; p
   // A project row only folds its pages in and out; it never navigates, so the mobile drawer stays open.
   // The project of the open page is unfolded on every arrival, also on another page of the same project.
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(() => new Set(current === null ? [] : [current]));
-  const path = usePath();
-  useEffect(() => {
-    if (current !== null) setUnfolded((s) => (s.has(current) ? s : new Set(s).add(current)));
-  }, [path, current]);
+  const arrival = `${usePath()} ${current}`;
+  const [arrived, setArrived] = useState(arrival);
+  if (arrived !== arrival) {
+    setArrived(arrival);
+    if (current !== null && !unfolded.has(current)) setUnfolded(new Set(unfolded).add(current));
+  }
   const toggle = (id: number) =>
     setUnfolded((s) => {
       const next = new Set(s);
@@ -217,11 +220,10 @@ function Rail({ me, section, projects }: { me: Me; section: Section; projects: P
           return (
             <Fragment key={p.id}>
               <Link
-                to={`/projects/${p.id}`}
+                to={`/projects/${p.id}/${landing(p)}`}
                 className={cn(railClass(here), "border font-mono text-small", here ? "border-foreground/25" : "border-border")}
                 title={`${p.repo}, ${DOT_LABEL[projectDot(p)]}`}
                 aria-label={p.repo}
-                aria-current={here && tab === null ? "page" : undefined}
               >
                 {initials(p.repo)}
                 <span className="absolute top-1 right-1 flex">
@@ -276,17 +278,20 @@ function Rail({ me, section, projects }: { me: Me; section: Section; projects: P
   );
 }
 
+/** Opens a dialog as modal when it mounts: Escape closes it and the page behind ignores the keyboard. */
+function showModal(d: HTMLDialogElement | null): void {
+  if (d && !d.open) d.showModal();
+}
+
 /** Below md the sidebar becomes a drawer behind a menu button. It closes on every navigation, not when a project folds open. */
 function MobileBar({ section, children }: { section: Section; children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const key = JSON.stringify(section);
-  useEffect(() => setOpen(false), [key]);
-  useEffect(() => {
-    if (!open) return;
-    const on = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", on);
-    return () => window.removeEventListener("keydown", on);
-  }, [open]);
+  const [shown, setShown] = useState(key);
+  if (shown !== key) {
+    setShown(key);
+    setOpen(false);
+  }
   return (
     <div className="md:hidden">
       <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur">
@@ -298,17 +303,24 @@ function MobileBar({ section, children }: { section: Section; children: ReactNod
         </Link>
       </header>
       {open && (
-        <div className="fixed inset-0 z-30">
-          <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close navigation" onClick={() => setOpen(false)} />
+        <dialog
+          ref={showModal}
+          aria-label="Navigation"
+          onClose={(e) => {
+            if (!e.currentTarget.open) setOpen(false);
+          }}
+          className="fixed inset-0 m-0 h-dvh max-h-none w-screen max-w-none bg-transparent p-0 text-foreground backdrop:bg-transparent"
+        >
+          <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close navigation" tabIndex={-1} onClick={() => setOpen(false)} />
           {/* Every link closes the drawer, also one to the page already open. This runs after the link's own
               handler (bubble, not capture): unmounting first would drop that handler and reload the whole page. */}
           <div className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r border-border bg-card shadow-xl" onClick={(e) => (e.target as HTMLElement).closest("a") && setOpen(false)}>
-            <button className="absolute top-3.5 right-3 cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent" aria-label="Close navigation" onClick={() => setOpen(false)}>
+            <button autoFocus className="absolute top-3.5 right-3 cursor-pointer rounded p-1 text-muted-foreground hover:bg-accent" aria-label="Close navigation" onClick={() => setOpen(false)}>
               <X className="size-4" />
             </button>
             {children}
           </div>
-        </div>
+        </dialog>
       )}
     </div>
   );

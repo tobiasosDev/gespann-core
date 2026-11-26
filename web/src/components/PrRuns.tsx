@@ -1,7 +1,8 @@
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import { ago, duration, type RunRow } from "../api.ts";
-import { Link, navigate, RunStatus } from "../nav.tsx";
+import { navigate } from "../live.ts";
+import { Link, RunStatus } from "../nav.tsx";
 import { type ClosedPr, counts, groupByPr, type PrGroup, type PrState, result, type RunResult, usualSeconds } from "../runs.ts";
 import { Button, Card, cn, Empty, LinkButton, Mono } from "./ui.tsx";
 

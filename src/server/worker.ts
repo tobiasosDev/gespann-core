@@ -13,7 +13,7 @@ import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run, Slot } from "./db.ts";
 import type { ServerModule } from "./extension.ts";
 import { withCodex } from "./codex.ts";
-import type { Github, LinkedIssue } from "./github.ts";
+import type { Github, LinkedIssue, OtherChecks } from "./github.ts";
 import { finishRecordingScript, q, runLong, type Sandboxes } from "./sandbox.ts";
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
@@ -103,6 +103,7 @@ async function saveBundle(d: Deps, p: Project, b: Box): Promise<void> {
 }
 
 /** Projects whose first bundle is being made from a sandbox that has the recipe. */
+// eslint-disable-next-line no-restricted-syntax -- lock: the jobs waiting on it end with the process too
 const bootstrapping = new Map<number, Promise<void>>();
 
 /**
@@ -236,7 +237,9 @@ async function oneAtATime<T>(locks: Map<number, Promise<unknown>>, key: number, 
 }
 
 /** Projects whose environment a run prepares again, and projects whose copy a run fixes. */
+// eslint-disable-next-line no-restricted-syntax -- lock: the jobs waiting on it end with the process too
 const recovering = new Map<number, Promise<unknown>>();
+// eslint-disable-next-line no-restricted-syntax -- lock: the jobs waiting on it end with the process too
 const repairing = new Map<number, Promise<unknown>>();
 
 function codexExec(b: Box, promptFile: string, lastFile: string, jsonlFile: string, model: string | null): string {
@@ -810,6 +813,93 @@ function isShadow(p: Project): boolean {
   }
 }
 
+/** How often a run asks GitHub again while the PR's other checks run. */
+export const CI_POLL_MS = 30_000;
+/** A PR without any other check yet gets this long for its CI to report, so a slow CI start is not taken for none. */
+export const CI_GRACE_MS = 60_000;
+/** Checks that still run after this long do not hold the test back any further. */
+export const CI_MAX_WAIT_MS = 60 * 60_000;
+
+export type CiStep = { kind: "go"; note?: string } | { kind: "wait"; ms: number; line: string } | { kind: "skip"; reason: string };
+
+/**
+ * gespann is the last and most expensive stage: types, lint, tests and build run first, and the agent
+ * starts only on a head whose other checks passed. A red check ends the run before it takes a sandbox.
+ */
+export function ciStep(c: OtherChecks, ageMs: number): CiStep {
+  const names = (l: string[]) => (l.length > 5 ? `${l.slice(0, 5).join(", ")} and ${l.length - 5} more` : l.join(", "));
+  if (c.failed.length) return { kind: "skip", reason: `the PR's other checks failed first (${names(c.failed)}); gespann tests once they pass` };
+  if (c.pending.length) {
+    if (ageMs >= CI_MAX_WAIT_MS) return { kind: "go", note: `other checks still run after ${Math.round(ageMs / 60_000)} min (${names(c.pending)}): testing anyway` };
+    return { kind: "wait", ms: CI_POLL_MS, line: `waiting for the PR's other checks: ${names(c.pending)}` };
+  }
+  if (!c.passed.length && ageMs < CI_GRACE_MS) return { kind: "wait", ms: CI_GRACE_MS - ageMs, line: "no other checks yet: waiting a minute for CI to report" };
+  return { kind: "go" };
+}
+
+/** A run whose PR failed its other checks ends as SKIP, without a sandbox; a held PR stays held for a person. */
+async function skipForChecks(d: Deps, p: Project, run: Run, reason: string, log: (s: string) => void): Promise<void> {
+  d.db.updateRun(run.id, { status: "done", outcome: "SKIP", error: reason, finished: new Date().toISOString() });
+  log(`skipped: ${reason}`);
+  const gate = { db: d.db, github: d.github, baseUrl: d.config.baseUrl };
+  await withPrLock(p, run.pr, async () => {
+    const checkId = d.db.run_(run.id)?.check_run_id ?? run.check_run_id;
+    if (checkId)
+      await d
+        .github()
+        .updateCheck(p.installation_id, p.repo, checkId, { status: "completed", conclusion: "skipped", title: "Skipped: other checks failed first", summary: `${reason[0]?.toUpperCase()}${reason.slice(1)}. Fix them, then push or start gespann again.` })
+        .catch((err: Error) => log(`could not complete the GitHub check: ${err.message}`));
+    const pull = await d.github().pull(p.installation_id, p.repo, run.pr).catch(() => null);
+    if (pull && pull.state === "open" && gated(p, pull) && pull.head.sha === run.head) {
+      const state = await applyGate(gate, p, pull).catch((err: Error) => {
+        log(`merge gate: ${err.message}`);
+        return null;
+      });
+      const line = state === "approved" ? gateLine(state, d.db.hold(p.id, run.pr)?.approved_by) : state ? gateLine("failed") : "";
+      const body = runComment(d.config.baseUrl, { ...run, outcome: "SKIP", error: reason }, null, [], line);
+      const commentId = await upsertComment(gate, p, run.pr, body).catch((err: Error) => {
+        log(`could not comment on the PR: ${err.message}`);
+        return null;
+      });
+      if (commentId) d.db.updateRun(run.id, { comment_id: commentId });
+    }
+  });
+}
+
+/** "go" when the run may take a sandbox now; otherwise the job went back into the queue or the run ended. */
+async function awaitChecks(d: Deps, job: Job, p: Project, run: Run, log: (s: string) => void): Promise<"go" | "later" | "skipped"> {
+  const age = Date.now() - Date.parse(run.created);
+  let checks: OtherChecks | null = null;
+  let unread = "";
+  try {
+    checks = await d.github().otherChecks(p.installation_id, p.repo, run.head);
+  } catch (err) {
+    unread = (err as Error).message.slice(0, 200);
+  }
+  if (d.db.run_(run.id)?.status === "cancelled") return "go";
+  const step: CiStep = checks
+    ? ciStep(checks, age)
+    : age >= CI_MAX_WAIT_MS
+      ? { kind: "go", note: `could not read the PR's other checks for an hour (${unread}): testing anyway` }
+      : { kind: "wait", ms: CI_POLL_MS, line: `could not read the PR's other checks (${unread}): trying again` };
+  if (step.kind === "go") {
+    if (step.note) log(step.note);
+    if (checks && !checks.statuses && !job.log.includes("commit statuses")) log("the GitHub App may not read commit statuses: only check runs count as other checks");
+    return "go";
+  }
+  if (step.kind === "skip") {
+    await skipForChecks(d, p, run, step.reason, log);
+    return "skipped";
+  }
+  const last = d.db.job(job.id)?.log.trimEnd().split("\n").at(-1) ?? "";
+  if (!last.endsWith(step.line)) {
+    log(step.line);
+    if (run.check_run_id) await d.github().updateCheck(p.installation_id, p.repo, run.check_run_id, { status: "queued", title: "Waiting for the other checks", summary: `gespann tests this PR once its other checks pass. ${step.line[0]?.toUpperCase()}${step.line.slice(1)}.` }).catch(() => undefined);
+  }
+  d.db.deferJob(job.id, new Date(Date.now() + step.ms).toISOString());
+  return "later";
+}
+
 /** A job that the server lost this often (a restart, a crash during it) fails instead of starting again. */
 export const MAX_RESTARTS = 2;
 /** A running job whose server has not beaten for this long is taken to be lost and goes back into the queue. */
@@ -841,6 +931,10 @@ export async function processJob(d: Deps, job: Job): Promise<void> {
         log(`skipped: the PR was ${pr.merged ? "merged" : "closed"} before its test started`);
         return d.db.endJob(job.id, "cancelled");
       }
+      // The other checks first: a run whose CI is red or still running never asks the server module or takes a sandbox.
+      const gate = await awaitChecks(d, job, p, run, log);
+      if (gate === "later") return;
+      if (gate === "skipped") return d.db.endUnstarted(job.id);
       const refused = await admit(d, job, p).then(() => null, (err: Error) => err);
       // Closed or superseded while GitHub (or the server module) answered; verifyRun marks the run running before its first await.
       if (d.db.run_(run.id)?.status === "cancelled") return d.db.endJob(job.id, "cancelled");

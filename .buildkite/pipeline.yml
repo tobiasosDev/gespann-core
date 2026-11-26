@@ -7,6 +7,6 @@ agents:
 
 steps:
   - key: check
-    label: Typecheck, tests, build
+    label: Audit, lint, typecheck, tests, build
     command: .buildkite/jobs/check.sh
     timeout_in_minutes: 15
