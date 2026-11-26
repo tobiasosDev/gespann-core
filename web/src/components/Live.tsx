@@ -46,43 +46,52 @@ export function StageStrip({ progress, queued }: { progress: Progress | null; qu
   const curIndex = cur ? STAGES.indexOf(cur) : -1;
   const checks = progress?.checks ?? [];
   const done = checks.filter((c) => c.result).length;
+  // A second try starts over from the copy: the first one's time goes in a note below, so the stages add up to the duration.
+  const firstTry = (progress?.attempt ?? 1) > 1 && progress?.sandboxDone && progress.at.copy ? duration(progress.sandboxDone, progress.at.copy) : null;
   return (
-    <div className="mb-6 grid divide-y divide-border overflow-hidden rounded-lg border border-border bg-card sm:grid-cols-5 sm:divide-x sm:divide-y-0">
-      {STAGES.map((s, i) => {
-        const ran = (n: number) => !!progress?.at[STAGES[n] as Stage];
-        // A stage before the current one that never started was skipped, not done: after a copy that did not come up, or
-        // the checks of a tester that shared no plan.
-        const state = i < curIndex ? (!ran(i) ? "skipped" : s === "copy" && !ran(i + 1) ? "failed" : "done") : i === curIndex ? "now" : "todo";
-        const next = STAGES.slice(i + 1).find((n) => progress?.at[n]);
-        const end = s === "sandbox" && progress?.sandboxDone ? progress.sandboxDone : next ? (progress?.at[next] ?? null) : null;
-        let detail: string;
-        if (state === "done" || state === "failed") detail = duration(progress?.at[s] ?? null, end);
-        else if (state === "skipped") detail = s === "checks" && progress?.at.read ? "no plan shared" : "skipped";
-        else if (state === "now") {
-          const took = duration(progress?.at[s] ?? null, null);
-          if (s === "checks" && checks.length) detail = `${done} of ${checks.length} · ${took}`;
-          else if (s === "copy" && (progress?.attempt ?? 1) > 1) detail = `fixing, then again · ${took}`;
-          else detail = took;
-        } else detail = queued && i === 0 ? "waiting for a sandbox" : s === "verdict" ? "comes last" : "";
-        return (
-          <div key={s} className={cn("px-4 py-3", state === "now" && "bg-info/[0.08]")}>
-            <div className={cn("flex items-center gap-2 text-body font-medium whitespace-nowrap", (state === "todo" || state === "skipped") && "text-muted-foreground")}>
-              {state === "done" ? (
-                <Check className="size-4 shrink-0 text-ok" aria-label="done" />
-              ) : state === "failed" ? (
-                <X className="size-4 shrink-0 text-bad" aria-label="failed" />
-              ) : state === "now" ? <LiveDot /> : <WaitDot />}
-              {LABEL[s]}
-            </div>
-            <div className={cn("mt-1 min-h-5 pl-6 text-small whitespace-nowrap text-muted-foreground", state === "now" && "text-info")}>{detail}</div>
-            {state === "now" && s === "checks" && checks.length > 0 && (
-              <div className="mt-2.5 ml-6 h-[3px] overflow-hidden rounded-full bg-border" role="progressbar" aria-valuemin={0} aria-valuemax={checks.length} aria-valuenow={done}>
-                <div className="h-full rounded-full bg-info transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${(done / checks.length) * 100}%` }} />
+    <div className="mb-6">
+      <div className="grid divide-y divide-border overflow-hidden rounded-lg border border-border bg-card lg:grid-cols-5 lg:divide-x lg:divide-y-0">
+        {STAGES.map((s, i) => {
+          const ran = (n: number) => !!progress?.at[STAGES[n] as Stage];
+          // A stage before the current one that never started was skipped, not done: after a copy that did not come up, or
+          // the checks of a tester that shared no plan.
+          const state = i < curIndex ? (!ran(i) ? "skipped" : s === "copy" && !ran(i + 1) ? "failed" : "done") : i === curIndex ? "now" : "todo";
+          const next = STAGES.slice(i + 1).find((n) => progress?.at[n]);
+          const end = s === "sandbox" && progress?.sandboxDone ? progress.sandboxDone : next ? (progress?.at[next] ?? null) : null;
+          let detail: string;
+          if (state === "done" || state === "failed") detail = duration(progress?.at[s] ?? null, end);
+          else if (state === "skipped") detail = s === "checks" && progress?.at.read ? "no plan shared" : "skipped";
+          else if (state === "now") {
+            const took = duration(progress?.at[s] ?? null, null);
+            if (s === "checks" && checks.length) detail = `${done} of ${checks.length} · ${took}`;
+            else if (s === "copy" && (progress?.attempt ?? 1) > 1) detail = `second try · ${took}`;
+            else detail = took;
+          } else detail = queued && i === 0 ? "waiting for a sandbox" : "";
+          return (
+            <div key={s} className={cn("px-4 py-3", state === "now" && "bg-info/[0.08]")}>
+              <div className={cn("flex items-center gap-2 text-body font-medium whitespace-nowrap", (state === "todo" || state === "skipped") && "text-muted-foreground")}>
+                {state === "done" ? (
+                  <Check className="size-4 shrink-0 text-ok" aria-label="done" />
+                ) : state === "failed" ? (
+                  <X className="size-4 shrink-0 text-bad" aria-label="failed" />
+                ) : state === "now" ? <LiveDot /> : <WaitDot />}
+                {LABEL[s]}
               </div>
-            )}
-          </div>
-        );
-      })}
+              <div className={cn("mt-1 pl-6 text-small text-muted-foreground lg:min-h-5", !detail && "hidden lg:block", state === "now" && "text-info")}>{detail}</div>
+              {state === "now" && s === "checks" && checks.length > 0 && (
+                <div className="mt-2.5 ml-6 h-[3px] overflow-hidden rounded-full bg-border" role="progressbar" aria-valuemin={0} aria-valuemax={checks.length} aria-valuenow={done}>
+                  <div className="h-full rounded-full bg-info transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${(done / checks.length) * 100}%` }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {firstTry && (
+        <p className="mt-2 max-w-3xl text-small text-muted-foreground">
+          Second try. The first test took {firstTry} and was blocked by something the copy of the app lacked. Codex adds it, then the change is tested again.
+        </p>
+      )}
     </div>
   );
 }
