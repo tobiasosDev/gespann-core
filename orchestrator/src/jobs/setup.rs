@@ -63,6 +63,9 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
     cx.jr
         .step(&k("prompt"), || async {
             let mut input = json!({ "repo": p.repo, "repoDir": b.repo, "projectDir": b.project, "criteria": p.criteria });
+            if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+                input["platform"] = json!("macos");
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }
@@ -75,7 +78,7 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
     let cancelled = || cx.stopped();
     let command = agent_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), &agent, "high");
     let codex_key = k("codex");
-    let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
+    let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, cx.sb(), &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
     let last = sb.read_file(&b.id, &format!("{}/setup-last.txt", b.gespann)).await?.unwrap_or_default();
     if !last.is_empty() {
         cx.log(&format!("{name}: {}", cut(&last, 4000)));

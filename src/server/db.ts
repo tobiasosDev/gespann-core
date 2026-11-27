@@ -77,8 +77,13 @@ export interface Project {
   gate: number;
   /** Screen sizes the tester checks every PR at, preset ids joined with commas (`phone-s,desktop`); empty: the browser's own size. */
   viewports: string;
+  /** What the project's sandboxes run on: `linux` (web apps, servers) or `macos` (iOS and macOS apps, built with Xcode). */
+  platform: Platform;
   created: string;
 }
+
+export type Platform = "linux" | "macos";
+export const PLATFORMS: readonly Platform[] = ["linux", "macos"];
 
 export interface Job {
   id: number;
@@ -291,6 +296,7 @@ export class Db {
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
     if (!pcols.has("bundle")) this.sql.exec("alter table projects add column bundle integer not null default 0");
     if (!pcols.has("viewports")) this.sql.exec("alter table projects add column viewports text not null default ''");
+    if (!pcols.has("platform")) this.sql.exec("alter table projects add column platform text not null default 'linux'");
     if (!pcols.has("gate")) {
       // New projects start with the gate off; projects from before the setting keep the gate they had.
       this.sql.exec("alter table projects add column gate integer not null default 0");

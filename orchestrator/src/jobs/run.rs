@@ -272,7 +272,7 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
     let conflict = db.run(run.id)?.and_then(|r| r.conflict);
     let outcome = if conflict.is_some() { None } else { Some(a.outcome.clone()) };
     // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
-    let sizes = viewports_of(&db.project(p.id)?.map_or_else(|| p.viewports.clone(), |p| p.viewports)).len();
+    let sizes = viewports_of(&web_viewports(&db.project(p.id)?.unwrap_or_else(|| p.clone()))).len();
     let out = format!("{dir}/out");
     let col: Collected = cx.jr.step("collect", || collect(cx, b, run, &out, sizes < 2)).await?;
     if cancelled() {
@@ -332,7 +332,7 @@ async fn stop(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
         }
     }
     if let Some(owner) = cx.ctx.db.project(cx.job.project_id)?.map(|p| p.owner_id) {
-        if let Err(e) = crate::codex::give_back(cx.ctx, &cx.jr, owner, &b.id).await {
+        if let Err(e) = crate::codex::give_back(cx.ctx, &cx.jr, owner, cx.sb(), &b.id).await {
             cx.log(&format!("✗ {e:#}"));
         }
     }
@@ -505,7 +505,7 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let viewports: Vec<Viewport> = cx
         .jr
         .step(&k("screen"), || async move {
-            let viewports = viewports_of(&db.project(p.id)?.map_or_else(|| p.viewports.clone(), |p| p.viewports));
+            let viewports = viewports_of(&web_viewports(&db.project(p.id)?.unwrap_or_else(|| p.clone())));
             if let Some(screen) = screen_for(&viewports) {
                 // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
                 // Before the copy comes up: a new screen ends whatever ran on the old one.
@@ -579,6 +579,9 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
             if let Some(m) = mirror {
                 input["mirror"] = json!(m);
             }
+            if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+                input["platform"] = json!("macos");
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }
@@ -610,7 +613,7 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let agent = agent_for(cx, p).await?;
     let command = agent_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), &agent, "medium");
     let tester_key = k("tester");
-    let tester = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || {
+    let tester = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, cx.sb(), &b.id, &agent, || {
         cx.jr.long(sb, &b.id, &tester_key, &command, Long { timeout: Duration::from_secs_f64(minutes * 60.0), cancelled: &cancelled, on_tick: Some(&tick) })
     })
     .await;
@@ -714,6 +717,15 @@ async fn drop_proof(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
             Ok(())
         })
         .await
+}
+
+/// The project's screen sizes; none for a macOS project: the iOS Simulator shows the device's own screen.
+fn web_viewports(p: &Project) -> String {
+    if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+        String::new()
+    } else {
+        p.viewports.clone()
+    }
 }
 
 #[cfg(test)]

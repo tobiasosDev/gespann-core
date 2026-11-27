@@ -100,7 +100,7 @@ pub async fn process(ctx: Arc<Ctx>, job: Job) {
         // The lease runs out and another pass picks the job up again.
         Err(e) => return crate::log("error", &format!("job {}: could not read its project: {e:#}", job.id)),
     };
-    let sb = match ctx.sandboxes_for(p.owner_id) {
+    let sb = match ctx.sandboxes_for_project(&p) {
         Ok(sb) => sb,
         Err(e) => {
             // The worker starts only jobs whose owner has a provider; this one was taken over after the

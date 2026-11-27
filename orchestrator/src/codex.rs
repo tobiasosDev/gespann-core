@@ -149,24 +149,25 @@ impl Agent {
 }
 
 /// Runs `f` (a Codex step) with what the job's agent needs in the sandbox: the owner's Codex sign-in
-/// (`with_codex`) or their OpenRouter key.
-pub async fn with_agent<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, f: F) -> Result<T>
+/// (`with_codex`) or their OpenRouter key. `sb` is the provider of the project's sandbox.
+#[allow(clippy::too_many_arguments)]
+pub async fn with_agent<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sb: &dyn Sandboxes, sandbox_id: &str, agent: &Agent, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
     if agent.auth {
-        return crate::agent_auth::with_grok_auth(ctx, j, key, owner_id, sandbox_id, f).await;
+        return crate::agent_auth::with_grok_auth(ctx, j, key, owner_id, sb, sandbox_id, f).await;
     }
     match agent.provider.key_file() {
-        None => with_codex(ctx, j, key, owner_id, sandbox_id, f).await,
-        Some(key_file) => with_key(ctx, j, key, owner_id, sandbox_id, agent, key_file, f).await,
+        None => with_codex(ctx, j, key, owner_id, sb, sandbox_id, f).await,
+        Some(key_file) => with_key(ctx, j, key, owner_id, sb, sandbox_id, agent, key_file, f).await,
     }
 }
 
 /// The owner's key (OpenRouter, Anthropic, GitHub or xAI) in the sandbox for the start of the step.
 #[allow(clippy::too_many_arguments)]
-async fn with_key<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, key_file: &str, f: F) -> Result<T>
+async fn with_key<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sb: &dyn Sandboxes, sandbox_id: &str, agent: &Agent, key_file: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -179,8 +180,6 @@ where
     if agent.provider == Provider::Openrouter && agent.model.as_deref().unwrap_or("").is_empty() {
         bail!("Choose an OpenRouter model in Settings first: the agent runs on your OpenRouter key.");
     }
-    let sandboxes = ctx.sandboxes_for(owner_id)?;
-    let sb = sandboxes.as_ref();
     let file = format!("{}/{key_file}", sb.home(sandbox_id));
     // Written once per step under the journal: the step's command deletes it when it starts, and a
     // takeover attaches to that command instead of writing the key again.
@@ -305,7 +304,7 @@ fn keep_logged(ctx: &Ctx, owner_id: i64, auth: &str) -> bool {
 /// `withCodex`: the owner's sign-in in the sandbox while `f` runs, refreshed copies shared at once.
 /// Under the journal key `key`: on a takeover the sign-in is not written again (Codex may have
 /// refreshed the copy in the sandbox meanwhile), only watched and read back.
-pub async fn with_codex<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, f: F) -> Result<T>
+pub async fn with_codex<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sb: &dyn Sandboxes, sandbox_id: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -332,8 +331,6 @@ where
         }
     }
     let release = || drop(refreshing.lock().expect("refresh guard").take());
-    let sandboxes = ctx.sandboxes_for(owner_id)?;
-    let sb = sandboxes.as_ref();
     let file = auth_file(sb, sandbox_id);
     let before = before;
     let outcome = async {
@@ -377,9 +374,7 @@ where
 /// copy Codex refreshed is kept, and auth.json leaves the sandbox, as `with_codex` would have done. No
 /// Codex step of the job runs any more, so whatever auth.json the sandbox has is the job's, also one
 /// written just before an orchestrator stopped. Scopes count as given back only once that worked.
-pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) -> Result<()> {
-    let sandboxes = ctx.sandboxes_for(owner_id)?;
-    let sb = sandboxes.as_ref();
+pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sb: &dyn Sandboxes, sandbox_id: &str) -> Result<()> {
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
@@ -421,7 +416,7 @@ pub fn login_progress(tail: &str) -> serde_json::Value {
 
 /// `startLogin` without the UI: the device-code sign-in for a user whose `codex_state` is pending.
 pub async fn run_login(ctx: &Ctx, user_id: i64) -> Result<()> {
-    let sandboxes = match ctx.sandboxes_for(user_id) {
+    let sandboxes = match ctx.sign_in_sandboxes(user_id) {
         Ok(sb) => sb,
         Err(e) => {
             let lines = format!("{e:#}");

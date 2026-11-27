@@ -16,7 +16,7 @@ import { AGENT_PROVIDERS, type Db, type Project, SIGN_IN_AGENTS, type User } fro
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
-import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
+import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, servesMacos, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { AGENT_MODEL_RE, AgentKeyError, checkAgentKey, isKeyAgent, KEY_AGENT_INFO, KEY_AGENTS } from "./agentkeys.ts";
@@ -507,6 +507,9 @@ export function createApp(d: AppDeps): Hono<Env> {
       default_checks: DEFAULT_CHECKS,
       viewports: viewportsOf(p.viewports).map((v) => v.id),
       viewport_presets: VIEWPORTS,
+      platform: p.platform === "macos" ? "macos" : "linux",
+      /** The instance runs macOS sandboxes (the orchestrator says so); without them a macOS project's jobs wait. */
+      macos_available: servesMacos(orchestratorState(db)),
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
       runs: db.runs(p.id).map((r) => ({ ...r, waitingForChecks: ciWait.has(r.id) })),
       closed: db.closedPrs(p.id),
@@ -544,6 +547,18 @@ export function createApp(d: AppDeps): Hono<Env> {
     const unknown = body.viewports.filter((id) => !VIEWPORTS.some((v) => v.id === id));
     if (unknown.length) throw new HttpError(400, `viewports: unknown size ${unknown.map(String).join(", ")}`);
     db.updateProject(p.id, { viewports: viewportsOf(body.viewports.join(",")).map((v) => v.id).join(",") });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/projects/:id/platform", async (c) => {
+    const p = project(c);
+    const body = await c.req.json<{ platform?: unknown }>();
+    const platform = body.platform;
+    if (platform !== "linux" && platform !== "macos") throw new HttpError(400, "platform: linux or macos");
+    if (platform === p.platform) return c.json({ ok: true });
+    if (db.jobs(p.id).some((j) => j.status === "queued" || j.status === "running")) throw new HttpError(409, "wait until the project's jobs have ended, then switch");
+    // The recipe was written for the other platform: the next setup starts over in a sandbox of the new one.
+    db.updateProject(p.id, { platform, setup: "none", setup_error: null, bundle: 0, sandbox_id: null });
     return c.json({ ok: true });
   });
 

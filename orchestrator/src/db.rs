@@ -32,6 +32,8 @@ pub struct Project {
     pub recipe: Option<String>,
     pub notes: Option<String>,
     pub viewports: String,
+    /// "linux" or "macos" (`sandbox::Platform`); empty in a database from before platforms.
+    pub platform: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -159,7 +161,8 @@ create table if not exists projects (
   codex text not null default 'none', codex_login text,
   setup text not null default 'none', setup_error text, recipe text, notes text,
   active integer not null default 0, created text not null,
-  suggestion text, bundle integer not null default 0, viewports text not null default '', gate integer not null default 0);
+  suggestion text, bundle integer not null default 0, viewports text not null default '', gate integer not null default 0,
+  platform text not null default 'linux');
 create table if not exists runs (
   id integer primary key, project_id integer not null references projects(id), pr integer not null, title text,
   head text not null, base text not null, base_ref text not null,
@@ -218,6 +221,8 @@ fn project_row(r: &rusqlite::Row) -> rusqlite::Result<Project> {
         recipe: r.get("recipe")?,
         notes: r.get("notes")?,
         viewports: r.get("viewports")?,
+        // The UI adds the column; an orchestrator that runs before it reads every project as Linux.
+        platform: r.get("platform").unwrap_or_default(),
     })
 }
 

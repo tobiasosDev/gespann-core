@@ -1,6 +1,6 @@
 # Remote sandboxes: the HTTP protocol
 
-`SANDBOX_PROVIDER=remote` makes the orchestrator call a sandbox service over HTTP for every sandbox operation, so sandboxes can live anywhere an adapter of yours can reach: a cloud VM vendor, Kubernetes, a pool of machines. gespann ships no adapter; you write one that answers the calls below. Set it up: [self-host.md](self-host.md#remote).
+`SANDBOX_PROVIDER=remote` makes the orchestrator call a sandbox service over HTTP for every sandbox operation, so sandboxes can live anywhere an adapter of yours can reach: a cloud VM vendor, Kubernetes, a pool of machines. gespann ships no adapter; you write one that answers the calls below. Set it up: [self-host.md](self-host.md#remote). A service that makes Macs for iOS and macOS apps answers the same calls; the orchestrator reaches it through `SANDBOX_PROVIDER_MACOS=remote` and the `MACOS_` variables ([self-host.md](self-host.md#macos)).
 
 ## Basics
 
@@ -35,7 +35,7 @@
 
 ## What the sandbox needs
 
-The same as any provider ([self-host.md](self-host.md#sandboxes)): `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, the `codex` CLI, what the recipes use (often Docker), and for UI checks a desktop with Chrome and a browser or computer-use tool for Codex.
+The same as any provider ([self-host.md](self-host.md#sandboxes)): `bash`, `git`, `curl`, Node.js 22.18 or newer with `npm`, the `codex` CLI, what the recipes use (often Docker), and for UI checks a desktop with Chrome and a browser or computer-use tool for Codex. A macOS sandbox has Xcode and an iOS Simulator runtime instead, and a simulator tool for Codex; its `jobScript` can install Node.js and the agent CLIs, its `testerNote` says how to drive the simulator.
 
 ## Scale
 

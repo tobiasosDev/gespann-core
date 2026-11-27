@@ -49,6 +49,7 @@ The orchestrator:
 |---|---|
 | `SANDBOX_PROVIDER` | `docker`, `ssh` or `remote` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
 | `SANDBOX_PROVIDER_BY_USER` | other providers for some users, e.g. `tobi=ssh,ops=ssh` ([Several providers](#several-providers)) |
+| `SANDBOX_PROVIDER_MACOS` | `ssh` or `remote`: sandboxes for projects that run on macOS, iOS and macOS apps ([macOS](#macos)). Without it, their jobs stay queued |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
 | `MAX_PARALLEL_JOBS` | how many jobs each sandbox provider runs at once ([Parallel jobs](#parallel-jobs)); default: computed from its host, or what a sandbox service allows |
 | `UI_URL` | where it reaches the UI (default `BASE_URL`) |
@@ -91,6 +92,21 @@ One instance can serve different users from different sandbox providers, e.g. th
 `SANDBOX_PROVIDER_BY_USER` maps GitHub logins (any case) to a provider, written as for `SANDBOX_PROVIDER`; comma-separated. A user it names gets that provider for their projects' sandboxes and their Codex sign-in; everyone else gets `SANDBOX_PROVIDER`. Without `SANDBOX_PROVIDER`, only the named users get sandboxes and the jobs of everyone else stay queued. Each provider is made once and runs its own number of jobs at once, so a full CI server never holds up the users of the sandbox service. Each of `docker`, `ssh` and `remote` reads its settings from the variables below, so each exists once per instance. The log names every provider, whom it serves and its number, e.g. `sandboxes: ssh (tobi, ops), parallel jobs: 7 (…)` and `sandboxes: cloud (everyone else), parallel jobs: 200 (the sandbox service allows 200 at once)`.
 
 When a user moves to another provider, their projects' next jobs get a new sandbox there, which takes over the project's current recipe ([Parallel jobs](#parallel-jobs)) and builds the app from scratch on its first job. Their sandboxes on the old provider stay until you delete them.
+
+### macOS
+
+iOS and macOS apps build only with Xcode, so they need a Mac. A project chooses its platform on its Setup page: **Web app** (Linux, the providers above) or **iOS or macOS app** (macOS). The second choice shows once the instance has macOS sandboxes. A macOS project's sandboxes come from `SANDBOX_PROVIDER_MACOS`, whoever owns the project; its jobs wait in the queue while the instance has none. Switching a project's platform resets its environment: Prepare runs again in a sandbox of the new platform.
+
+```bash
+# your own Mac (a Mac mini, a macOS VM in Tart) over SSH
+-e SANDBOX_PROVIDER_MACOS=ssh -e MACOS_SSH_HOST=gespann@mac-mini.internal -e MACOS_SSH_PRIVATE_KEY="$(cat gespann_mac)"
+# or a sandbox service that makes Macs (remote-sandboxes.md)
+-e SANDBOX_PROVIDER_MACOS=remote -e MACOS_SANDBOX_REMOTE_URL=http://macs.internal/api -e MACOS_SANDBOX_REMOTE_TOKEN=$(openssl rand -hex 32)
+```
+
+The macOS provider reads the same variables as its Linux counterpart, with `MACOS_` in front: `MACOS_SSH_HOST`, `MACOS_SSH_PORT`, `MACOS_SSH_KEY_FILE`, `MACOS_SSH_PRIVATE_KEY`, `MACOS_SSH_KNOWN_HOSTS`, `MACOS_SANDBOX_ROOT`, `MACOS_SANDBOX_REMOTE_URL`, `MACOS_SANDBOX_REMOTE_TOKEN`, and `MACOS_MAX_PARALLEL_JOBS` for its number of jobs at once. There is no Docker provider for macOS. Its jobs count apart from the Linux ones, so a full Mac never holds up a web project. The orchestrator's log names it as `sandboxes: ssh (macOS projects), parallel jobs: …`.
+
+The Mac needs what every sandbox needs (`bash`, `git`, `curl`, Node.js 22.18 or newer, the `codex` CLI) and Xcode with an iOS Simulator runtime. Instead of Chrome the tester drives the app in the iOS Simulator: give Codex an MCP server for the simulator in its `config.toml` (for example [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)). `gespann shot` saves the booted simulator's screen (`xcrun simctl io booted screenshot`), or the desktop when none is booted. Screen sizes do not apply: the simulator shows the device's own screen. Setup writes a recipe that builds the app with `xcodebuild`, boots a simulator and launches it; Docker is usually not available on a Mac, so a backend runs natively or as a local fake. Over SSH, runs are not recorded yet (no `DISPLAY` for ffmpeg); a sandbox service can record with its own `POST /sandboxes/:id/recording`.
 
 ### Docker
 

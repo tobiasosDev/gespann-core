@@ -74,6 +74,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const setup: StepState = p.setup === "ready" ? "done" : p.setup === "running" || p.setup === "queued" ? "running" : p.setup === "failed" ? "failed" : "todo";
   const start: StepState = p.active ? "done" : "todo";
   const chosen = sizes ?? p.viewports;
+  /** The last numbered step before Environment: Screen sizes is only there for web apps. */
+  const step = p.platform === "linux" ? 4 : 3;
 
   return (
     <>
@@ -195,6 +197,41 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
 
         <Step
           n={3}
+          title="Platform"
+          state="done"
+          summary={
+            p.platform === "macos"
+              ? p.macos_available
+                ? "macOS with Xcode and the iOS Simulator: the tester drives your app in the simulator."
+                : "macOS, but this instance has no macOS sandboxes yet: jobs wait until it has."
+              : "Linux: web apps, APIs and servers, tested in Chrome."
+          }
+          action={
+            <div className="flex gap-1" role="group" aria-label="Platform">
+              {(["linux", "macos"] as const).map((pl) => (
+                <Button
+                  key={pl}
+                  size="sm"
+                  variant={p.platform === pl ? "default" : "outline"}
+                  aria-pressed={p.platform === pl}
+                  disabled={busy || (pl !== p.platform && pl === "macos" && !p.macos_available)}
+                  title={pl === "macos" && !p.macos_available ? "This instance has no macOS sandboxes" : undefined}
+                  onClick={async () => {
+                    if (pl === p.platform) return;
+                    if (setup !== "todo" && !window.confirm("Switching the platform resets the environment: Prepare runs again in a sandbox of the new platform.")) return;
+                    await post("/platform", { platform: pl });
+                  }}
+                >
+                  {pl === "linux" ? "Web app" : "iOS or macOS app"}
+                </Button>
+              ))}
+            </div>
+          }
+        />
+
+        {p.platform === "linux" && (
+        <Step
+          n={4}
           title="Screen sizes"
           state="done"
           summary={
@@ -221,9 +258,10 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           />
           {chosen.length > 1 && <p className="mt-2 text-body text-muted-foreground">The tester sees every size at once; each size beyond the first adds about a quarter of the run time.</p>}
         </Step>
+        )}
 
         <Step
-          n={4}
+          n={step + 1}
           title="Environment"
           state={setup}
           summary={
@@ -275,7 +313,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
         </Step>
 
         <Step
-          n={5}
+          n={step + 2}
           title="Test pull requests"
           state={start}
           summary={p.active ? "On: every matching PR gets the check gespann/verify and a comment." : "Off."}
@@ -287,7 +325,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
         />
 
         <Step
-          n={6}
+          n={step + 3}
           title="Merge gate"
           state={p.gate ? "done" : "todo"}
           summary={p.gate ? "On: a FAIL fails the check gespann/verify, and PRs with the label gespann stay drafts until they pass." : "Off: results are reported, the check never fails, merging stays free."}

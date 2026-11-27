@@ -209,7 +209,7 @@ export type ModuleDeps = Pick<JobDeps, "db" | "module">;
 
 function moduleJob(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project) {
   const owner = d.db.user(p.owner_id);
-  return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" } };
+  return { jobId: job.id, kind: job.kind, projectId: p.id, owner: { id: p.owner_id, login: owner?.login ?? "" }, platform: p.platform === "macos" ? ("macos" as const) : ("linux" as const) };
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));

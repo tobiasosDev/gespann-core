@@ -28,15 +28,29 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// The sandboxes of this user's projects and Codex sign-in; None when no provider serves them.
-    pub fn provider_for(&self, user_id: i64) -> anyhow::Result<Option<&sandbox::pool::Provider>> {
+    /// The sandboxes of this user's projects on `platform`; None when no provider serves them.
+    pub fn provider_for(&self, user_id: i64, platform: sandbox::Platform) -> anyhow::Result<Option<&sandbox::pool::Provider>> {
         let login = self.db.user_login(user_id)?;
-        Ok(self.pool.for_login(login.as_deref()))
+        Ok(self.pool.for_login(login.as_deref(), platform))
     }
 
-    /// `provider_for`, as an error when no provider serves the user.
-    pub fn sandboxes_for(&self, user_id: i64) -> anyhow::Result<Arc<dyn sandbox::Sandboxes>> {
-        self.provider_for(user_id)?
+    /// The sandboxes of this project (its owner's provider for its platform), as an error when none serves it.
+    pub fn sandboxes_for_project(&self, p: &db::Project) -> anyhow::Result<Arc<dyn sandbox::Sandboxes>> {
+        let platform = sandbox::Platform::parse(&p.platform);
+        self.provider_for(p.owner_id, platform)?.map(|p| p.sb.clone()).ok_or_else(|| match platform {
+            sandbox::Platform::Linux => anyhow::anyhow!("no sandbox provider serves this user on this instance (SANDBOX_PROVIDER, SANDBOX_PROVIDER_BY_USER)"),
+            sandbox::Platform::Macos => anyhow::anyhow!("this instance has no macOS sandboxes (SANDBOX_PROVIDER_MACOS)"),
+        })
+    }
+
+    /// Where a Codex, Copilot or Grok sign-in runs: the user's Linux provider, else the macOS one, as an
+    /// error when the instance serves the user with neither.
+    pub fn sign_in_sandboxes(&self, user_id: i64) -> anyhow::Result<Arc<dyn sandbox::Sandboxes>> {
+        let login = self.db.user_login(user_id)?;
+        let l = login.as_deref();
+        self.pool
+            .for_login(l, sandbox::Platform::Linux)
+            .or_else(|| self.pool.for_login(l, sandbox::Platform::Macos))
             .map(|p| p.sb.clone())
             .ok_or_else(|| anyhow::anyhow!("no sandbox provider serves this user on this instance (SANDBOX_PROVIDER, SANDBOX_PROVIDER_BY_USER)"))
     }

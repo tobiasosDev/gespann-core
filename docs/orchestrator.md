@@ -58,9 +58,10 @@ The orchestrator calls `UI_URL` (default `BASE_URL`) and retries with backoff wh
 
 The orchestrator also writes `settings.orchestrator` = `{"kind","parallel","why","providers","instance","beat"}`
 every 10 s. `kind`, `parallel` and `why` are the default provider's (`SANDBOX_PROVIDER`); `providers` lists
-every provider as `{"spec","kind","parallel","why","logins","default"}`, with the lower-case logins
-`SANDBOX_PROVIDER_BY_USER` gives it. The UI reads the number of the provider that serves a user for
-Settings → Sandboxes, and treats the orchestrator as present (Codex sign-in possible) while `beat` is
+every provider as `{"spec","platform","kind","parallel","why","logins","default"}`, with the lower-case logins
+`SANDBOX_PROVIDER_BY_USER` gives it; `platform` is `linux`, or `macos` for `SANDBOX_PROVIDER_MACOS`, which
+serves every project whose platform is macOS. The UI reads the number of the Linux provider that serves a user for
+Settings → Sandboxes, offers macOS on a project's Setup page while a `macos` provider is listed, and treats the orchestrator as present (Codex sign-in possible) while `beat` is
 younger than 60 s.
 
 The server module's per-owner cap (`jobCap`, e.g. a plan's parallel tests) cannot be asked from the
@@ -102,5 +103,6 @@ DATA_DIR=/data SESSION_SECRET=… BASE_URL=https://gespann.example.com SANDBOX_P
 
 It reads `DATA_DIR`, `SESSION_SECRET` and `BASE_URL` like `gespann serve`, the sandbox variables
 (`SANDBOX_PROVIDER` docker, ssh or remote, `SANDBOX_PROVIDER_BY_USER`, `SANDBOX_*`, `SSH_*`,
-`SANDBOX_REMOTE_URL`, `SANDBOX_REMOTE_TOKEN`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`), plus
+`SANDBOX_REMOTE_URL`, `SANDBOX_REMOTE_TOKEN`, `MAX_PARALLEL_JOBS`, `GESPANN_REF`, and for macOS projects
+`SANDBOX_PROVIDER_MACOS` with the same variables prefixed `MACOS_`), plus
 `UI_URL` and `HEALTH_PORT` (default 3001, `GET /healthz`). With Docker: [self-host.md](self-host.md#run).
