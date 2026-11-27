@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, rmSync, statSync } from "node:fs";
 import { Readable } from "node:stream";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -556,9 +556,9 @@ export function createApp(d: AppDeps): Hono<Env> {
     const platform = body.platform;
     if (platform !== "linux" && platform !== "macos") throw new HttpError(400, "platform: linux or macos");
     if (platform === p.platform) return c.json({ ok: true });
-    if (db.jobs(p.id).some((j) => j.status === "queued" || j.status === "running")) throw new HttpError(409, "wait until the project's jobs have ended, then switch");
     // The recipe was written for the other platform: the next setup starts over in a sandbox of the new one.
-    db.updateProject(p.id, { platform, setup: "none", setup_error: null, bundle: 0, sandbox_id: null });
+    if (!db.switchPlatform(p.id, platform)) throw new HttpError(409, "wait until the project's jobs have ended, then switch");
+    rmSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png"), { force: true });
     return c.json({ ok: true });
   });
 

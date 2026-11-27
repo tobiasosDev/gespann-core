@@ -8,7 +8,7 @@ import { hostSizeFor, type OrchestratorState, servesMacos } from "../src/server/
 import { refusal } from "../src/server/jobs.ts";
 import { repairPrompt, setupPrompt, testerPrompt } from "../src/verify/prompt.ts";
 import { parseRecipe } from "../src/verify/recipe.ts";
-import { screenshotTries } from "../src/verify/run.ts";
+import { isCopyUrl, screenshotTries } from "../src/verify/run.ts";
 import { viewportsOf } from "../src/verify/viewports.ts";
 
 const linux = { spec: "remote", kind: "cloud", parallel: 90, why: "", logins: [], default: true, platform: "linux" as const };
@@ -35,14 +35,16 @@ test("API: a project runs on Linux until it switches to macOS, which resets its 
   db.setSetting("orchestrator", JSON.stringify({ kind: "cloud", parallel: 90, why: "", providers: [linux, mac], instance: "i", beat: Date.now() }));
   assert.equal((await get()).macos_available, true);
 
-  db.updateProject(id, { setup: "ready", bundle: 3, sandbox_id: "boat-1" });
+  db.updateProject(id, { setup: "ready", bundle: 3, sandbox_id: "boat-1", recipe: "version: 1" });
   assert.equal((await set("macos")).status, 200);
   const p = db.project(id);
-  assert.deepEqual([p?.platform, p?.setup, p?.bundle, p?.sandbox_id], ["macos", "none", 0, null], "a Linux recipe is no use on a Mac");
+  assert.deepEqual([p?.platform, p?.setup, p?.bundle, p?.sandbox_id, p?.recipe], ["macos", "none", 0, null, null], "a Linux recipe is no use on a Mac");
   assert.equal((await get()).platform, "macos");
 
   assert.equal((await set("windows")).status, 400);
-  db.enqueue(id, "setup");
+  const old = db.enqueue(id, "setup");
+  for (let n = 0; n < 25; n++) db.sql.prepare("update jobs set status = 'done' where id = ?").run(db.enqueue(id, "suggest"));
+  assert.equal(db.jobs(id).some((j) => j.id === old), false, "the queued job is older than the 20 the page lists");
   assert.equal((await set("linux")).status, 409, "not while a job of the project waits or runs");
   assert.equal(db.project(id)?.platform, "macos");
   assert.equal((await set("macos")).status, 200, "the same platform again changes nothing");
@@ -72,10 +74,10 @@ test("server module: every job says which platform it runs on, so Mac minutes ca
 });
 
 test("prompts: an iOS app is built with Xcode and driven in the iOS Simulator, never in Chrome", () => {
-  const recipe = parseRecipe('version: 1\ntrigger: { paths: ["**"] }\nenv:\n  up: "true"\n  down: "true"\n  url: com.acme.shop on the booted iPhone 17 simulator\nlogin:\n  path: /login\n  user: a@b.test\n  password: pw\n');
-  const base = { repo: "acme/shop", pr: 4, head: "h", base: "b", url: "com.acme.shop on the booted iPhone 17 simulator", out: "/o", work: "/w", criteria: "", recipe };
+  const recipe = parseRecipe('version: 1\ntrigger: { paths: ["**"] }\nenv:\n  up: "true"\n  down: "true"\n  url: ios-simulator://com.acme.shop\nlogin:\n  path: /login\n  user: a@b.test\n  password: pw\n');
+  const base = { repo: "acme/shop", pr: 4, head: "h", base: "b", url: "ios-simulator://com.acme.shop", out: "/o", work: "/w", criteria: "", recipe };
   const ios = testerPrompt({ ...base, platform: "macos", viewports: viewportsOf("phone-s,desktop-l"), mirror: "http://127.0.0.1:9/" });
-  assert.match(ios, /runs in the iOS Simulator on this Mac: com\.acme\.shop on the booted iPhone 17 simulator\./);
+  assert.match(ios, /runs in the booted iOS Simulator on this Mac: ios-simulator:\/\/com\.acme\.shop \(the app's bundle id after ios-simulator:\/\/\)\./);
   assert.match(ios, /in the iOS Simulator with the simulator tools \(look at the screen, tap, type, swipe\)/);
   assert.doesNotMatch(ios, /Chrome|browser_resize|mirror|screen sizes/, "screen sizes and the mirror are for browsers");
   assert.match(ios, /Sign in through the normal login page with a@b\.test/, "no URL built from a simulator description");
@@ -83,6 +85,7 @@ test("prompts: an iOS app is built with Xcode and driven in the iOS Simulator, n
 
   const setup = setupPrompt({ repo: "acme/shop", repoDir: "/r", projectDir: "/p", criteria: "", platform: "macos" });
   assert.match(setup, /xcodebuild/);
+  assert.match(setup, /`env\.url` is `ios-simulator:\/\/<bundle id>`/);
   assert.match(setup, /xcrun simctl list devices available/);
   assert.match(setup, /Xcode and the iOS Simulator are installed; Docker may not be\./);
   assert.doesNotMatch(setup, /Chrome/);
@@ -96,4 +99,12 @@ test("prompts: an iOS app is built with Xcode and driven in the iOS Simulator, n
 test("gespann shot: a Mac captures the booted iOS Simulator first, then the desktop", () => {
   assert.deepEqual(screenshotTries("/o/a.png", "darwin"), ['xcrun simctl io booted screenshot --type=png "/o/a.png"', 'screencapture -x -t png "/o/a.png"']);
   assert.match(screenshotTries("/o/a.png", "linux", ":7")[0] ?? "", /^import -display :7 /);
+});
+
+test("prepare: the copy is a web address or an iOS app on the booted simulator", () => {
+  assert.equal(isCopyUrl("http://127.0.0.1:3000/x"), true);
+  assert.equal(isCopyUrl("ios-simulator://com.acme.shop"), true);
+  assert.equal(isCopyUrl("com.acme.shop on the booted iPhone"), false);
+  assert.equal(isCopyUrl("ios-simulator://"), false);
+  assert.equal(isCopyUrl("ios-simulator://com.acme.shop; rm -rf /"), false, "goes into a shell command in the setup check");
 });

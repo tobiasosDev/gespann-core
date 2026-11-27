@@ -222,7 +222,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                     await post("/platform", { platform: pl });
                   }}
                 >
-                  {pl === "linux" ? "Web app" : "iOS or macOS app"}
+                  {pl === "linux" ? "Web app" : "iOS app"}
                 </Button>
               ))}
             </div>

@@ -52,7 +52,7 @@ pub enum Purpose {
     Login,
 }
 
-/// What a project's sandboxes run on: Linux (web apps, servers) or macOS (iOS and macOS apps, which
+/// What a project's sandboxes run on: Linux (web apps, servers) or macOS (iOS apps, which
 /// only build with Xcode). Each has its own providers (`SANDBOX_PROVIDER`, `SANDBOX_PROVIDER_MACOS`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Platform {

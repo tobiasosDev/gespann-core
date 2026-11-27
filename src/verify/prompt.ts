@@ -39,11 +39,11 @@ export interface TesterInput {
   mirror?: string;
   /** Feature flags found in the PR's diff (flags.ts); the tester confirms and tests each. */
   flags?: FlagChange[];
-  /** `macos`: an iOS or macOS app in a macOS sandbox, driven in the iOS Simulator instead of Chrome. */
+  /** `macos`: an iOS app in a macOS sandbox, driven in the iOS Simulator instead of Chrome. */
   platform?: Platform;
 }
 
-/** What the project's sandbox runs on; `macos` means an app built with Xcode, tested in the iOS Simulator. */
+/** What the project's sandbox runs on; `macos` means an iOS app built with Xcode, tested in the iOS Simulator. */
 export type Platform = "linux" | "macos";
 
 /** How the agent reaches the copy, in each prompt's words. */
@@ -98,7 +98,7 @@ export function testerPrompt(t: TesterInput): string {
     `You are the independent tester for pull request #${t.pr} of ${t.repo}, head ${t.head}, merged onto base ${t.base}. You did not write this change. You test it the way a careful human tester would, and you report what you saw.`,
     "",
     ios
-      ? `A production-near build of the app from this PR runs in the iOS Simulator on this Mac: ${t.url}. Use only that app and the backend the copy started for it. It is not production: data in it is disposable, and external providers are fakes or recordings.`
+      ? `A production-near build of the app from this PR runs in the booted iOS Simulator on this Mac: ${t.url} (the app's bundle id after ios-simulator://). Use only that app and the backend the copy started for it. It is not production: data in it is disposable, and external providers are fakes or recordings.`
       : `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${new URL(mirror).origin}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
   );
   if (r.login) {
@@ -206,9 +206,9 @@ Rules: do not commit, push or open pull requests. Do not use or ask for real pro
 `;
 }
 
-/** The setup of an iOS or macOS app: Xcode builds it, the iOS Simulator runs it. */
+/** The setup of an iOS app: Xcode builds it, the iOS Simulator runs it. */
 function setupPromptMac(s: SetupInput): string {
-  return `You prepare acceptance testing for the repository ${s.repo}, an app built with Xcode, checked out at ${s.repoDir} on a Mac. From now on, for every pull request, an agent will build this app, run it in the iOS Simulator on this machine and tap through the change. Your job is to make that build and start fast and reliable.
+  return `You prepare acceptance testing for the repository ${s.repo}, an iOS app built with Xcode, checked out at ${s.repoDir} on a Mac. From now on, for every pull request, an agent will build this app, run it in the iOS Simulator on this machine and tap through the change. Your job is to make that build and start fast and reliable.
 
 What must be checked on every PR (a default; make it concrete for this app):
 ${s.criteria.trim() || DEFAULT_CHECKS}
@@ -216,7 +216,7 @@ ${s.criteria.trim() || DEFAULT_CHECKS}
 Write these files into ${s.projectDir} (not into the repository):
 
 1. ${s.projectDir}/verify.yml, a gespann recipe. Read the format reference in ${s.projectDir}/../core/docs/recipe.md. Every command runs with bash in the repo checkout; scripts you write live in ${s.projectDir} and are called as "$GESPANN_PROJECT/<script>". If the repo already has .gespann/verify.yml, start from it.
-2. The scripts the recipe calls: resolve packages (Swift Package Manager, CocoaPods), build the app for the iOS Simulator with \`xcodebuild\` in a configuration close to the App Store build, keep DerivedData under $HOME so later PRs build incrementally, boot one simulator (pick a current iPhone with \`xcrun simctl list devices available\`), install and launch the app. \`env.up\` does that and writes which simulator and bundle id it started to $GESPANN_ENV; \`env.url\` says it in words, e.g. "com.acme.shop on the booted iPhone 17 simulator"; \`env.down\` terminates the app and shuts the simulator down. If the app talks to a backend, start a local copy of it or a local fake, and point the app at it (a launch argument, an environment variable, a debug setting), so nothing reaches a real service and no real secret is needed. Replace other external providers (payment, push, analytics, LLM) with local fakes the same way.
+2. The scripts the recipe calls: resolve packages (Swift Package Manager, CocoaPods), build the app for the iOS Simulator with \`xcodebuild\` in a configuration close to the App Store build, keep DerivedData under $HOME so later PRs build incrementally, boot one simulator (pick a current iPhone with \`xcrun simctl list devices available\`), install and launch the app. \`env.up\` does that; \`env.url\` is \`ios-simulator://<bundle id>\` (e.g. \`ios-simulator://com.acme.shop\`), and gespann checks that this app runs in the booted simulator; \`env.down\` terminates the app and shuts the simulator down. If the app talks to a backend, start a local copy of it or a local fake, and point the app at it (a launch argument, an environment variable, a debug setting), so nothing reaches a real service and no real secret is needed. Replace other external providers (payment, push, analytics, LLM) with local fakes the same way.
 3. ${s.projectDir}/NOTES.md: what the copy contains, what is faked, the login, which flows cannot work in the simulator (camera, push, purchases) and why. The tester reads it.
 4. ${s.projectDir}/CHECKS.md: the checks above made concrete for this app, one per line, 4 to 8 lines, in plain words a tester can follow (name the real screens and flows, e.g. "Add an item on the Cart tab, the badge shows 1"). Only flows that work in the simulator.
 

@@ -49,7 +49,7 @@ The orchestrator:
 |---|---|
 | `SANDBOX_PROVIDER` | `docker`, `ssh` or `remote` ([Sandboxes](#sandboxes)). Without a provider, jobs stay queued |
 | `SANDBOX_PROVIDER_BY_USER` | other providers for some users, e.g. `tobi=ssh,ops=ssh` ([Several providers](#several-providers)) |
-| `SANDBOX_PROVIDER_MACOS` | `ssh` or `remote`: sandboxes for projects that run on macOS, iOS and macOS apps ([macOS](#macos)). Without it, their jobs stay queued |
+| `SANDBOX_PROVIDER_MACOS` | `ssh` or `remote`: sandboxes for projects that run on macOS: iOS apps ([macOS](#macos)). Without it, their jobs stay queued |
 | `GESPANN_REF` | git ref of gespann-core that sandboxes install (default `main`) |
 | `MAX_PARALLEL_JOBS` | how many jobs each sandbox provider runs at once ([Parallel jobs](#parallel-jobs)); default: computed from its host, or what a sandbox service allows |
 | `UI_URL` | where it reaches the UI (default `BASE_URL`) |
@@ -95,7 +95,7 @@ When a user moves to another provider, their projects' next jobs get a new sandb
 
 ### macOS
 
-iOS and macOS apps build only with Xcode, so they need a Mac. A project chooses its platform on its Setup page: **Web app** (Linux, the providers above) or **iOS or macOS app** (macOS). The second choice shows once the instance has macOS sandboxes. A macOS project's sandboxes come from `SANDBOX_PROVIDER_MACOS`, whoever owns the project; its jobs wait in the queue while the instance has none. Switching a project's platform resets its environment: Prepare runs again in a sandbox of the new platform.
+iOS apps build only with Xcode, so they need a Mac. A project chooses its platform on its Setup page: **Web app** (Linux, the providers above) or **iOS app** (macOS). The second can be chosen once the instance has macOS sandboxes. Native macOS apps are not covered yet: the tester drives the iOS Simulator. A macOS project's sandboxes come from `SANDBOX_PROVIDER_MACOS`, whoever owns the project; its jobs wait in the queue while the instance has none. Switching a project's platform resets its environment: Prepare runs again in a sandbox of the new platform.
 
 ```bash
 # your own Mac (a Mac mini, a macOS VM in Tart) over SSH
@@ -106,7 +106,7 @@ iOS and macOS apps build only with Xcode, so they need a Mac. A project chooses 
 
 The macOS provider reads the same variables as its Linux counterpart, with `MACOS_` in front: `MACOS_SSH_HOST`, `MACOS_SSH_PORT`, `MACOS_SSH_KEY_FILE`, `MACOS_SSH_PRIVATE_KEY`, `MACOS_SSH_KNOWN_HOSTS`, `MACOS_SANDBOX_ROOT`, `MACOS_SANDBOX_REMOTE_URL`, `MACOS_SANDBOX_REMOTE_TOKEN`, and `MACOS_MAX_PARALLEL_JOBS` for its number of jobs at once. There is no Docker provider for macOS. Its jobs count apart from the Linux ones, so a full Mac never holds up a web project. The orchestrator's log names it as `sandboxes: ssh (macOS projects), parallel jobs: …`.
 
-The Mac needs what every sandbox needs (`bash`, `git`, `curl`, Node.js 22.18 or newer, the `codex` CLI) and Xcode with an iOS Simulator runtime. Instead of Chrome the tester drives the app in the iOS Simulator: give Codex an MCP server for the simulator in its `config.toml` (for example [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)). `gespann shot` saves the booted simulator's screen (`xcrun simctl io booted screenshot`), or the desktop when none is booted. Screen sizes do not apply: the simulator shows the device's own screen. Setup writes a recipe that builds the app with `xcodebuild`, boots a simulator and launches it; Docker is usually not available on a Mac, so a backend runs natively or as a local fake. Over SSH, runs are not recorded yet (no `DISPLAY` for ffmpeg); a sandbox service can record with its own `POST /sandboxes/:id/recording`.
+The Mac needs what every sandbox needs (`bash`, `git`, `curl`, Node.js 22.18 or newer, the `codex` CLI) and Xcode with an iOS Simulator runtime. Instead of Chrome the tester drives the app in the iOS Simulator: give Codex an MCP server for the simulator in its `config.toml` (for example [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)). `gespann shot` saves the booted simulator's screen (`xcrun simctl io booted screenshot`), or the desktop when none is booted. Screen sizes do not apply: the simulator shows the device's own screen. Setup writes a recipe that builds the app with `xcodebuild`, boots a simulator and launches it; its `env.url` is `ios-simulator://<bundle id>`, and the setup check confirms that this app runs in the booted simulator instead of asking a URL; Docker is usually not available on a Mac, so a backend runs natively or as a local fake. Over SSH, runs are not recorded yet (no `DISPLAY` for ffmpeg); a sandbox service can record with its own `POST /sandboxes/:id/recording`.
 
 ### Docker
 

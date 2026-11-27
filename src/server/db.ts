@@ -77,7 +77,7 @@ export interface Project {
   gate: number;
   /** Screen sizes the tester checks every PR at, preset ids joined with commas (`phone-s,desktop`); empty: the browser's own size. */
   viewports: string;
-  /** What the project's sandboxes run on: `linux` (web apps, servers) or `macos` (iOS and macOS apps, built with Xcode). */
+  /** What the project's sandboxes run on: `linux` (web apps, servers) or `macos` (iOS apps, built with Xcode). */
   platform: Platform;
   created: string;
 }
@@ -582,6 +582,20 @@ export class Db {
 
   job(id: number): Job | undefined {
     return this.one<Job>("select * from jobs where id = ?", id);
+  }
+
+  /**
+   * Moves the project to another platform and resets what belonged to the old one (setup, recipe, its
+   * sandbox), unless a job of it is queued or running. In one statement, so no job starts in between.
+   */
+  switchPlatform(projectId: number, platform: Platform): boolean {
+    const r = this.sql
+      .prepare(
+        `update projects set platform = ?, setup = 'none', setup_error = null, recipe = null, notes = null, bundle = 0, sandbox_id = null
+         where id = ? and not exists (select 1 from jobs where project_id = ? and status in ('queued', 'running'))`,
+      )
+      .run(platform, projectId, projectId);
+    return Number(r.changes) > 0;
   }
 
   jobs(projectId: number, limit = 20): Job[] {

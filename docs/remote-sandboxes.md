@@ -1,6 +1,6 @@
 # Remote sandboxes: the HTTP protocol
 
-`SANDBOX_PROVIDER=remote` makes the orchestrator call a sandbox service over HTTP for every sandbox operation, so sandboxes can live anywhere an adapter of yours can reach: a cloud VM vendor, Kubernetes, a pool of machines. gespann ships no adapter; you write one that answers the calls below. Set it up: [self-host.md](self-host.md#remote). A service that makes Macs for iOS and macOS apps answers the same calls; the orchestrator reaches it through `SANDBOX_PROVIDER_MACOS=remote` and the `MACOS_` variables ([self-host.md](self-host.md#macos)).
+`SANDBOX_PROVIDER=remote` makes the orchestrator call a sandbox service over HTTP for every sandbox operation, so sandboxes can live anywhere an adapter of yours can reach: a cloud VM vendor, Kubernetes, a pool of machines. gespann ships no adapter; you write one that answers the calls below. Set it up: [self-host.md](self-host.md#remote). A service that makes Macs for iOS apps answers the same calls; the orchestrator reaches it through `SANDBOX_PROVIDER_MACOS=remote` and the `MACOS_` variables ([self-host.md](self-host.md#macos)).
 
 ## Basics
 

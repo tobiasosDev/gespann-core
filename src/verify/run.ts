@@ -210,7 +210,7 @@ export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] 
   save(ctx, state);
   if (!runStep(ctx, { name: "environment up", run: r.env.up }, left()).ok) return fail("env.up failed");
   const url = expand(r.env.url, env(ctx));
-  if (!/^https?:\/\/\S+$/.test(url)) return fail(`env.url resolved to ${JSON.stringify(url)}, not a URL`);
+  if (!isCopyUrl(url)) return fail(`env.url resolved to ${JSON.stringify(url)}, not a URL (http(s)://… or ios-simulator://<bundle id>)`);
   state.url = url;
 
   for (const a of r.alongside) {
@@ -327,6 +327,11 @@ export function proofOk(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Where the copy runs: a web address, or an iOS app on the booted simulator (`ios-simulator://<bundle id>`). */
+export function isCopyUrl(url: string): boolean {
+  return /^https?:\/\/\S+$/.test(url) || /^ios-simulator:\/\/[A-Za-z0-9][A-Za-z0-9.-]*$/.test(url);
 }
 
 /** How `screenshot` tries to capture the screen, first try first. */
