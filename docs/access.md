@@ -29,14 +29,14 @@ Otherwise the variable is unset for every recipe command, even when the sandbox'
 
 ## Storing a key
 
-On the project's **Setup** page, **Outside services** lists every service of the recipe. The owner pastes a key with **Store key**. gespann keeps it encrypted with `SESSION_SECRET`, the way it keeps agent keys, and never shows it again (only its last four characters). **Remove key** forgets it. The run page's link "Store a key" leads to the service's row.
+On the project's **Setup** page, **Outside services** lists every service of the recipe. The owner pastes a key with **Store key** (at least 8 characters). gespann keeps it encrypted with `SESSION_SECRET`, the way it keeps agent keys, and never shows it again (only its last four characters). **Remove key** forgets it. The run page's link "Store a key" leads to the service's row.
 
 Use a test account with a small budget. While a run that gets the key starts, the PR's own code runs as the sandbox's user and can read the key, just as it can read the agent's key. That is why gespann tests only branches of the repository itself, never forks.
 
 ## What the key reaches
 
 - The orchestrator writes the project's keys into the run's folder in the sandbox (mode 600) just before `gespann verify prepare` and passes the file with `--keys`. `prepare` reads it and deletes it at once.
-- Only `prepare`'s commands get the key: `setup`, `services`, `flags.run`, `env.up` and `alongside`. The tester's agent, `env.down`, `cleanup` and `flags.switch` do not, so a flag switch that restarts the app restarts it without the key.
+- Only `prepare`'s commands get the key: `setup`, `services`, `flags.run`, `env.up` and `alongside`. The tester's agent, `env.down`, `cleanup` and `flags.switch` do not, so a flag switch that restarts the app restarts it without the key. The result then says that checks after a flag switch may have used the fake.
 - Recipe command output that contains a key is written to the run log as `[key]`. Output of background services goes to their own log files unchanged, so do not print keys there.
 - `$GESPANN_WORK/access.json` records for each service whether this run used the real one and why, never the key. `finish` adds it to the result.
 

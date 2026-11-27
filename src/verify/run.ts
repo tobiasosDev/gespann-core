@@ -391,12 +391,13 @@ export function contextOf(work: string): RunContext {
 export function switchFlag(ctx: RunContext, r: Recipe, key: string, state: "on" | "off"): { ok: boolean; output: string } {
   if (!r.flags?.switch) return { ok: false, output: "the recipe has no flags.switch" };
   useAccess(ctx, r, takeKeys(undefined, r.access.map((a) => a.name)));
-  // The orchestrator's keys went with prepare: a switch that restarts the app restarts it on the fake,
-  // so the result must not claim the real service for what is tested after it.
+  // The orchestrator's keys went with prepare: a switch that restarts the app restarts it on the fake.
+  // The copy came up real; the result says once that what follows a switch may not have been.
+  const NOTE = "; a feature-flag switch ran without the key, so checks after it may have used the fake";
   const uses = readAccess(ctx.work);
-  if (uses.some((u) => u.real && !keyEnv[u.name])) {
-    const lost = uses.map((u) => (u.real && !keyEnv[u.name] ? { ...u, real: false, why: `${u.why}, but a feature-flag switch ran without the key, so checks after it may have used the fake` } : u));
-    writeFileSync(join(ctx.work, ACCESS_FILE), `${JSON.stringify(lost, null, 2)}\n`);
+  if (uses.some((u) => u.real && !keyEnv[u.name] && !u.why.endsWith(NOTE))) {
+    const noted = uses.map((u) => (u.real && !keyEnv[u.name] && !u.why.endsWith(NOTE) ? { ...u, why: `${u.why}${NOTE}` } : u));
+    writeFileSync(join(ctx.work, ACCESS_FILE), `${JSON.stringify(noted, null, 2)}\n`);
   }
   log(ctx, `▶ flag ${key} ${state}`);
   const res = spawnSync("bash", ["-c", r.flags.switch], { cwd: ctx.root, env: { ...env(ctx), GESPANN_FLAG: key, GESPANN_FLAG_STATE: state }, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 });

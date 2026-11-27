@@ -98,9 +98,10 @@ test("a PR that changes the service's code runs against the real service; the ke
   // A later process (a flag switch, finish) has no key file: there the key is gone, and the result says
   // that checks after the switch may have used the fake.
   assert.match(switchFlag(c, r, "x", "on").output, /switch saw nothing/);
+  switchFlag(c, r, "x", "off");
   writeFileSync(join(c.out, "verdict.json"), JSON.stringify({ verdict: "SKIP", summary: "nothing to test", checks: [], proof: [] }));
   const f = await finish(c, r, 1000);
-  assert.deepEqual(f.judged.access, [{ name: "MAC_PROVIDER_TOKEN", about: "Mac sandbox provider", real: false, why: `the PR changes orchestrator/src/sandbox/macos.rs, but a feature-flag switch ran without the key, so checks after it may have used the fake` }]);
+  assert.deepEqual(f.judged.access, [{ name: "MAC_PROVIDER_TOKEN", about: "Mac sandbox provider", real: true, why: "the PR changes orchestrator/src/sandbox/macos.rs; a feature-flag switch ran without the key, so checks after it may have used the fake" }]);
 });
 
 test("every other PR runs against the fake, even when the machine's environment has the variable", async () => {
@@ -169,6 +170,7 @@ test("API: the owner stores a key sealed, the project shows only its end, and re
   assert.equal((await post(`/projects/${p}/access/MAC_PROVIDER_TOKEN`, { key: KEY }, "m")).status, 403, "only the owner, whose runs use it");
   assert.equal((await post(`/projects/${p}/access/mac`, { key: KEY })).status, 400);
   assert.equal((await post(`/projects/${p}/access/MAC_PROVIDER_TOKEN`, { key: "  " })).status, 400);
+  assert.equal((await post(`/projects/${p}/access/MAC_PROVIDER_TOKEN`, { key: "short" })).status, 400, "short values could not be kept out of logs");
   const saved = await post(`/projects/${p}/access/MAC_PROVIDER_TOKEN`, { key: `  ${KEY}\n` });
   assert.deepEqual(await saved.json(), { ok: true, hint: "…6789" });
   const sealed = db.sql.prepare("select sealed from project_access where project_id = ?").get(p) as { sealed: string };

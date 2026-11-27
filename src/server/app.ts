@@ -656,6 +656,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     const body = await c.req.json<{ key?: unknown }>();
     const key = typeof body.key === "string" ? body.key.trim() : "";
     if (!key) throw new HttpError(400, "key: paste the key");
+    // run.ts keeps keys of 8 characters or more out of logs; shorter values are no keys.
+    if (key.length < 8) throw new HttpError(400, "key: at least 8 characters");
     if (key.length > 16_000) throw new HttpError(400, "key: at most 16000 characters");
     const hint = key.length >= 16 ? `…${key.slice(-4)}` : "…";
     db.setAccessKey(p.id, name, seal(config.sessionSecret, key), hint);
