@@ -42,6 +42,8 @@ The UI (`gespann serve`):
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `SERVER_MODULE` | path of a module that adds pages, Settings sections and a say over jobs ([Server module](#server-module)); default: none |
+| `SMTP_URL` | the mail server for gespann's mail ([Mail](#mail)), e.g. `smtps://user:password@smtp.example.com:465`; default: none, mails only go to the log |
+| `MAIL_FROM` | sender of that mail, e.g. `gespann <noreply@example.com>`; required with `SMTP_URL` |
 
 The orchestrator:
 
@@ -245,9 +247,26 @@ export default (env) => ({
 });
 ```
 
+## Mail
+
+gespann mails a project's owner when its jobs keep going wrong. Each user picks in Settings → Mail which kinds they want and after how many in a row:
+
+| Kind | Default | Counts |
+|---|---|---|
+| A PR could not be tested | on, after 3 | runs that ended without a verdict: sandbox, agent or a server module refused the job |
+| The copy of your app could not be built | on, after 1 | failed setups |
+| A PR failed its test | off | runs with the verdict FAIL (the PR's check and comment say it already) |
+| A test was blocked | off | runs with the verdict BLOCKED |
+
+Each kind counts the project's ended jobs in a row. Once the count reaches the user's number, one mail goes out; the next only after a job of the same group (runs, or setups) ended otherwise and the trouble started again. Cancelled runs, skipped runs and runs with merge conflicts neither count nor break a streak. The mail names the repository, the last PR, the reason and a link to the run.
+
+The address comes from the sign-in: GitHub's verified primary address (the app needs *Email addresses: Read-only* under *Account permissions*; apps created before it was added need it ticked and each user accepts it at their next sign-in), otherwise the public profile address. Another sign-in of a [server module](#server-module) can bring one too. A sign-in's address never replaces one the user entered. A user without one is asked once, right after signing in, and their address counts once they open the link gespann mails to it (valid for 24 hours). Settings → Mail changes it.
+
+`SMTP_URL` takes any SMTP server or mail service with SMTP (Amazon SES, Mailgun, MailerSend, Postmark, Resend, your own): `smtps://` uses TLS from the start (port 465), `smtp://` upgrades with STARTTLS (port 587) and refuses to send without it, except to a relay on the same machine (`localhost`). Put a user name or password with `@` or `:` in percent-encoded (`%40`, `%3A`). The startup log says `mail: over <host> from <MAIL_FROM>`. Without `SMTP_URL` the instance sends nothing, asks nobody for an address, and writes each mail it would have sent to its log. A mail the server refuses is logged (`alert mail`) and not sent again.
+
 ## GitHub App
 
-Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, commit statuses read, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
+Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, commit statuses read, email addresses read, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
 
 ## How a project works
 

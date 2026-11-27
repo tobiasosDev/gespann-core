@@ -1,6 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Me, ProjectRow, RunDetail } from "./api.ts";
+import { EmailDialog } from "./components/EmailDialog.tsx";
 import { type Section, Sidebar } from "./components/Sidebar.tsx";
 import { LinkButton } from "./components/ui.tsx";
 import { usePath, useResource } from "./live.ts";
@@ -47,6 +48,7 @@ function SignIn({ me }: { me: Me }) {
 }
 
 function Signed({ me, path }: { me: Me; path: string }) {
+  const [askEmail, setAskEmail] = useState(!!me.askEmail);
   const { data, error, reload } = useResource<{ projects: ProjectRow[] }>("/projects", projectsBusy);
   const projects = data?.projects ?? null;
   // The run page and the sidebar share this request; the sidebar only needs the run's project.
@@ -77,6 +79,7 @@ function Signed({ me, path }: { me: Me; path: string }) {
   return (
     <Shell me={me} section={section} projects={projects} wide={path.startsWith("/projects/") && section.kind === "project" && section.tab === "runs"}>
       {page}
+      {askEmail && <EmailDialog onDone={() => setAskEmail(false)} />}
     </Shell>
   );
 }

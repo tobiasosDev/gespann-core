@@ -1,10 +1,11 @@
 import { Copy, ExternalLink, Loader2, Plus } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
-import { type AgentProvider, ago, api, type Boxes, type CodexModel, type KeyAgent, type OpenRouterModel, type Settings, type SettingsSection, type Tokens } from "../api.ts";
+import { type AgentProvider, ago, api, type Boxes, type CodexModel, type KeyAgent, type MailSettings, type OpenRouterModel, type Settings, type SettingsSection, type Tokens } from "../api.ts";
 import { ModuleSection } from "../components/ModuleSection.tsx";
 import { Block, Connected, Radio, Rows, SettingsPane } from "../components/settings.tsx";
 import { setHash, useHash, useResource } from "../live.ts";
 import { Badge, Button, cn, Input, LinkButton, Log, Mono } from "../components/ui.tsx";
+import { MailSection } from "./Mail.tsx";
 import { boxesLive, Sandboxes } from "./Sandboxes.tsx";
 
 const codexPending = (d: Settings) => d.codex.state === "pending" || d.keyAgents.some((a) => a.login?.state === "pending");
@@ -711,13 +712,14 @@ function SectionList({ groups, current }: { groups: { title: string; items: Item
 
 const Dot = ({ tone }: { tone: "info" | "warn" }) => <span className={cn("size-1.5 rounded-full", tone === "info" ? "bg-info" : "bg-warn")} aria-hidden="true" />;
 
-/** Settings: a list of sections, one open at a time. `/settings#<id>` opens one (`#plan`, `#sandboxes`, …); the agent opens by default. */
+/** Settings: a list of sections, one open at a time. `/settings#<id>` opens one (`#plan`, `#sandboxes`, `#mail`, …); the agent opens by default. */
 export function SettingsPage() {
   const hash = useHash();
   const { data, error, reload } = useResource<Settings>("/settings", codexPending, 3000);
   const modules = useResource<{ sections: SettingsSection[]; error?: string }>("/settings/sections");
   const boxes = useResource<Boxes>("/boxes", boxesLive, 5000).data;
   const tokens = useResource<Tokens>("/tokens").data;
+  const mail = useResource<MailSettings>("/settings/mail").data;
   if (error) return <p className="text-bad">{error}</p>;
   if (!data) return <p className="text-muted-foreground">Loading…</p>;
   const sections = modules.data?.sections ?? [];
@@ -754,10 +756,11 @@ export function SettingsPage() {
       ],
     },
     { title: "Your coding agents", items: [{ id: "access", title: "Agent access", value: tokens ? (tokens.tokens.length ? `${tokens.tokens.length} connected` : "none") : undefined }] },
+    { title: "Notifications", items: [{ id: "mail", title: "Mail", value: mail ? (!mail.sends ? "off" : mail.email ? undefined : "no address") : undefined }] },
   ];
   if (sections.length) groups.push({ title: "Account", items: sections.map((s) => ({ id: s.id, title: s.title, value: s.badge?.text })) });
   const module = sections.find((s) => s.id === hash);
-  const known = hash === "agent" || hash === "sandboxes" || hash === "access" || !!module;
+  const known = hash === "agent" || hash === "sandboxes" || hash === "access" || hash === "mail" || !!module;
   // A module's section is not loaded yet: wait for it instead of opening the agent.
   const waiting = !known && hash !== "" && !modules.data && !modules.error;
   const current = known ? hash : "agent";
@@ -777,6 +780,8 @@ export function SettingsPage() {
             <Sandboxes />
           ) : current === "access" ? (
             <AgentAccess />
+          ) : current === "mail" ? (
+            <MailSection />
           ) : module ? (
             <ModuleSection key={module.id} s={module} reload={modules.reload} />
           ) : (

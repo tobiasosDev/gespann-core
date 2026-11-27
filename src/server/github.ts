@@ -181,8 +181,23 @@ export class Github {
     return r.access_token;
   }
 
-  async user(userToken: string): Promise<{ id: number; login: string; name: string | null; avatar_url: string }> {
+  async user(userToken: string): Promise<{ id: number; login: string; name: string | null; avatar_url: string; email?: string | null }> {
     return request(userToken, "GET", "/user", undefined, this.fetchImpl);
+  }
+
+  /**
+   * The user's verified primary address. It needs the app's "Email addresses" permission (read); an
+   * app without it gets the public profile address, which GitHub also only allows when verified.
+   */
+  async verifiedEmail(userToken: string, publicEmail: string | null | undefined): Promise<string | null> {
+    try {
+      const list = await request<{ email: string; primary: boolean; verified: boolean }[]>(userToken, "GET", "/user/emails", undefined, this.fetchImpl);
+      const primary = list.find((e) => e.primary && e.verified);
+      if (primary) return primary.email;
+    } catch {
+      // No permission for the list: the public address below.
+    }
+    return publicEmail || null;
   }
 
   /** Installations of this app the user can access. */
@@ -339,7 +354,8 @@ export function appManifest(baseUrl: string, name: string): Record<string, unkno
     public: true,
     // contents: write only because GitHub requires it to switch a PR to draft and back (the merge
     // gate); the token handed into sandboxes is narrowed to contents: read.
-    default_permissions: { checks: "write", contents: "write", metadata: "read", pull_requests: "write", issues: "write", statuses: "read" },
+    // emails: read, for the address gespann mails when a project's tests keep failing.
+    default_permissions: { checks: "write", contents: "write", metadata: "read", pull_requests: "write", issues: "write", statuses: "read", emails: "read" },
     // issue_comment: "/gespann approve" releases a PR the merge gate holds.
     default_events: ["pull_request", "issue_comment"],
   };
