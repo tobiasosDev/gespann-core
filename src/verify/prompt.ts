@@ -46,13 +46,13 @@ export function testerPrompt(t: TesterInput): string {
   const mirror = sizes.length > 1 ? t.mirror : undefined;
   const canvas = mirror ? mirrorCanvas(sizes) : undefined;
   // With the mirror, every page of the copy is opened under the mirror's address.
-  const site = mirror ? new URL(mirror).origin : t.url;
+  const site = mirror ? new URL(new URL(t.url).pathname + new URL(t.url).search, new URL(mirror).origin).toString() : t.url;
   const widest = sizes.reduce<Viewport | undefined>((a, v) => (!a || v.width > a.width ? v : a), undefined);
   const parts: string[] = [];
   parts.push(
     `You are the independent tester for pull request #${t.pr} of ${t.repo}, head ${t.head}, merged onto base ${t.base}. You did not write this change. You test it the way a careful human tester would, and you report what you saw.`,
     "",
-    `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${site}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
+    `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${new URL(mirror).origin}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
   );
   if (r.login) {
     const where = r.login.path ? ` at ${new URL(r.login.path, site).toString()}` : "";
@@ -95,6 +95,7 @@ export function testerPrompt(t: TesterInput): string {
       ? [
           `   The team wants the app tested at these screen sizes: ${sizeList}. Test them all at once, not one after the other. The mirror at ${mirror} shows the copy once per size, side by side, and repeats what you do in the size you drive in all the others: clicks, typing, selects, file uploads, form submits, Enter, Escape and arrow keys, scrolling and page changes. First set the browser's viewport to ${canvas.width}x${canvas.height} (the browser tool's resize, e.g. browser_resize) and open the mirror; any page of the copy opened under the mirror's address (${new URL(mirror).origin}/<path>) opens in the mirror at that path. You drive ${widest?.name ?? "the widest size"} first, marked "you drive this size"; only that size appears in your page snapshot, so act there. Go through each check once and look at every size in the screenshot.`,
           `   The mirror's bar lists notes, newest first (also in ${t.work}/mirror-notes.txt): a step a size could not repeat, mostly because its element sits behind a menu or is hidden at that size, and pages wider than their size (horizontal scrolling). The other sizes follow you to the new page anyway. When a note concerns what you test, press that size's button under "Drive" and do the step there the way a user would (open the menu, scroll to the button), then switch back. Look for what breaks only at some sizes: content cut off or overlapping, horizontal scrolling, a menu that cannot be opened, buttons out of reach or too small to tap. A flow that leaves the copy for another site cannot be mirrored: open that page in its own tab and check the sizes there one by one with browser_resize.`,
+          `   Every size is a user of the same copy, so a step that changes data runs once per size: an order placed in the mirror is placed ${sizes.length} times, and a size that deletes what another size already deleted shows an error. Such an error, or a duplicate, comes from the mirror, not from the change. When a check needs one data change, turn "Repeat steps in all sizes" off, do it in one size, then turn it back on.`,
         ]
       : sizes.length
         ? [

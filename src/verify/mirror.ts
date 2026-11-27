@@ -139,7 +139,7 @@ export async function startMirror(o: MirrorOptions): Promise<Mirror> {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
     if (url === MIRROR_PATH || url.startsWith(`${MIRROR_PATH}?`)) {
-      const path = new URL(url, origin).searchParams.get("path") ?? "/";
+      const path = new URL(url, origin).searchParams.get("path") ?? target.pathname + target.search + target.hash;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(page(path.startsWith("/") ? path : "/"));
       return;
@@ -253,7 +253,7 @@ html,body{margin:0;height:100%;background:#1f2023;color:#e8e8ea;font:13px/1.4 sy
 #notes{flex:1;margin:0;padding:0;list-style:none;height:${LAYOUT.bar - 16}px;overflow:auto;font-size:12px;color:#c9c9ce}
 #notes li.warn{color:#ffb86b}
 .frame{position:absolute}
-.frame .label{height:${LAYOUT.label}px;display:flex;gap:8px;align-items:center;font-size:12px;white-space:nowrap;overflow:hidden}
+.frame .label{height:${LAYOUT.label}px;display:flex;gap:8px;align-items:center;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .frame .label b{font-weight:600}
 .frame .label .drive{color:#7ee0a1}
 .frame .label .warn{color:#ffb86b}
@@ -312,6 +312,7 @@ const CLIENT = String.raw`
       f.wrap.style.left = L.pad + r.at[i].x + "px";
       f.wrap.style.top = L.bar + L.pad + r.at[i].y + "px";
       f.box.style.width = f.v.width * lo + "px";
+      f.labelEl.style.width = f.v.width * lo + "px";
       f.box.style.height = f.v.height * lo + "px";
       f.el.style.transform = "scale(" + lo + ")";
     });
@@ -378,6 +379,13 @@ const CLIENT = String.raw`
 
   function norm(s) { return (s || "").replace(/\s+/g, " ").trim().slice(0, 120); }
 
+  // What an element says, never what was typed into it: notes and screenshots must not show a password.
+  function says(el) {
+    if (el.tagName === "INPUT") return /^(button|submit|reset)$/i.test(el.type) ? norm(el.value) : "";
+    if (el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) return "";
+    return norm(el.innerText);
+  }
+
   function describe(el) {
     var path = [];
     for (var n = el; n && n.parentElement && n.tagName !== "BODY"; n = n.parentElement) {
@@ -396,7 +404,7 @@ const CLIENT = String.raw`
       role: el.getAttribute("role") || "",
       aria: el.getAttribute("aria-label") || "",
       placeholder: el.getAttribute("placeholder") || "",
-      text: norm(el.innerText || el.value || ""),
+      text: says(el),
     };
   }
 
@@ -420,7 +428,7 @@ const CLIENT = String.raw`
     if (d.placeholder && el.getAttribute("placeholder") === d.placeholder) score += 3;
     if (d.role && el.getAttribute("role") === d.role) score += 1;
     if (d.type && el.getAttribute("type") !== d.type) return 0;
-    if (d.text && norm(el.innerText || el.value || "") === d.text) score += 3;
+    if (d.text && says(el) === d.text) score += 3;
     return score;
   }
 
@@ -439,7 +447,7 @@ const CLIENT = String.raw`
   function find(f, d) {
     var doc = f.el.contentDocument, win = f.el.contentWindow;
     var p = byPath(doc, d);
-    if (p && p.tagName === d.tag && shown(p, win) && (!d.text || same(p, d) >= 3 || !norm(p.innerText || p.value || ""))) return { el: p };
+    if (p && p.tagName === d.tag && shown(p, win) && (!d.text || same(p, d) >= 3 || !says(p))) return { el: p };
     var best = null, top = 0, hidden = false;
     var all = doc.getElementsByTagName(d.tag);
     for (var i = 0; i < all.length; i++) {
@@ -464,10 +472,11 @@ const CLIENT = String.raw`
 
   // ---- repeating a step
 
-  function each(fn) {
+  function each(fn, quiet) {
     if (!mirroring) return;
     followers().forEach(function (f) {
-      if (f.foreign || !f.ready) return;
+      if (f.foreign) return;
+      if (!f.ready) { if (!quiet) note(f, "missed a step while its page was loading; do it there again if the check needs it", true); return; }
       try { fn(f); } catch (e) { note(f, "could not repeat the step: " + (e && e.message), true); }
     });
   }
@@ -563,6 +572,8 @@ const CLIENT = String.raw`
       if (!mine() || !e.isTrusted) return;
       var t = actionable(e.target);
       if (!t) return;
+      // A click on a label also clicks its control: the label's click, repeated, does that in the other sizes too.
+      if (lastClick.el && lastClick.el.tagName === "LABEL" && lastClick.el.control === t && Date.now() - lastClick.at < 100) return;
       lastClick = { at: Date.now(), el: t };
       var d = describe(t);
       setTimeout(function () { each(function (g) { click(g, d); }); }, 0);
@@ -600,7 +611,7 @@ const CLIENT = String.raw`
         each(function (g) {
           var gw = g.el.contentWindow, gs = g.el.contentDocument.scrollingElement || g.el.contentDocument.documentElement;
           gw.scrollTo(gw.scrollX, ratio * Math.max(0, gs.scrollHeight - gw.innerHeight));
-        });
+        }, true);
       }, 120);
     }, { passive: true });
     label(f);

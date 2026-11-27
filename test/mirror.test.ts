@@ -52,6 +52,7 @@ test("the mirror serves the copy so it loads in a frame, keeps its links and coo
     assert.equal(tab.status, 302);
     assert.equal(tab.headers.get("location"), `${MIRROR_PATH}?path=%2Forders%3Fx%3D1`);
 
+    assert.match(await (await fetch(m.url)).text(), /"path":"\/"/, "without a path the mirror opens the copy's own address");
     const mirror = await (await fetch(`${m.url}?path=%2Forders%3Fx%3D1`)).text();
     assert.match(mirror, /"path":"\/orders\?x=1"/);
     assert.match(mirror, /Small phone.*Desktop/s);
@@ -79,6 +80,9 @@ test("with the mirror, the tester checks every size at once instead of one after
   assert.match(p, /\/w\/mirror-notes\.txt/);
   assert.match(p, /at http:\/\/127\.0\.0\.1:5000\/login with a \/ b/, "the login goes through the mirror, so its cookie is the mirror's");
   assert.match(p, /Each check covers every size/);
+  assert.match(p, /an order placed in the mirror is placed 2 times/);
+  const entry = testerPrompt({ ...base, url: "http://localhost:1/app/", recipe: parseRecipe('version: 1\ntrigger: { paths: ["**"] }\nlogin: { user: a, password: b, path: login }\nenv:\n  up: "true"\n  down: "true"\n  url: http://localhost:1/app/\n'), mirror: "http://127.0.0.1:5000/__gespann/mirror" });
+  assert.match(entry, /at http:\/\/127\.0\.0\.1:5000\/app\/login with a \/ b/, "a login path relative to the copy's entry stays below it");
   assert.doesNotMatch(p, /one size after the other:|one screenshot per size|One check per size/);
   const without = testerPrompt(base);
   assert.match(without, /one size after the other/, "without a mirror, sizes are checked in turn");
