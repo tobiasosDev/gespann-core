@@ -1,6 +1,6 @@
 # Which Codex model to pick
 
-**Use GPT-6.1 Terra.** In our benchmark it judged every test PR right, like GPT-6.2-Sol and GPT-6.1-Sol, and a test cost it 1.5 credits instead of 3.6 and 3.4: OpenAI charges half of Sol's rate per token for it. On a Plus plan that leaves room for about twice as many tests in the same limits. GPT-6-Luna is the cheapest (0.25 credits), but it passed a PR that broke a total, so we do not recommend it for testing. The model picker in Settings → Codex shows each model's result and cost.
+**Use GPT-6.1 Terra.** In our benchmark it judged every test PR right, like GPT-6.2-Sol and GPT-6.1-Sol, and a test cost it 1.5 credits instead of 3.6 and 3.4: OpenAI charges half of Sol's rate per token for it. GPT-6-Luna is the cheapest (0.25 credits), but it passed a PR that broke a total, so we do not recommend it for testing. The model picker in Settings → Codex shows each model's result and cost.
 
 ## Result (2026-11-26)
 
@@ -28,7 +28,7 @@ Credits per run are the run's tokens at [OpenAI's Codex rates](https://learn.cha
 | GPT-6.2-Astra (not benchmarked) | 200 / 10 / 1,000 | 6–50 |
 | GPT-6-Astra (not benchmarked) | 250 / 25 / 1,250 | 5–45 |
 
-A test of a real app with longer flows uses more tokens than these small PRs; the ratios between the models should roughly hold. Pro plans have no 5-hour limit.
+A test of a real app with longer flows uses more tokens than these small PRs; the ratios between the models should roughly hold.
 
 ## How we measured
 

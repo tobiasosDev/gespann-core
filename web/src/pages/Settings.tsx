@@ -242,8 +242,12 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
 function modelLabel(m: CodexModel, recommended: CodexModel | undefined): string {
   const name = `${m.name}${m.recommended ? " (recommended)" : ""}`;
   if (m.bench) return `${name} — ${m.bench.right}/${m.bench.of} right · ≈${m.bench.credits < 1 ? m.bench.credits.toFixed(2) : m.bench.credits.toFixed(1)} credits per PR`;
-  const times = recommended ? Math.round(m.rates.output / recommended.rates.output) : 0;
-  return `${name} — not benchmarked${times > 1 ? ` · ${times}× the token price of ${recommended?.name}` : ""}`;
+  if (!recommended) return `${name} — not benchmarked`;
+  const r = recommended.rates;
+  const ratios = [m.rates.input / r.input, m.rates.cached / r.cached, m.rates.output / r.output].map((x) => Math.round(x));
+  const lo = Math.min(...ratios);
+  const hi = Math.max(...ratios);
+  return `${name} — not benchmarked · ${lo === hi ? lo : `${lo}–${hi}`}× the token price of ${recommended.name}`;
 }
 
 export function SettingsPage() {
