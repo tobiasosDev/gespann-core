@@ -39,6 +39,25 @@ export interface User {
   avatar: string | null;
   /** When GitHub last reported this user's repositories (sign-in). */
   repos_synced?: string | null;
+  /** Where gespann sends this user's mail; null until a sign-in brought one or the user confirmed one. */
+  email?: string | null;
+  /** Who vouched for `email`: `github`, another sign-in's id, or `user` (confirmed by a link in a mail). */
+  email_source?: string | null;
+  /** An address the user typed and has not confirmed yet. */
+  email_pending?: string | null;
+}
+
+/** A user's choice for one kind of mail (alerts.ts); missing rows use the kind's default. */
+export interface AlertRule {
+  category: string;
+  on: number;
+  after: number;
+}
+
+/** How many ended jobs of a project in a row fell into one category, and whether that streak was mailed. */
+export interface AlertStreak {
+  count: number;
+  mailed: number;
 }
 
 export interface UserRepo {
@@ -194,6 +213,15 @@ create table if not exists slots (
 create table if not exists api_tokens (
   id integer primary key, user_id integer not null references users(id), name text not null,
   hash text not null unique, hint text not null, created text not null, last_used text);
+create table if not exists alert_rules (
+  user_id integer not null references users(id), category text not null, "on" integer not null, after integer not null,
+  primary key (user_id, category));
+create table if not exists alert_streaks (
+  project_id integer not null references projects(id), category text not null,
+  count integer not null default 0, mailed integer not null default 0, primary key (project_id, category));
+create table if not exists identities (
+  provider text not null, subject text not null, user_id integer not null references users(id),
+  email text, created text not null, primary key (provider, subject));
 `;
 
 /**
@@ -283,6 +311,10 @@ export class Db {
       ...KEY_AGENTS.flatMap((a) => [[`${a}_key`, "text"], [`${a}_label`, "text"], [`${a}_model`, "text"]] as const),
       ...SIGN_IN_AGENTS.flatMap((a) => [[`${a}_login_state`, "text"], [`${a}_login`, "text"]] as const),
       ["grok_auth", "text"],
+      ["email", "text"],
+      ["email_source", "text"],
+      ["email_pending", "text"],
+      ["github_token", "text"],
     ] as const) {
       if (cols.has(name)) continue;
       try {
@@ -421,6 +453,49 @@ export class Db {
     return this.one<User>("select * from users where github_id = ?", u.github_id) as User;
   }
 
+  /**
+   * An address a sign-in vouches for (GitHub's verified primary address, or another sign-in's). It
+   * fills an empty address and follows changes at the same source, but never replaces one the user
+   * chose themselves or another source gave.
+   */
+  offerEmail(userId: number, email: string, source: string): void {
+    this.run("update users set email = ?, email_source = ? where id = ? and (email is null or email_source = ?)", email, source, userId, source);
+  }
+
+  /** An address the user typed; it counts once they open the link mailed to it (`confirmEmail`). */
+  setPendingEmail(userId: number, email: string | null): void {
+    this.run("update users set email_pending = ? where id = ?", email, userId);
+  }
+
+  /** The link in the confirmation mail was opened: false when the user has since typed another address. */
+  confirmEmail(userId: number, email: string): boolean {
+    return Number(this.sql.prepare("update users set email = ?, email_source = 'user', email_pending = null where id = ? and email_pending = ?").run(email, userId, email).changes) > 0;
+  }
+
+  alertRules(userId: number): AlertRule[] {
+    return this.all<AlertRule>('select category, "on", after from alert_rules where user_id = ?', userId);
+  }
+
+  setAlertRule(userId: number, r: AlertRule): void {
+    this.run('insert into alert_rules (user_id, category, "on", after) values (?, ?, ?, ?) on conflict(user_id, category) do update set "on" = excluded."on", after = excluded.after', userId, r.category, r.on, r.after);
+  }
+
+  /** One more job of the project in this category; the streak as it is now. */
+  bumpStreak(projectId: number, category: string): AlertStreak {
+    this.run("insert into alert_streaks (project_id, category, count) values (?, ?, 1) on conflict(project_id, category) do update set count = count + 1", projectId, category);
+    return this.one<AlertStreak>("select count, mailed from alert_streaks where project_id = ? and category = ?", projectId, category) as AlertStreak;
+  }
+
+  /** A job of the project ended outside these categories: their streaks start over. */
+  endStreaks(projectId: number, categories: string[]): void {
+    for (const c of categories) this.run("delete from alert_streaks where project_id = ? and category = ?", projectId, c);
+  }
+
+  /** Marks the streak mailed; false when another call already did. */
+  markStreakMailed(projectId: number, category: string): boolean {
+    return Number(this.sql.prepare("update alert_streaks set mailed = 1 where project_id = ? and category = ? and mailed = 0").run(projectId, category).changes) > 0;
+  }
+
   createSession(id: string, userId: number, days = 7): void {
     this.run("insert into sessions (id, user_id, created, expires) values (?, ?, ?, ?)", id, userId, now(), new Date(Date.now() + days * 86_400_000).toISOString());
   }
@@ -435,6 +510,37 @@ export class Db {
 
   deleteSession(id: string): void {
     this.run("delete from sessions where id = ?", id);
+  }
+
+  /** The user a module's sign-in (provider, subject) is linked to. */
+  identityUser(provider: string, subject: string): User | undefined {
+    return this.one<User>("select u.* from identities i join users u on u.id = i.user_id where i.provider = ? and i.subject = ?", provider, subject);
+  }
+
+  /** Links a module's sign-in to a user; a later link of the same sign-in replaces it. */
+  linkIdentity(provider: string, subject: string, userId: number, email: string | null): void {
+    this.run(
+      "insert into identities (provider, subject, user_id, email, created) values (?, ?, ?, ?, ?) on conflict(provider, subject) do update set user_id = excluded.user_id, email = excluded.email",
+      provider,
+      subject,
+      userId,
+      email,
+      now(),
+    );
+  }
+
+  /** The user's GitHub token, sealed; kept only on instances with other sign-ins, to re-read repositories. */
+  githubToken(userId: number): string | null {
+    return this.one<{ github_token: string | null }>("select github_token from users where id = ?", userId)?.github_token ?? null;
+  }
+
+  setGithubToken(userId: number, sealed: string | null): void {
+    this.run("update users set github_token = ? where id = ?", sealed, userId);
+  }
+
+  /** Replaces the GitHub token only if it is still `from`; false when another sign-in changed it. */
+  swapGithubToken(userId: number, from: string, to: string | null): boolean {
+    return Number(this.sql.prepare("update users set github_token = ? where id = ? and github_token = ?").run(to, userId, from).changes) > 0;
   }
 
   /** The repositories this user can access through the app, as GitHub reported at sign-in. */

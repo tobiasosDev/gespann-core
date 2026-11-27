@@ -4,6 +4,7 @@ import { loadConfig } from "./config.ts";
 import { AGENT_READY, Db } from "./db.ts";
 import { capFor, loadServerModule } from "./extension.ts";
 import { Github } from "./github.ts";
+import { createMailer } from "./mail.ts";
 import { startPrSync } from "./pulls.ts";
 import { startMediaSweep } from "./retention.ts";
 
@@ -25,7 +26,9 @@ export async function serve(): Promise<void> {
   };
   const serverModule = await loadServerModule(config.serverModule);
   if (serverModule) console.log(JSON.stringify({ level: "info", message: `server module: ${serverModule.name}` }));
-  const app = createApp({ config, db, github, githubReady: () => !!githubApp(config, db), module: serverModule });
+  const mailer = createMailer(config.mail);
+  console.log(JSON.stringify({ level: "info", message: config.mail.smtpUrl ? `mail: over ${new URL(config.mail.smtpUrl).hostname} from ${config.mail.from}` : "mail: off (no SMTP_URL), mails only go to this log" }));
+  const app = createApp({ config, db, github, githubReady: () => !!githubApp(config, db), module: serverModule, mailer });
   startPrSync({ db, github });
   // The orchestrator cannot ask the server module: the caps go into the database (every 10 s, plans change rarely).
   const publish = () => db.publishJobCaps((owner) => capFor(serverModule, owner)?.jobs ?? null);

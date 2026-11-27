@@ -299,6 +299,8 @@ test("the PR comment shows what needs a person and folds the rest away", () => {
   // The recording link comes before the screenshots.
   assert.match(body, /🎬 \*\*\[Watch the recording\]\(https:\/\/x\/recording\.mp4\)\*\*/);
   assert.ok(body.indexOf("Watch the recording") < body.indexOf("📸"), "recording above the screenshots");
+  const clipped = renderComment({ outcome: judged.outcome, judged, files: ["a.png", "change.mp4", "recording.mp4"], fileUrl: (f) => `https://x/${f}`, runUrl: "https://x/runs/1", head: "abcdef123", baseRef: "main", gate: gateLine("failed") });
+  assert.match(clipped, /🎬 \*\*\[Watch the change\]\(https:\/\/x\/change\.mp4\)\*\* in the tester's recording · \[whole test\]\(https:\/\/x\/recording\.mp4\)/, "the short video of the change leads, the whole test follows");
   assert.ok(!body.includes("A third sentence"), "the summary keeps whole sentences that fit");
   const none = renderComment({ outcome: "FAIL", judged: null, error: "sandbox 502", files: [], fileUrl: (f) => f, runUrl: "u", head: "h", baseRef: "main" });
   assert.match(none, /could not test this PR[\s\S]*sandbox 502/);

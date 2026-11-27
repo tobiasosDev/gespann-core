@@ -109,3 +109,30 @@ fn screen_script_starts_keeps_and_resizes_the_screen() {
     assert_eq!(starts().len(), 3, "a malformed size is ignored");
     run(stop_screen_script(&d));
 }
+
+/// Runs the clip script on a real 60 s video when ffmpeg is installed (skipped without it).
+#[test]
+fn the_clip_of_the_change_is_cut_from_the_recording() {
+    let sh = |script: &str| std::process::Command::new("bash").arg("-c").arg(script).output().expect("bash");
+    if !sh("command -v ffmpeg").status.success() {
+        eprintln!("ffmpeg is not installed: skipped");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gespann-clip-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (rec, clip) = (dir.join("recording.mp4"), dir.join("change.mp4"));
+    let (rec, clip) = (rec.to_str().unwrap(), clip.to_str().unwrap());
+    assert!(sh(&format!("ffmpeg -nostdin -loglevel error -y -f lavfi -i testsrc=size=320x240:rate=5 -t 60 -pix_fmt yuv420p {}", q(rec))).status.success());
+    let seconds = |f: &str| -> f64 {
+        let o = sh(&format!("ffprobe -v error -show_entries format=duration -of csv=p=0 {}", q(f)));
+        String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0.0)
+    };
+    assert!(sh(&clip_recording_script(rec, clip, 20.0, 12.5)).status.success());
+    assert!((seconds(clip) - 12.5).abs() < 0.5, "12.5 s from 0:20, got {}", seconds(clip));
+    assert!((seconds(rec) - 60.0).abs() < 0.5, "the recording stays whole");
+    // A window past the end: no file, and a clip from before stays gone.
+    assert!(sh(&clip_recording_script(rec, clip, 70.0, 5.0)).status.success());
+    assert!(!std::path::Path::new(clip).exists());
+    assert!(sh(&clip_recording_script(&format!("{rec}.missing"), clip, 1.0, 5.0)).status.success(), "no recording: nothing to do");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

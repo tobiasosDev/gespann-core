@@ -8,6 +8,7 @@ import { Badge, Button, Card, CardHeader, Empty, LinkButton, Log, Mono } from ".
 import { cn } from "../cn.ts";
 import { Link, RunStatus } from "../nav.tsx";
 
+const CLIP = "change.mp4";
 const GOAL = { met: RESULT_ICON.pass, missed: RESULT_ICON.fail, blocked: RESULT_ICON.blocked };
 const GOAL_TONE = { met: "ok", missed: "bad", blocked: "warn" } as const;
 
@@ -49,13 +50,18 @@ export function Run({ id }: { id: number }) {
   const { data: r, error } = useResource<RunDetail>(`/runs/${id}`, runLive);
   const [busy, setBusy] = useState(false);
   const [fullLog, setFullLog] = useState(false);
+  const [wholeTest, setWholeTest] = useState(false);
   useTick(r?.status === "running");
   if (error) return <p className="text-bad">{error}</p>;
   if (!r) return <p className="text-muted-foreground">Loading…</p>;
   const v = r.verdict?.verdict ?? null;
   const src = (f: string) => `/proof/${r.token}/${encodeURIComponent(f)}`;
   const images = r.files.filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
-  const video = r.files.find((f) => /\.(mp4|webm)$/i.test(f));
+  const videos = r.files.filter((f) => /\.(mp4|webm)$/i.test(f));
+  // change.mp4 is the part of the recording that shows what the PR changes (orchestrator/src/jobs/run.rs).
+  const clip = videos.find((f) => f === CLIP);
+  const whole = videos.find((f) => f !== CLIP);
+  const video = clip && !wholeTest ? clip : (whole ?? clip);
   const live = r.status === "queued" || r.status === "running";
   const livePlan = r.status === "running" && r.progress?.checks.length ? r.progress : null;
   const logLines = r.log.split("\n").filter(Boolean);
@@ -68,12 +74,23 @@ export function Run({ id }: { id: number }) {
 
   const recordingCard = (
     <Card className="mb-6">
-      <CardHeader title="Recording" description={video ? "The tester's screen during the whole test." : undefined} />
+      <CardHeader
+        title="Recording"
+        description={video ? (video === clip ? "The part of the test that shows what this pull request changes." : "The tester's screen during the whole test.") : undefined}
+        action={
+          clip && whole ? (
+            <Button size="sm" variant="outline" onClick={() => setWholeTest(!wholeTest)}>
+              {wholeTest ? "Only the change" : "Whole test"}
+            </Button>
+          ) : undefined
+        }
+      />
       {video ? (
         <div className="p-4">
           {/* Asks the browser to buffer the whole recording up front (7 minutes are about 1.5 MB): with only the
-              metadata it fetches each spot on a seek, and keyframes are up to 50 s apart, so scrubbing stalls. */}
-          <video controls playsInline preload="auto" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
+              metadata it fetches each spot on a seek. Smooth scrubbing also needs the keyframe every 5 s that
+              finish_recording_script (orchestrator/src/sandbox/scripts.rs) gives the recording. */}
+          <video key={video} controls playsInline preload="auto" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
         </div>
       ) : (
         <Empty>{live ? "The recording appears when the tester is done." : r.media_cleared ? `The recording and screenshots were deleted ${ago(r.media_cleared)}, after the pull request closed.` : "This run has no recording. The log below says why."}</Empty>

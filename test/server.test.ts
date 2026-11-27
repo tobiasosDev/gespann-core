@@ -60,7 +60,7 @@ test("API: anonymous me, setup hidden without the admin token, auth needed, CSRF
   db.setSetting("github_app", JSON.stringify(app));
   const server = createApp({ config, db, github: () => new Github(app), githubReady: () => true });
   const me = await (await server.request("/api/me")).json();
-  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new", links: [] });
+  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new", links: [], askEmail: false, signIn: [] });
   assert.equal((await server.request("/setup")).status, 404);
   assert.equal((await server.request("/setup/github/created?state=x&code=y")).status, 409, "an instance with an app never replaces it");
   assert.equal((await server.request("/api/projects", { headers: { "x-gespann": "1" } })).status, 401);
@@ -191,7 +191,7 @@ test("ALLOWED_USERS: only listed GitHub logins sign in; others' sessions and tok
   assert.throws(() => loadConfig({ ALLOWED_USERS: " , " }), /names no GitHub login/, "an empty list never opens the instance");
   const db = new Db(":memory:");
   let who = { id: 2, login: "eve", name: null, avatar_url: "" };
-  const gh = { exchangeCode: async () => "tok", user: async () => who, userInstallations: async () => [], userRepos: async () => [], installUrl: () => "https://github.com/apps/x/installations/new" } as unknown as Github;
+  const gh = { exchangeCode: async () => ({ access: "tok", refresh: null }), user: async () => who, verifiedEmail: async () => `${who.login}@users.example`, userInstallations: async () => [], userRepos: async () => [], installUrl: () => "https://github.com/apps/x/installations/new" } as unknown as Github;
   const server = createApp({ config, db, github: () => gh, githubReady: () => true });
   const callback = () => server.request("/auth/github/callback?state=st&code=c", { headers: { Cookie: "gs_oauth=st" } });
 
@@ -204,6 +204,7 @@ test("ALLOWED_USERS: only listed GitHub logins sign in; others' sessions and tok
   const ok = await callback();
   assert.equal(ok.headers.get("location"), "/projects/new");
   assert.match(ok.headers.get("set-cookie") ?? "", /gs=[0-9a-f]{64}/);
+  assert.deepEqual({ ...db.sql.prepare("select email, email_source from users where login = 'tobi'").get() }, { email: "tobi@users.example", email_source: "github" }, "GitHub's verified address");
 
   // Eve signed in before the instance was closed: her session and her agent token are refused now.
   const eve = db.upsertUser({ github_id: 2, login: "eve", name: null, avatar: null });

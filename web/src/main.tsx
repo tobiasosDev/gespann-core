@@ -1,6 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Me, ProjectRow, RunDetail } from "./api.ts";
+import { EmailDialog } from "./components/EmailDialog.tsx";
 import { type Section, Sidebar } from "./components/Sidebar.tsx";
 import { LinkButton } from "./components/ui.tsx";
 import { usePath, useResource } from "./live.ts";
@@ -25,19 +26,41 @@ function Shell({ me, section, projects, wide, children }: { me: Me; section: Sec
 }
 
 function SignIn({ me }: { me: Me }) {
+  const q = new URLSearchParams(location.search);
+  const methods = me.signIn ?? [];
+  // Back from another sign-in that is not linked to a GitHub account yet.
+  const linking = methods.find((m) => m.id === q.get("link"));
   return (
     <div className="grid min-h-screen place-items-center px-4">
       <div className="w-full max-w-sm rounded-lg border border-border bg-card p-6">
         <div className="mb-4 flex items-center">
           <Lockup />
         </div>
-        <h1 className="text-title font-semibold">Acceptance tests for every pull request</h1>
-        <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own ChatGPT plan or OpenRouter key clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
-        {new URLSearchParams(location.search).has("closed") && <p className="mb-4 text-body text-warn">Sign-in is limited to invited accounts for now. Your GitHub account is not on the list.</p>}
+        {linking ? (
+          <>
+            <h1 className="text-title font-semibold">Connect your GitHub account</h1>
+            <p className="mt-1 mb-5 text-body text-muted-foreground">You are signed in. gespann reads your repositories through GitHub, so connect your GitHub account once. After that, “{linking.label}” signs you in directly.</p>
+          </>
+        ) : (
+          <>
+            <h1 className="text-title font-semibold">Acceptance tests for every pull request</h1>
+            <p className="mt-1 mb-5 text-body text-muted-foreground">An agent on your own ChatGPT plan or OpenRouter key clicks through each PR in a production-near copy of your app and reports back on GitHub.</p>
+          </>
+        )}
+        {q.has("closed") && <p className="mb-4 text-body text-warn">Sign-in is limited to invited accounts for now. Your GitHub account is not on the list.</p>}
+        {q.has("signin") && <p className="mb-4 text-body text-warn">That sign-in did not work. Please try again.</p>}
         {me.githubReady ? (
-          <LinkButton href="/auth/github" className="w-full">
-            Continue with GitHub
-          </LinkButton>
+          <div className="flex flex-col gap-2">
+            <LinkButton href={linking ? "/auth/github?link=1" : "/auth/github"} className="w-full">
+              {linking ? "Connect GitHub" : "Continue with GitHub"}
+            </LinkButton>
+            {!linking &&
+              methods.map((m) => (
+                <LinkButton key={m.id} href={`/auth/with/${m.id}`} variant="outline" className="h-auto min-h-9 w-full whitespace-normal py-2 text-center">
+                  {m.label}
+                </LinkButton>
+              ))}
+          </div>
         ) : (
           <p className="text-body text-warn">No GitHub App configured on this instance yet.</p>
         )}
@@ -47,6 +70,7 @@ function SignIn({ me }: { me: Me }) {
 }
 
 function Signed({ me, path }: { me: Me; path: string }) {
+  const [askEmail, setAskEmail] = useState(!!me.askEmail);
   const { data, error, reload } = useResource<{ projects: ProjectRow[] }>("/projects", projectsBusy);
   const projects = data?.projects ?? null;
   // The run page and the sidebar share this request; the sidebar only needs the run's project.
@@ -77,6 +101,7 @@ function Signed({ me, path }: { me: Me; path: string }) {
   return (
     <Shell me={me} section={section} projects={projects} wide={path.startsWith("/projects/") && section.kind === "project" && section.tab === "runs"}>
       {page}
+      {askEmail && <EmailDialog onDone={() => setAskEmail(false)} />}
     </Shell>
   );
 }

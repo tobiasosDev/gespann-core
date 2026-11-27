@@ -6,6 +6,31 @@ export interface Me {
   installUrl: string | null;
   /** Pages a server module of this instance adds, shown in the sidebar. */
   links?: { label: string; href: string }[];
+  /** The instance sends mail and has no address for this user: ask for one. */
+  askEmail?: boolean;
+  /** Other ways to sign in, from a server module of this instance: `/auth/with/<id>`. */
+  signIn?: { id: string; label: string }[];
+}
+
+/** One kind of mail in Settings → Mail, with the user's choice. */
+export interface MailKind {
+  id: string;
+  label: string;
+  description: string;
+  defaultAfter: number;
+  on: boolean;
+  after: number;
+}
+
+export interface MailSettings {
+  /** False: the instance has no SMTP_URL and mails nothing. */
+  sends: boolean;
+  email: string | null;
+  /** `github`, another sign-in's id, or `user`. */
+  source: string | null;
+  pending: string | null;
+  maxAfter: number;
+  kinds: MailKind[];
 }
 
 export interface RunRow {
@@ -232,7 +257,7 @@ export interface Progress {
   at: Partial<Record<Stage, string>>;
   attempt: number;
   sandboxDone?: string;
-  checks: { expect: string; result: Check["result"] | null; active?: true; observed?: string; at?: string }[];
+  checks: { expect: string; result: Check["result"] | null; active?: true; observed?: string; at?: string; started?: string; focus?: true }[];
   now: { at: string; text: string }[];
 }
 

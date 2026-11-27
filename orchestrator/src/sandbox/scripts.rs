@@ -35,7 +35,9 @@ pub fn prelude(home: &str) -> String {
 }
 
 /// Starts ffmpeg on the sandbox's screen in the background, writing an mp4 to `file`. Few frames and a
-/// high CRF: the screen mostly stands still, so a long test stays a small file.
+/// high CRF: the screen mostly stands still, so a long test stays a small file. A keyframe every 5 s
+/// (`-g 25` at 5 fps): x264's default of one per 250 frames is one per 50 s, and a seek in the player
+/// decodes from the keyframe before it, so scrubbing a 2000-pixel recording froze the run page.
 pub fn record_script(file: &str, own_screen: bool) -> String {
     let f = q(file);
     let mut lines = vec![
@@ -51,7 +53,7 @@ pub fn record_script(file: &str, own_screen: bool) -> String {
     lines.push(format!(r#"mkdir -p "$(dirname {f})"; rm -f {f}"#));
     lines.push(r#"s="$(command -v setsid || true)""#.to_string());
     lines.push(format!(
-        r#"nohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i "$DISPLAY" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p {f} > "$p.log" 2>&1 < /dev/null &"#
+        r#"nohup $s ffmpeg -nostdin -loglevel error -y -f x11grab -draw_mouse 1 -framerate 5 -i "$DISPLAY" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -preset veryfast -crf 32 -g 25 -pix_fmt yuv420p {f} > "$p.log" 2>&1 < /dev/null &"#
     ));
     lines.push(r#"echo $! > "$p.pid""#.to_string());
     // ffmpeg fails at once when it cannot open the screen; give it that moment.
@@ -74,7 +76,10 @@ pub fn stop_record_script() -> String {
 }
 
 /// Readies a finished recording for the run page: the video starts at the first frame that is not black
-/// (the screen stays black until the tester opens its browser), and the index goes to the front.
+/// (the screen stays black until the tester opens its browser), has a keyframe every 5 s, and the index
+/// goes to the front. Always re-encoded: hosted sandboxes record with their own recorder, whose
+/// keyframes are 50 s apart, and a seek in the player decodes from the keyframe before it, so scrubbing
+/// a 2000-pixel recording froze the run page. Three minutes take about 4 s on two cores.
 pub fn finish_recording_script(file: &str) -> String {
     let f = q(file);
     let tmp = q(&format!("{file}.tmp.mp4"));
@@ -84,14 +89,35 @@ pub fn finish_recording_script(file: &str) -> String {
         format!(r#"o="$(ffmpeg -nostdin -hide_banner -i {f} -vf blackdetect=d=1:pix_th=0.02:pic_th=0.999 -an -f null - 2>&1)""#),
         r#"b="$(printf '%s\n' "$o" | grep -o 'black_start:0 black_end:[0-9.]*' | head -n 1 | cut -d: -f3)""#.to_string(),
         r#"d="$(printf '%s\n' "$o" | sed -n 's/.*Duration: \([0-9]*\):\([0-9]*\):\([0-9.]*\).*/\1 \2 \3/p' | head -n 1 | awk '{ print $1 * 3600 + $2 * 60 + $3 }')""#.to_string(),
-        // A video that is black throughout stays as it is. Re-encoded, not copied: a copy can only start
-        // at a keyframe, and those are far apart in this video.
-        format!(r#"{{ [ -n "$b" ] && [ -n "$d" ] && awk -v b="$b" -v d="$d" 'BEGIN {{ exit !(b < d - 0.5) }}' && ffmpeg -nostdin -loglevel error -y -ss "$b" -i {f} -an -c:v libx264 -preset ultrafast -crf 32 -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp}; }} ||"#),
+        // A video that is black throughout keeps its start.
+        r#"s=0; if [ -n "$b" ] && [ -n "$d" ] && awk -v b="$b" -v d="$d" 'BEGIN { exit !(b < d - 0.5) }'; then s="$b"; fi"#.to_string(),
+        // Keyframes by time, not frame count: the hosted recorder's frame rate is not ours. veryfast,
+        // because ultrafast makes the file about twice as large at that spacing.
+        format!(r#"{{ ffmpeg -nostdin -loglevel error -y -ss "$s" -i {f} -an -c:v libx264 -preset veryfast -crf 32 -force_key_frames 'expr:gte(t,n_forced*5)' -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp}; }} ||"#),
         format!("  ffmpeg -nostdin -loglevel error -y -i {f} -c copy -movflags +faststart {tmp} ||"),
         // A failed ffmpeg may leave half a file: keep the original recording then.
         format!("  {{ rm -f {tmp}; exit 0; }}"),
         format!("test -s {tmp} && mv {tmp} {f}"),
         format!("rm -f {tmp}"),
+    ]
+    .join("\n")
+}
+
+/// Cuts the part of a finished recording that shows the PR's change to `out`: `length` seconds from
+/// `start`, encoded like `finish_recording_script`. Run before that script, which trims the start of
+/// `file`. Writes nothing when the cut fails or starts past the end.
+pub fn clip_recording_script(file: &str, out: &str, start: f64, length: f64) -> String {
+    let (f, o) = (q(file), q(out));
+    let tmp = q(&format!("{out}.tmp.mp4"));
+    [
+        format!("rm -f {o} {tmp}"),
+        format!("test -s {f} || exit 0"),
+        // A window past the end would give an mp4 without frames.
+        format!(r#"d="$(ffmpeg -nostdin -hide_banner -i {f} 2>&1 | sed -n 's/.*Duration: \([0-9]*\):\([0-9]*\):\([0-9.]*\).*/\1 \2 \3/p' | head -n 1 | awk '{{ print $1 * 3600 + $2 * 60 + $3 }}')""#),
+        format!(r#"[ -n "$d" ] && awk -v s={start} -v d="$d" 'BEGIN {{ exit !(s < d) }}' || exit 0"#),
+        format!(r#"ffmpeg -nostdin -loglevel error -y -ss {start} -i {f} -t {length} -an -c:v libx264 -preset veryfast -crf 32 -force_key_frames 'expr:gte(t,n_forced*5)' -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp} && mv {tmp} {o}"#),
+        format!("rm -f {tmp}"),
+        "true".to_string(),
     ]
     .join("\n")
 }

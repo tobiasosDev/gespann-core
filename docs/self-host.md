@@ -31,7 +31,7 @@ Both services:
 | Variable | |
 |---|---|
 | `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
-| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins and agent keys and signs the orchestrator's calls to the UI, so keep it stable |
+| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins, agent keys and GitHub tokens and signs the orchestrator's calls to the UI, so keep it stable |
 | `DATA_DIR` | default `/data` in the images |
 
 The UI (`gespann serve`):
@@ -42,6 +42,8 @@ The UI (`gespann serve`):
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
 | `SERVER_MODULE` | path of a module that adds pages, Settings sections and a say over jobs ([Server module](#server-module)); default: none |
+| `SMTP_URL` | the mail server for gespann's mail ([Mail](#mail)), e.g. `smtps://user:password@smtp.example.com:465`; default: none, mails only go to the log |
+| `MAIL_FROM` | sender of that mail, e.g. `gespann <noreply@example.com>`; required with `SMTP_URL` |
 
 The orchestrator:
 
@@ -243,6 +245,7 @@ Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo
 - `routes(app, { user })` mounts routes on the server's Hono app, before the web app. `user(c)` is the signed-in user (`{ id, login }`) or null. API calls under `/api/` need the header `x-gespann: 1`; your own paths guard themselves against cross-site posts.
 - `links` puts links in the sidebar for signed-in users, e.g. `[{ label: "Usage", href: "/usage" }]`.
 - `settings(user)` returns sections for the Settings page, listed under *Account* beside the built-in ones, each with its badge text: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the section. `/settings#<id>` opens a section. If `settings` throws, only its sections are missing.
+- `signIn` adds ways to sign in next to GitHub, e.g. Google, Microsoft or your company's SSO through an identity provider. Each method is `{ id, label, authorizeUrl({ redirectUri, state }), identify({ query, redirectUri }) }`: `label` is its button on the sign-in page, `authorizeUrl` says where the browser signs in, and the provider sends it back to `redirectUri` (`<BASE_URL>/auth/with/<id>/callback`, register it there) with `state` unchanged. gespann checks `state`, then `identify` turns the callback's query into `{ subject, email? }`: the person's stable id at the provider (throw when the sign-in failed). gespann reads repositories through GitHub, so the first sign-in of a `subject` ends with "Connect your GitHub account": the GitHub sign-in links the two. With such methods gespann keeps each user's GitHub token, sealed with `SESSION_SECRET`, and later sign-ins refresh it and re-read the repositories without a trip to GitHub; when the token stopped working, the user links GitHub again. `ALLOWED_USERS` still decides by GitHub login.
 The module runs in the UI; the orchestrator asks it through the UI's internal API.
 
 - `admit(job)` runs before a job takes a sandbox. Return a string and the job fails with `not started: <string>` (a PR gets a neutral check with that text); return null to let it start. `job` names the job, its kind, its project and the project's owner.
@@ -261,9 +264,49 @@ export default (env) => ({
 });
 ```
 
+```js
+// sso.js: sign in through an OpenID Connect provider (Keycloak, Authentik, Okta, …)
+export default (env) => ({
+  name: "sso",
+  signIn: [{
+    id: "sso",
+    label: "Continue with company SSO",
+    authorizeUrl: ({ redirectUri, state }) =>
+      `${env.OIDC_ISSUER}/authorize?` + new URLSearchParams({ client_id: env.OIDC_CLIENT_ID, redirect_uri: redirectUri, response_type: "code", scope: "openid email", state }),
+    identify: async ({ query, redirectUri }) => {
+      const res = await fetch(`${env.OIDC_ISSUER}/token`, {
+        method: "POST",
+        body: new URLSearchParams({ grant_type: "authorization_code", code: query.code ?? "", redirect_uri: redirectUri, client_id: env.OIDC_CLIENT_ID, client_secret: env.OIDC_CLIENT_SECRET }),
+      });
+      if (!res.ok) throw new Error(`token endpoint: ${res.status}`);
+      const { access_token } = await res.json();
+      const me = await (await fetch(`${env.OIDC_ISSUER}/userinfo`, { headers: { Authorization: `Bearer ${access_token}` } })).json();
+      return { subject: me.sub, email: me.email };
+    },
+  }],
+});
+```
+
+## Mail
+
+gespann mails a project's owner when its jobs keep going wrong. Each user picks in Settings → Mail which kinds they want and after how many in a row:
+
+| Kind | Default | Counts |
+|---|---|---|
+| A PR could not be tested | on, after 3 | runs that ended without a verdict: sandbox, agent or a server module refused the job |
+| The copy of your app could not be built | on, after 1 | failed setups |
+| A PR failed its test | off | runs with the verdict FAIL (the PR's check and comment say it already) |
+| A test was blocked | off | runs with the verdict BLOCKED |
+
+Each kind counts the project's ended jobs in a row. Once the count reaches the user's number, one mail goes out; the next only after a job of the same group (runs, or setups) ended otherwise and the trouble started again. Cancelled runs, skipped runs and runs with merge conflicts neither count nor break a streak. The mail names the repository, the last PR, the reason and a link to the run.
+
+The address comes from the sign-in: GitHub's verified primary address (the app needs *Email addresses: Read-only* under *Account permissions*; apps created before it was added need it ticked and each user accepts it at their next sign-in), otherwise the public profile address. Another sign-in of a [server module](#server-module) can bring one too. A sign-in's address never replaces one the user entered. A user without one is asked once, right after signing in, and their address counts once they open the link gespann mails to it (valid for 24 hours). Settings → Mail changes it.
+
+`SMTP_URL` takes any SMTP server or mail service with SMTP (Amazon SES, Mailgun, MailerSend, Postmark, Resend, your own): `smtps://` uses TLS from the start (port 465), `smtp://` upgrades with STARTTLS (port 587) and refuses to send without it, except to a relay on the same machine (`localhost`). Put a user name or password with `@` or `:` in percent-encoded (`%40`, `%3A`). The startup log says `mail: over <host> from <MAIL_FROM>`. Without `SMTP_URL` the instance sends nothing, asks nobody for an address, and writes each mail it would have sent to its log. A mail the server refuses is logged (`alert mail`) and not sent again.
+
 ## GitHub App
 
-Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, commit statuses read, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
+Open `https://<BASE_URL>/setup?token=<ADMIN_TOKEN>` and click **Create GitHub App**. GitHub creates the app from a manifest (checks write, pull requests write, contents write, commit statuses read, email addresses read, `pull_request` and `issue_comment` events) and sends you back; gespann stores the credentials. Add `&org=<name>` to create it under an organization. Then install the app on the repositories to test.
 
 ## How a project works
 
