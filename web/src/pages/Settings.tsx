@@ -111,9 +111,18 @@ function modelFacts(m: CodexModel, recommended: CodexModel | undefined): { right
 
 const MODEL_GRID = "grid grid-cols-[1rem_minmax(0,1fr)] items-center gap-x-3 sm:grid-cols-[1rem_minmax(0,1fr)_8.5rem_10rem]";
 
-function ModelRow({ on, disabled, onPick, name, tag, facts, note }: { on: boolean; disabled: boolean; onPick: () => void; name: string; tag?: string; facts?: { right: string; cost: string; tested: boolean }; note?: string }) {
+function ModelRow({ on, onPick, name, tag, facts, note }: { on: boolean; onPick: () => void; name: string; tag?: string; facts?: { right: string; cost: string; tested: boolean }; note?: string }) {
   return (
-    <button type="button" role="radio" aria-checked={on} disabled={disabled} onClick={onPick} className={cn(MODEL_GRID, "w-full cursor-pointer gap-y-1 px-4 py-3 text-left transition-colors disabled:cursor-default", on ? "bg-foreground/[0.04]" : "hover:bg-muted/50")}>
+    // A native radio keeps the arrow keys moving through the models, as the select before it did.
+    <label
+      className={cn(
+        MODEL_GRID,
+        "cursor-pointer gap-y-1 px-4 py-3 transition-colors",
+        on ? "bg-foreground/[0.04]" : "hover:bg-muted/50",
+      )}
+    >
+      {/* Not disabled while a pick saves: that would drop the focus between two arrow presses. */}
+      <input type="radio" name="codex-model" className="sr-only" checked={on} onChange={onPick} />
       <Radio on={on} />
       <span className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 font-medium">
         {name}
@@ -130,7 +139,7 @@ function ModelRow({ on, disabled, onPick, name, tag, facts, note }: { on: boolea
         </>
       )}
       {note && <span className="col-start-2 text-small text-warn sm:col-end-5">{note}</span>}
-    </button>
+    </label>
   );
 }
 
@@ -200,7 +209,6 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
               <ModelRow
                 key={m.id}
                 on={!isCustom && c.model === m.id}
-                disabled={busy}
                 onPick={() => {
                   setCustomOpen(false);
                   setCustomDraft(null);
@@ -214,7 +222,6 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
             ))}
             <ModelRow
               on={!isCustom && !c.model}
-              disabled={busy}
               onPick={() => {
                 setCustomOpen(false);
                 setCustomDraft(null);
@@ -235,19 +242,21 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
                 <Button type="submit" size="sm" disabled={busy || !customValue.trim() || customValue.trim() === c.model}>
                   Save
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    setCustomOpen(false);
-                    setCustomDraft(null);
-                    if (c.model && !known) void saveModel("");
-                  }}
-                >
-                  Cancel
-                </Button>
+                {(customOpen || customDraft !== null) && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      // Drops only the draft; a saved custom model stays until another row is picked.
+                      setCustomOpen(false);
+                      setCustomDraft(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                )}
               </form>
             ) : (
               <button

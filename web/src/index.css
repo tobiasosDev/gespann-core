@@ -83,6 +83,14 @@ body {
   outline: 2px solid var(--info);
   outline-offset: 2px;
 }
+/* In a list that clips its rounded corners (Settings), the ring sits inside the row; a row with a hidden radio shows it for the radio. */
+.focus-inset :focus-visible {
+  outline-offset: -2px;
+}
+.focus-inset label:has(> input:focus-visible) {
+  outline: 2px solid var(--info);
+  outline-offset: -2px;
+}
 
 /* What runs right now on the run page: a ring that breathes around a dot. Nothing else moves. */
 .live-ring {

@@ -114,9 +114,14 @@ export function usePath(): string {
   return useSyncExternalStore(onPathChange, () => location.pathname);
 }
 
+/** The fragment changes on a hash link (hashchange) and on navigate() or Back to another path (popstate). */
 function onHashChange(notify: () => void): () => void {
   window.addEventListener("hashchange", notify);
-  return () => window.removeEventListener("hashchange", notify);
+  window.addEventListener("popstate", notify);
+  return () => {
+    window.removeEventListener("hashchange", notify);
+    window.removeEventListener("popstate", notify);
+  };
 }
 
 /** The address bar's fragment without `#`, raw: `/settings#plan` gives "plan". */

@@ -29,9 +29,9 @@ export function Block({ title, aside, children }: { title: ReactNode; aside?: Re
   );
 }
 
-/** A bordered list; its rows are separated by lines. */
+/** A bordered list; its rows are separated by lines. Focus rings sit inside it, where its rounded clip leaves them visible. */
 export function Rows({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn("divide-y divide-border overflow-hidden rounded-lg border border-border bg-card", className)}>{children}</div>;
+  return <div className={cn("divide-y divide-border overflow-hidden rounded-lg border border-border bg-card focus-inset", className)}>{children}</div>;
 }
 
 export function Radio({ on }: { on: boolean }) {
