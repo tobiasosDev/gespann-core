@@ -206,6 +206,22 @@ test("the SMTP mailer delivers to the server SMTP_URL names, with its login and 
   }
 });
 
+test("a mail server that never answers fails the send after the timeout instead of hanging", async () => {
+  const sockets: Socket[] = [];
+  const silent = createServer((s) => void sockets.push(s));
+  await new Promise<void>((r) => silent.listen(0, "127.0.0.1", r));
+  try {
+    const port = (silent.address() as { port: number }).port;
+    const mailer = createMailer({ smtpUrl: `smtp://127.0.0.1:${port}`, from: "gespann <noreply@gespann.example>", timeoutMs: 300 });
+    const started = Date.now();
+    await assert.rejects(mailer.send({ to: "tobi@example.com", subject: "s", text: "t" }), /greeting|timeout/i);
+    assert.ok(Date.now() - started < 5_000, `took ${Date.now() - started} ms`);
+  } finally {
+    for (const s of sockets) s.destroy();
+    silent.close();
+  }
+});
+
 function app(mailer: Mailer | null) {
   const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), "gespann-alerts-")), SESSION_SECRET: SECRET, BASE_URL: BASE });
   const db = new Db(":memory:");
