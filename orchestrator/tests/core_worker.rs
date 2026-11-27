@@ -256,7 +256,7 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     // Valid for 5 more hours: longer than any step, so no refresh at xAI.
     let at = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339();
     let now = chrono::Utc::now().timestamp_millis();
-    let auth = |created: i64, key: &str| serde_json::json!({ "https://auth.x.ai::c": { "key": key, "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r1", "email": "t@example.com", "oidc_client_id": "c" } }).to_string();
+    let auth = |created: i64, key: &str| serde_json::json!({ "https://auth.x.ai::c": { "key": key, "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r1", "email": "t@example.com", "user_id": "u-1", "oidc_client_id": "c" } }).to_string();
     let stored = auth(now, "a1");
     c.db.set_codex(u, &[("agent", text("grok")), ("grok_auth", text(seal(SECRET, &stored)))]).unwrap();
     let row = c.db.agent(u).unwrap().unwrap();
@@ -289,6 +289,8 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     let mine = |created: i64| serde_json::json!({ "https://auth.x.ai::c": { "key": "a3", "user_id": "u-1", "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r3", "oidc_client_id": "c" } }).to_string();
     c.db.set_codex(u, &[("grok_auth", text(seal(SECRET, &mine(now))))]).unwrap();
     assert!(!keep_grok(&c, u, &other).unwrap());
+    let no_id = serde_json::json!({ "https://auth.x.ai::c": { "key": "b2", "email": "x@example.com", "create_time": at(now + 9000), "expires_at": at(now + 9_000_000), "refresh_token": "r8", "oidc_client_id": "c" } }).to_string();
+    assert!(!keep_grok(&c, u, &no_id).unwrap(), "a copy without a user id is not kept");
     // A refresh the CLI made during a run that was cancelled and taken over is kept by give_back.
     sb.files.lock().unwrap().insert(file.to_string(), mine(now + 5000));
     give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();

@@ -159,8 +159,9 @@ pub fn keep_grok(ctx: &Ctx, owner_id: i64, auth: &str) -> Result<bool> {
         return Ok(false);
     }
     // A copy of another xAI account (the owner signed in again with another one) never replaces the current one.
-    let user = |a: &str| grok_entry(a).and_then(|(_, e)| e.get("user_id").and_then(|u| u.as_str()).map(str::to_string));
-    if user(auth) != user(&stored) {
+    // Only a copy that names the same account: without a user id it is not kept.
+    let user = |a: &str| grok_entry(a).and_then(|(_, e)| e.get("user_id").and_then(|u| u.as_str()).filter(|u| !u.is_empty()).map(str::to_string));
+    if user(auth).is_none() || user(auth) != user(&stored) {
         return Ok(false);
     }
     ctx.db.update_user_if(owner_id, &[("grok_auth", text(seal(&ctx.cfg.session_secret, auth)))], "grok_auth", Some(&sealed))
