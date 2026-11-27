@@ -46,10 +46,14 @@ export interface CodexModel {
 /** Who runs the model behind the tester: the user's ChatGPT plan, or OpenRouter with their own key. */
 export type AgentProvider = "codex" | "openrouter";
 
+/** A model the OpenRouter picker offers; the field takes any other OpenRouter id too. */
 export interface OpenRouterModel {
   id: string;
   name: string;
   context: number | null;
+  /** US dollars per 1M input, cached input and output tokens. */
+  price: { input: number; cached: number; output: number } | null;
+  kind: "vision" | "free";
 }
 
 export interface Settings {

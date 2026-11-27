@@ -19,7 +19,7 @@ import { capFor, type ServerModule } from "./extension.ts";
 import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
-import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal } from "./openrouter.ts";
+import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal, suggestModels } from "./openrouter.ts";
 import { recordPrState } from "./pulls.ts";
 
 /**
@@ -346,7 +346,8 @@ export function createApp(d: AppDeps): Hono<Env> {
 
   app.get("/api/settings/openrouter/models", async (c) => {
     try {
-      return c.json({ models: await openRouterModels() });
+      // A short list to pick from; the field takes any other OpenRouter id.
+      return c.json({ models: suggestModels(await openRouterModels()) });
     } catch (err) {
       if (err instanceof OpenRouterError) return c.json({ error: err.message, models: [] }, err.status);
       throw err;

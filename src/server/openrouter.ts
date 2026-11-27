@@ -59,7 +59,33 @@ export interface OpenRouterModel {
   name: string;
   /** Tokens the model reads at most; Codex compacts its context before it reaches it. */
   context: number | null;
+  /** US dollars per 1M input, cached input and output tokens; null when OpenRouter names no fixed price (routers). */
+  price: { input: number; cached: number; output: number } | null;
 }
+
+/** A model the Settings page offers as a pick; any other OpenRouter id can still be typed. */
+export interface OpenRouterSuggestion extends OpenRouterModel {
+  kind: "vision" | "free";
+}
+
+/**
+ * The few paid models the picker suggests: OpenRouter lists them as calling tools and reading images,
+ * and they cost cents per test. None is tested through OpenRouter by us; the page says so. Big models
+ * such as Sonnet are left out: on a per-token bill they cost too much per PR. A pick OpenRouter no longer
+ * lists is left out.
+ */
+export const OPENROUTER_PICKS: readonly string[] = ["openai/gpt-6.1-terra", "google/gemini-3.5-flash-lite", "anthropic/claude-haiku-5.5", "deepseek/deepseek-v4.1-flash"];
+
+/**
+ * The free models the picker offers (no cost on the user's key, tight rate limits). OpenRouter changes
+ * its free models often: when none of these is listed any more, the picker offers its largest free ones.
+ */
+export const OPENROUTER_FREE_PICKS: readonly string[] = ["nvidia/nemotron-3.5-super-vl:free", "google/gemma-4-31b-it:free"];
+
+const perMillion = (v: unknown): number | null => {
+  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : Number.NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1_000_000 * 1000) / 1000 : null;
+};
 
 /**
  * OpenRouter's models the tester can work with: those that call tools (Codex runs shell commands and
@@ -73,11 +99,49 @@ export async function listModels(f: Fetch = fetch): Promise<OpenRouterModel[]> {
     throw new OpenRouterError(502, `OpenRouter did not answer: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!res.ok) throw new OpenRouterError(502, `OpenRouter answered ${res.status}`);
-  const body = (await res.json()) as { data?: { id?: unknown; name?: unknown; context_length?: unknown; supported_parameters?: unknown; architecture?: { input_modalities?: unknown } }[] };
+  const body = (await res.json()) as {
+    data?: { id?: unknown; name?: unknown; context_length?: unknown; supported_parameters?: unknown; architecture?: { input_modalities?: unknown }; pricing?: { prompt?: unknown; completion?: unknown; input_cache_read?: unknown } }[];
+  };
   return (body.data ?? [])
     .filter((m) => typeof m.id === "string" && OPENROUTER_MODEL_RE.test(m.id))
     .filter((m) => Array.isArray(m.supported_parameters) && m.supported_parameters.includes("tools"))
     .filter((m) => !Array.isArray(m.architecture?.input_modalities) || m.architecture.input_modalities.includes("image"))
-    .map((m) => ({ id: m.id as string, name: typeof m.name === "string" ? m.name : (m.id as string), context: typeof m.context_length === "number" ? m.context_length : null }))
+    .map((m) => {
+      const input = perMillion(m.pricing?.prompt);
+      const output = perMillion(m.pricing?.completion);
+      const cached = perMillion(m.pricing?.input_cache_read) ?? input;
+      return {
+        id: m.id as string,
+        name: typeof m.name === "string" ? m.name : (m.id as string),
+        context: typeof m.context_length === "number" ? m.context_length : null,
+        price: input !== null && output !== null && cached !== null ? { input, cached, output } : null,
+      };
+    })
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+const isFree = (m: OpenRouterModel) => m.id.endsWith(":free") && m.price?.input === 0 && m.price.output === 0;
+
+/**
+ * The short list the picker shows instead of all of OpenRouter's ~300 matching models: the paid picks
+ * and the free picks that OpenRouter still lists. Routers such as `openrouter/free` are never offered:
+ * they may hand a step to a model that cannot call tools or read screenshots.
+ */
+export function suggestModels(models: OpenRouterModel[]): OpenRouterSuggestion[] {
+  const byId = new Map(models.map((m) => [m.id, m]));
+  const vision = OPENROUTER_PICKS.flatMap((id) => {
+    const m = byId.get(id);
+    return m ? [{ ...m, kind: "vision" as const }] : [];
+  });
+  let free = OPENROUTER_FREE_PICKS.flatMap((id) => {
+    const m = byId.get(id);
+    return m && isFree(m) ? [m] : [];
+  });
+  if (!free.length) {
+    free = models
+      .filter((m) => isFree(m) && !m.id.startsWith("openrouter/"))
+      .sort((a, b) => (b.context ?? 0) - (a.context ?? 0) || a.id.localeCompare(b.id))
+      .slice(0, OPENROUTER_FREE_PICKS.length);
+  }
+  return [...vision, ...free.map((m) => ({ ...m, kind: "free" as const }))];
 }

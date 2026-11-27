@@ -3,14 +3,19 @@ import { test } from "node:test";
 import { createApp } from "../src/server/app.ts";
 import { loadConfig } from "../src/server/config.ts";
 import { Db } from "../src/server/db.ts";
-import { listModels, open, seal } from "../src/server/openrouter.ts";
+import { listModels, open, seal, suggestModels } from "../src/server/openrouter.ts";
 
+const vision = { supported_parameters: ["tools"], architecture: { input_modalities: ["text", "image"] } };
 const MODELS = {
   data: [
-    { id: "anthropic/claude-x", name: "Claude X", context_length: 200_000, supported_parameters: ["tools", "reasoning"], architecture: { input_modalities: ["text", "image"] } },
+    { id: "anthropic/claude-x", name: "Claude X", context_length: 200_000, supported_parameters: ["tools", "reasoning"], architecture: { input_modalities: ["text", "image"] }, pricing: { prompt: "0.000003", completion: "0.000015" } },
     { id: "acme/text-only", name: "Text only", context_length: 32_000, supported_parameters: ["tools"], architecture: { input_modalities: ["text"] } },
     { id: "acme/no-tools", name: "No tools", context_length: 32_000, supported_parameters: ["temperature"], architecture: { input_modalities: ["text", "image"] } },
-    { id: "openrouter/auto", name: "Auto", supported_parameters: ["tools"] },
+    { id: "openrouter/auto", name: "Auto", supported_parameters: ["tools"], pricing: { prompt: "-1", completion: "-1" } },
+    { id: "openai/gpt-6.1-terra", name: "OpenAI: GPT-6.1 Terra", context_length: 1_050_000, ...vision, pricing: { prompt: "0.000001", completion: "0.000005" } },
+    { id: "anthropic/claude-haiku-5.5", name: "Anthropic: Claude Haiku 5.5", context_length: 1_000_000, ...vision, pricing: { prompt: "0.0000001", completion: "0.0000005", input_cache_read: "0.00000001" } },
+    { id: "google/gemma-4-31b-it:free", name: "Google: Gemma 4 31B (free)", context_length: 262_144, ...vision, pricing: { prompt: "0", completion: "0" } },
+    { id: "openrouter/free", name: "Free Models Router", context_length: 200_000, ...vision, pricing: { prompt: "0", completion: "0" } },
   ],
 };
 
@@ -36,12 +41,37 @@ test("a key sealed here opens with the same secret only", () => {
   assert.throws(() => open("t".repeat(40), sealed));
 });
 
-test("the model list keeps models that call tools and read images", async () => {
+test("the model list keeps models that call tools and read images, with their price per 1M tokens", async () => {
   const models = await listModels(fakeOpenRouter());
-  assert.deepEqual(models, [
-    { id: "anthropic/claude-x", name: "Claude X", context: 200_000 },
-    { id: "openrouter/auto", name: "Auto", context: null },
-  ]);
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ["anthropic/claude-haiku-5.5", "anthropic/claude-x", "google/gemma-4-31b-it:free", "openai/gpt-6.1-terra", "openrouter/auto", "openrouter/free"],
+  );
+  assert.deepEqual(models[1], { id: "anthropic/claude-x", name: "Claude X", context: 200_000, price: { input: 3, cached: 3, output: 15 } }, "no cache price: cached input costs the full rate");
+  assert.deepEqual(models[0]?.price, { input: 0.1, cached: 0.01, output: 0.5 });
+  assert.equal(models.find((m) => m.id === "openrouter/auto")?.price, null, "a router has no fixed price");
+});
+
+test("the picker offers only the listed picks: vision models, then free ones without routers", async () => {
+  const picks = suggestModels(await listModels(fakeOpenRouter()));
+  assert.deepEqual(
+    picks.map((m) => [m.id, m.kind]),
+    [
+      ["openai/gpt-6.1-terra", "vision"],
+      ["anthropic/claude-haiku-5.5", "vision"],
+      ["google/gemma-4-31b-it:free", "free"],
+    ],
+    "a pick OpenRouter no longer lists is left out",
+  );
+});
+
+test("when none of the free picks is listed any more, the largest free models fill in", () => {
+  const m = (id: string, context: number, price: number) => ({ id, name: id, context, price: { input: price, cached: price, output: price } });
+  const picks = suggestModels([m("a/small:free", 100_000, 0), m("b/big:free", 1_000_000, 0), m("c/mid:free", 500_000, 0), m("d/paid", 2_000_000, 1), m("openrouter/free", 2_000_000, 0)]);
+  assert.deepEqual(
+    picks.map((p) => p.id),
+    ["b/big:free", "c/mid:free"],
+  );
 });
 
 test("API: OpenRouter key, model and provider; setup starts once the agent is ready; the key never leaves the server", async () => {
@@ -88,7 +118,7 @@ test("API: OpenRouter key, model and provider; setup starts once the agent is re
   assert.equal(stored.openrouter_key.includes("good-key"), false, "kept sealed");
   assert.equal(open(config.sessionSecret, stored.openrouter_key), "sk-or-v1-good-key-0123456789");
 
-  assert.deepEqual((await get("/settings/openrouter/models")).models.map((m: { id: string }) => m.id), ["anthropic/claude-x", "openrouter/auto"]);
+  assert.deepEqual((await get("/settings/openrouter/models")).models.map((m: { id: string }) => m.id), ["openai/gpt-6.1-terra", "anthropic/claude-haiku-5.5", "google/gemma-4-31b-it:free"]);
   assert.equal(seen.filter((u) => u.endsWith("/models")).length, 1, "the model list is asked once an hour");
 
   // A project's own model may be an OpenRouter id.
