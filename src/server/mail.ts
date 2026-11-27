@@ -19,8 +19,10 @@ export interface Mailer {
  * `smtp://user:pass@smtp.example.com:587` (upgrades with STARTTLS, and refuses to send without it,
  * except to a relay on the same machine, `localhost` or `127.0.0.1`).
  * `MAIL_FROM` is the sender, e.g. `gespann <noreply@example.com>`.
+ * A server that does not answer within `timeoutMs` fails the send: the dialog that asks for an address
+ * waits on it, and the SMTP library alone would wait minutes.
  */
-export function createMailer(o: { smtpUrl: string; from: string }): Mailer {
+export function createMailer(o: { smtpUrl: string; from: string; timeoutMs?: number }): Mailer {
   if (!o.smtpUrl) {
     return {
       sends: false,
@@ -30,6 +32,7 @@ export function createMailer(o: { smtpUrl: string; from: string }): Mailer {
     };
   }
   const url = new URL(o.smtpUrl);
+  const timeout = o.timeoutMs ?? 15_000;
   const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
   const transport = createTransport({
     host: url.hostname,
@@ -37,6 +40,9 @@ export function createMailer(o: { smtpUrl: string; from: string }): Mailer {
     secure: url.protocol === "smtps:",
     requireTLS: url.protocol === "smtp:" && !local,
     auth: url.username ? { user: decodeURIComponent(url.username), pass: decodeURIComponent(url.password) } : undefined,
+    connectionTimeout: timeout,
+    greetingTimeout: timeout,
+    socketTimeout: timeout,
     disableFileAccess: true,
     disableUrlAccess: true,
   });

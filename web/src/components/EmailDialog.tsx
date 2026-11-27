@@ -8,8 +8,9 @@ function showModal(d: HTMLDialogElement | null): void {
 
 /**
  * After the first sign-in, when no sign-in brought an address: where gespann sends mail. The address
- * counts once the user opens the link mailed to it. Only a mail that could not be sent lets them go on
- * without one.
+ * counts once the user opens the link mailed to it. "Skip for now" is always there, also while the mail
+ * is on its way, so a slow mail server never locks the app. It asks again on the next visit until an
+ * address waits for confirmation.
  */
 export function EmailDialog({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState("");
@@ -69,13 +70,11 @@ export function EmailDialog({ onDone }: { onDone: () => void }) {
           </label>
           {error && <p className="text-body text-bad">{error}</p>}
           <div className="flex flex-wrap justify-end gap-2">
-            {error && (
-              <Button type="button" variant="ghost" onClick={onDone}>
-                Skip for now
-              </Button>
-            )}
+            <Button type="button" variant="ghost" onClick={onDone}>
+              Skip for now
+            </Button>
             <Button type="submit" disabled={busy || !email.trim()}>
-              Send confirmation link
+              {busy ? "Sending…" : "Send confirmation link"}
             </Button>
           </div>
         </form>
