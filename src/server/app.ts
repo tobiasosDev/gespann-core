@@ -24,15 +24,25 @@ import { recordPrState } from "./pulls.ts";
 
 /**
  * Codex models offered in Settings; users may also keep Codex's default or enter a custom model slug.
- * `recommended` and `note` come from the tester benchmark in docs/models.md.
+ * `rates`: OpenAI's Codex credits per 1M tokens (input / cached input / output). `bench`, `recommended`
+ * and `note` come from the tester benchmark in docs/models.md: right verdicts of `of`, and the mean
+ * credits one test PR used.
  */
-const CODEX_MODELS: { id: string; name: string; description: string; recommended?: true; note?: string }[] = [
-  { id: "gpt-6.2-sol", name: "GPT-6.2-Sol", description: "Fast, go-to model for coding and everyday work", recommended: true },
-  { id: "gpt-6.2-astra", name: "GPT-6.2-Astra", description: "Most capable model for complex coding" },
-  { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", description: "Strong at visual understanding and computer use" },
-  { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", description: "Previous generation coding model" },
-  { id: "gpt-6-astra", name: "GPT-6-Astra", description: "Previous generation complex coding model" },
-  { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks", note: "In our benchmark it passed a PR that broke a total, and it was not faster. Not recommended for testing." },
+const CODEX_MODELS: {
+  id: string;
+  name: string;
+  description: string;
+  rates: { input: number; cached: number; output: number };
+  bench?: { right: number; of: number; credits: number };
+  recommended?: true;
+  note?: string;
+}[] = [
+  { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", description: "Strong at visual understanding and computer use", rates: { input: 25, cached: 1.25, output: 125 }, bench: { right: 14, of: 14, credits: 1.5 }, recommended: true },
+  { id: "gpt-6.2-sol", name: "GPT-6.2-Sol", description: "Fast, go-to model for coding and everyday work", rates: { input: 50, cached: 2.5, output: 250 }, bench: { right: 14, of: 14, credits: 3.6 } },
+  { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", description: "Previous generation coding model", rates: { input: 50, cached: 2.5, output: 250 }, bench: { right: 14, of: 14, credits: 3.4 } },
+  { id: "gpt-6-luna", name: "GPT-6-Luna", description: "Fast and affordable for easier tasks", rates: { input: 2.5, cached: 0.25, output: 12.5 }, bench: { right: 13, of: 14, credits: 0.25 }, note: "The cheapest, but in our benchmark it passed a PR that broke a total. Not recommended for testing." },
+  { id: "gpt-6.2-astra", name: "GPT-6.2-Astra", description: "Most capable model for complex coding", rates: { input: 200, cached: 10, output: 1000 } },
+  { id: "gpt-6-astra", name: "GPT-6-Astra", description: "Previous generation complex coding model", rates: { input: 250, cached: 25, output: 1250 } },
 ];
 
 /** A model slug: Codex's own (`gpt-6.2-sol`) or OpenRouter's (`anthropic/claude-x`). */

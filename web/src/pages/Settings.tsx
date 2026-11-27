@@ -1,6 +1,6 @@
 import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { type AgentProvider, ago, api, type OpenRouterModel, type Settings, type Tokens } from "../api.ts";
+import { type AgentProvider, ago, api, type CodexModel, type OpenRouterModel, type Settings, type Tokens } from "../api.ts";
 import { ModuleSections } from "../components/ModuleSections.tsx";
 import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono, Select } from "../components/ui.tsx";
@@ -238,6 +238,14 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
   );
 }
 
+/** The picker's line for a model: benchmark accuracy and cost, or its price next to the recommended model. */
+function modelLabel(m: CodexModel, recommended: CodexModel | undefined): string {
+  const name = `${m.name}${m.recommended ? " (recommended)" : ""}`;
+  if (m.bench) return `${name} — ${m.bench.right}/${m.bench.of} right · ≈${m.bench.credits < 1 ? m.bench.credits.toFixed(2) : m.bench.credits.toFixed(1)} credits per PR`;
+  const times = recommended ? Math.round(m.rates.output / recommended.rates.output) : 0;
+  return `${name} — not benchmarked${times > 1 ? ` · ${times}× the token price of ${recommended?.name}` : ""}`;
+}
+
 export function SettingsPage() {
   const { data, error, reload } = useResource<Settings>("/settings", codexPending, 3000);
   const [busy, setBusy] = useState(false);
@@ -344,7 +352,7 @@ export function SettingsPage() {
             </label>
             <Select
               id="codex-model"
-              className="max-w-sm"
+              className="max-w-lg"
               disabled={busy}
               value={selectValue}
               onChange={(e) => {
@@ -363,8 +371,7 @@ export function SettingsPage() {
               <option value="">Codex default</option>
               {c.models.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}
-                  {m.recommended ? " (recommended)" : ""} — {m.description}
+                  {modelLabel(m, recommended)}
                 </option>
               ))}
               <option value="__custom__">Custom…</option>
@@ -410,14 +417,14 @@ export function SettingsPage() {
           {selected?.note && <p className="text-body text-warn">{selected.note}</p>}
           {recommended && !isCustom && selected?.id !== recommended.id && (
             <p className="text-body">
-              Recommended: {recommended.name}. In our benchmark it judged every test PR right.{" "}
+              Recommended: {recommended.name}. In our benchmark it judged every test PR right at the lowest cost of the accurate models.{" "}
               <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void saveModel(recommended.id)}>
                 Use {recommended.name}
               </Button>
             </p>
           )}
           <p className="text-small text-muted-foreground">
-            Used for all your projects unless a project sets its own model in Setup.{" "}
+            Credits: what one test PR of a small app cost in our benchmark, at OpenAI's Codex rates; bigger apps use more. A cheaper model leaves more of your plan's usage limits for other work. Used for all your projects unless a project sets its own model in Setup.{" "}
             <a className="underline" href="https://github.com/tobiasosDev/gespann-core/blob/main/docs/models.md" target="_blank" rel="noreferrer">
               How we compared the models
             </a>

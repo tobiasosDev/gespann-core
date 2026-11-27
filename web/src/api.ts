@@ -33,7 +33,11 @@ export interface CodexModel {
   id: string;
   name: string;
   description: string;
-  /** Best tester in the benchmark (docs/models.md). */
+  /** OpenAI's Codex credits per 1M tokens. */
+  rates: { input: number; cached: number; output: number };
+  /** Benchmark result (docs/models.md): right verdicts of `of`, mean credits per test PR. */
+  bench?: { right: number; of: number; credits: number };
+  /** Best tester for its cost in the benchmark. */
   recommended?: boolean;
   /** A warning from the benchmark, shown when the model is selected. */
   note?: string;
