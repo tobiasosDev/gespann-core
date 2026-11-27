@@ -41,16 +41,40 @@ pub fn viewports_of(stored: &str) -> Vec<Viewport> {
     VIEWPORTS.iter().filter(|v| ids.contains(&v.id.as_str())).cloned().collect()
 }
 
-/// The virtual screen a run needs so the browser window fits the largest size: the window adds
-/// Chromium's tab strip and toolbar (about 90 px) and sits 10 px from the screen's corner.
-/// None without sizes: the sandbox keeps its default screen.
+/// The virtual screen a run needs so the browser window fits what the tester looks at: the window
+/// adds Chromium's tab strip and toolbar (about 90 px) and sits 10 px from the screen's corner.
+/// One size: the window at that size. Two or more: the mirror (`src/verify/mirror.ts`), every size
+/// side by side, capped at a 4K screen. None without sizes: the sandbox keeps its default screen.
 pub fn screen_for(viewports: &[Viewport]) -> Option<String> {
-    if viewports.is_empty() {
-        return None;
+    let (w, h) = match viewports {
+        [] => return None,
+        [v] => (v.width, v.height),
+        _ => mirror_canvas(viewports),
+    };
+    Some(format!("{}x{}x24", (w + 20).max(1440), (h + 120).max(900)))
+}
+
+/// `mirrorCanvas` in mirror.ts: frames left to right at full size, a new row when the next would pass
+/// the widest row, plus the mirror's padding, labels and bar.
+pub fn mirror_canvas(viewports: &[Viewport]) -> (u32, u32) {
+    const PAD: u32 = 16;
+    const GAP: u32 = 16;
+    const LABEL: u32 = 24;
+    const BAR: u32 = 96;
+    const MAX: (u32, u32) = (3820, 2040);
+    let inner = MAX.0 - 2 * PAD;
+    let (mut x, mut y, mut row, mut width) = (0, 0, 0, 0);
+    for v in viewports {
+        if x > 0 && x + v.width > inner {
+            x = 0;
+            y += row + GAP;
+            row = 0;
+        }
+        width = width.max(x + v.width);
+        x += v.width + GAP;
+        row = row.max(v.height + LABEL);
     }
-    let w = viewports.iter().map(|v| v.width + 20).fold(1440, u32::max);
-    let h = viewports.iter().map(|v| v.height + 120).fold(900, u32::max);
-    Some(format!("{w}x{h}x24"))
+    ((width + 2 * PAD).min(MAX.0), (y + row + BAR + 2 * PAD).min(MAX.1))
 }
 
 // ---- progress.ts
@@ -426,7 +450,10 @@ mod tests {
         assert!(viewports_of("").is_empty());
         assert_eq!(screen_for(&[]), None);
         assert_eq!(screen_for(&viewports_of("laptop")).as_deref(), Some("1440x920x24"), "the window's toolbar sits above the 800 px page");
-        assert_eq!(screen_for(&viewports_of("phone-s,desktop-l")).as_deref(), Some("1940x1200x24"));
+        assert_eq!(screen_for(&viewports_of("phone-s,desktop-l")).as_deref(), Some("2363x1352x24"), "the mirror shows both side by side");
+        assert_eq!(mirror_canvas(&viewports_of("phone-s,desktop-l")), (2343, 1232));
+        assert_eq!(mirror_canvas(&viewports_of("phone-s,phone-l,tablet,laptop,desktop,desktop-l")), (3408, 2040), "two rows, capped at a 4K screen");
+        assert_eq!(screen_for(&viewports_of("phone-s,phone-l,tablet,laptop,desktop,desktop-l")).as_deref(), Some("3428x2160x24"));
         assert_eq!(screen_for(&viewports_of("tablet")).as_deref(), Some("1440x1144x24"));
     }
 

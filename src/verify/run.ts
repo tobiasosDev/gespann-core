@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { judge, type Judged } from "./verdict.ts";
 import type { Recipe, Step } from "./recipe.ts";
+import type { Viewport } from "./viewports.ts";
 
 /**
  * Runs a recipe on the machine that hosts the copy (a sandbox or a CI runner), in two
@@ -34,6 +36,8 @@ interface State {
 export interface Prepared {
   ok: boolean;
   url?: string;
+  /** The mirror page that shows the copy at every screen size at once (two sizes or more). */
+  mirror?: string;
   error?: string;
 }
 
@@ -131,7 +135,35 @@ function load(ctx: RunContext): State {
   return existsSync(stateFile(ctx)) ? (JSON.parse(readFileSync(stateFile(ctx), "utf8")) as State) : { services: [], alongside: [] };
 }
 
-export async function prepare(ctx: RunContext, r: Recipe): Promise<Prepared> {
+/**
+ * Starts the mirror (`gespann mirror`) in the background like a service, so teardown stops it, and
+ * waits for its URL. Undefined when it does not start: the tester then goes through the sizes one by one.
+ */
+async function mirrorUp(ctx: RunContext, state: State, url: string, viewports: Viewport[]): Promise<string | undefined> {
+  const out = join(ctx.work, "mirror.json");
+  const sh = (a: string) => `'${a.replace(/'/g, "'\\''")}'`;
+  const bin = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../bin.ts" : "../bin.js", import.meta.url));
+  const command = [process.execPath, bin, "mirror", "--url", url, "--sizes", viewports.map((v) => v.id).join(","), "--notes", join(ctx.work, "mirror-notes.txt"), "--out", out];
+  const pid = background(ctx, "mirror", `exec ${command.map(sh).join(" ")}`);
+  state.services.push({ name: "mirror", pid });
+  save(ctx, state);
+  for (const until = Date.now() + 15_000; Date.now() < until && alive(pid); await sleep(200)) {
+    if (!existsSync(out)) continue;
+    try {
+      const m = JSON.parse(readFileSync(out, "utf8")) as { url?: string };
+      if (m.url) {
+        log(ctx, `✓ mirror for ${viewports.length} screen sizes at ${m.url}`);
+        return m.url;
+      }
+    } catch {
+      // still being written
+    }
+  }
+  log(ctx, "✗ the mirror did not start; the tester checks the screen sizes one after the other");
+  return undefined;
+}
+
+export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] = []): Promise<Prepared> {
   mkdirSync(ctx.work, { recursive: true });
   mkdirSync(ctx.out, { recursive: true });
   const deadline = Date.now() + r.timeout * 60_000;
@@ -184,9 +216,11 @@ export async function prepare(ctx: RunContext, r: Recipe): Promise<Prepared> {
     state.alongside.push({ name: a.name, pid, statusFile, required: a.required, ...(a.output ? { output: a.output } : {}) });
   }
   save(ctx, state);
-  writeFileSync(join(ctx.work, "prepared.json"), `${JSON.stringify({ ok: true, url })}\n`);
   log(ctx, `✓ copy is up at ${url}`);
-  return { ok: true, url };
+  const mirror = viewports.length > 1 ? await mirrorUp(ctx, state, url, viewports) : undefined;
+  const prepared: Prepared = { ok: true, url, ...(mirror ? { mirror } : {}) };
+  writeFileSync(join(ctx.work, "prepared.json"), `${JSON.stringify(prepared)}\n`);
+  return prepared;
 }
 
 async function teardown(ctx: RunContext, r: Recipe): Promise<string[]> {
