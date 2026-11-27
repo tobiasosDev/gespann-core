@@ -348,8 +348,13 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                 closed={p.closed}
                 header={
                   <CardHeader
-                    title="Pull requests"
+                    // Never broken over two lines: on a narrow phone the form wraps under the title instead.
+                    title={<span className="whitespace-nowrap">Pull requests</span>}
                     description="Each pull request once, with all its runs. Select a row to open its latest run."
+                    // Phones: every row carries a chevron, so the line would only push the list down.
+                    descriptionClassName="hidden sm:block"
+                    // Phones show the title alone, so it centres on the taller form beside it.
+                    className="items-center sm:items-start"
                     action={
                       <form
                         className="flex items-center gap-2"
@@ -359,8 +364,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                           if (r.runId) navigate(`/runs/${r.runId}`);
                         }}
                       >
-                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" className="w-20 font-mono" disabled={setup !== "done"} />
-                        <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
+                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" inputMode="numeric" aria-label="Pull request number" className="h-11 w-20 font-mono sm:h-9" disabled={setup !== "done"} />
+                        <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={busy || setup !== "done" || !pr}>
                           <Play className="size-3.5" /> Test PR
                         </Button>
                       </form>

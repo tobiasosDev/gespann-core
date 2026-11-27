@@ -50,19 +50,20 @@ export function Card({ className, ...p }: ComponentProps<"div">) {
   return <div className={cn("rounded-lg border border-border bg-card", className)} {...p} />;
 }
 
-export function CardHeader({ title, description, action }: { title: ReactNode; description?: ReactNode; action?: ReactNode }) {
+export function CardHeader({ title, description, descriptionClassName, action, className }: { title: ReactNode; description?: ReactNode; descriptionClassName?: string; action?: ReactNode; className?: string }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border px-4 py-3">
-      <div>
+    // An action that asks for the full width (w-full) wraps under the text on phones; a small one, such as a badge, stays beside it.
+    <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-border px-4 py-3", className)}>
+      <div className="flex-1">
         <h2 className="text-body font-semibold">{title}</h2>
-        {description && <p className="mt-0.5 text-body text-muted-foreground">{description}</p>}
+        {description && <p className={cn("mt-0.5 text-body text-muted-foreground", descriptionClassName)}>{description}</p>}
       </div>
       {action}
     </div>
   );
 }
 
-const field = "w-full rounded-md border border-input bg-background px-2.5 text-body placeholder:text-muted-foreground/70 focus:border-info/60 focus:outline-none";
+const field = "w-full rounded-md border border-input bg-background px-2.5 text-body placeholder:text-muted-foreground focus:border-info/60 focus:outline-none";
 
 export function Input({ className, ...p }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cn(field, "h-9", className)} {...p} />;
