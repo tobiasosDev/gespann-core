@@ -35,7 +35,7 @@ test("API: a project runs on Linux until it switches to macOS, which resets its 
   db.setSetting("orchestrator", JSON.stringify({ kind: "cloud", parallel: 90, why: "", providers: [linux, mac], instance: "i", beat: Date.now() }));
   assert.equal((await get()).macos_available, true);
 
-  db.updateProject(id, { setup: "ready", bundle: 3, sandbox_id: "boat-1", recipe: "version: 1" });
+  db.updateProject(id, { setup: "ready", bundle: 3, sandbox_id: "sbx-1", recipe: "version: 1" });
   assert.equal((await set("macos")).status, 200);
   const p = db.project(id);
   assert.deepEqual([p?.platform, p?.setup, p?.bundle, p?.sandbox_id, p?.recipe], ["macos", "none", 0, null, null], "a Linux recipe is no use on a Mac");
