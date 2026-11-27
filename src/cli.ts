@@ -223,7 +223,8 @@ export async function main(argv: string[]): Promise<void> {
       promptFile: need(str(args, "prompt"), "--prompt"),
       lastFile: need(str(args, "last"), "--last"),
       logFile: need(str(args, "log"), "--log"),
-      keyFile: str(args, "key-file"),
+      // Only Grok may run on its own sign-in (~/.grok/auth.json); the others need their key.
+      keyFile: agent === "grok" ? str(args, "key-file") : need(str(args, "key-file"), "--key-file"),
     });
     return;
   }

@@ -284,6 +284,8 @@ test("API: Claude Code, Copilot and Grok keys and models; setup starts once the 
   assert.equal((await post("/settings/agents/copilot/logout", {})).status, 200);
   assert.equal(db.agentReady(u.id), false);
   assert.equal(db.agent(u.id)?.claude.connected, true, "removing one key leaves the others");
+  assert.equal((await post("/settings/agents/claude/logout", {})).status, 200, "Claude Code has no sign-in columns to clear");
+  assert.equal(db.agent(u.id)?.claude.connected, false);
 
   // Signing in with a device code: the orchestrator runs it and fills in the code, then the key or sign-in.
   assert.equal((await post("/settings/agents/claude/login", {})).status, 404, "Claude Code has no device-code sign-in");

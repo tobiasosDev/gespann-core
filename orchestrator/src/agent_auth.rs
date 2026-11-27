@@ -126,25 +126,29 @@ pub async fn refresh_grok(endpoint: &str, auth: &str, now_ms: i64) -> Result<Str
 /// The owner's Grok sign-in, refreshed first when it would run out within a step. One refresh per
 /// owner at a time: xAI may hand out each refresh token once.
 pub async fn fresh_grok_auth(ctx: &Ctx, owner_id: i64) -> Result<String> {
-    let current = || -> Result<String> {
+    let current = || -> Result<(String, String)> {
         let sealed = ctx.db.grok_auth(owner_id)?.ok_or_else(|| anyhow!("Sign in with xAI or add an xAI API key in Settings first: the tester runs in the Grok CLI on it."))?;
-        open(&ctx.cfg.session_secret, &sealed)
+        let auth = open(&ctx.cfg.session_secret, &sealed)?;
+        Ok((sealed, auth))
     };
     let now = chrono::Utc::now().timestamp_millis();
-    let auth = current()?;
+    let (_, auth) = current()?;
     if grok_expires_at(&auth) - now > GROK_REFRESH_WITHIN_MS {
         return Ok(auth);
     }
     let _guard = ctx.locks.lock("grok-refresh", owner_id).await;
     // Another job of the owner may have refreshed it meanwhile.
-    let auth = current()?;
+    let (sealed, auth) = current()?;
     let now = chrono::Utc::now().timestamp_millis();
     if grok_expires_at(&auth) - now > GROK_REFRESH_WITHIN_MS {
         return Ok(auth);
     }
     let fresh = refresh_grok(XAI_TOKEN_ENDPOINT, &auth, now).await?;
-    ctx.db.set_codex(owner_id, &[("grok_auth", text(seal(&ctx.cfg.session_secret, &fresh)))])?;
-    Ok(fresh)
+    // Stored only over the sign-in it came from: a sign-out or a new sign-in meanwhile wins.
+    if ctx.db.update_user_if(owner_id, &[("grok_auth", text(seal(&ctx.cfg.session_secret, &fresh)))], "grok_auth", Some(&sealed))? {
+        return Ok(fresh);
+    }
+    Ok(current()?.1)
 }
 
 /// Keeps a Grok sign-in that the CLI refreshed during a step, unless the stored one is newer.
@@ -154,8 +158,12 @@ pub fn keep_grok(ctx: &Ctx, owner_id: i64, auth: &str) -> Result<bool> {
     if auth == stored || grok_entry(auth).is_none() || grok_created_at(auth) <= grok_created_at(&stored) {
         return Ok(false);
     }
-    ctx.db.set_codex(owner_id, &[("grok_auth", text(seal(&ctx.cfg.session_secret, auth)))])?;
-    Ok(true)
+    // A copy of another xAI account (the owner signed in again with another one) never replaces the current one.
+    let user = |a: &str| grok_entry(a).and_then(|(_, e)| e.get("user_id").and_then(|u| u.as_str()).map(str::to_string));
+    if user(auth) != user(&stored) {
+        return Ok(false);
+    }
+    ctx.db.update_user_if(owner_id, &[("grok_auth", text(seal(&ctx.cfg.session_secret, auth)))], "grok_auth", Some(&sealed))
 }
 
 fn auth_file(sb: &dyn Sandboxes, id: &str) -> String {
@@ -254,12 +262,13 @@ async fn login(ctx: &Ctx, sb: &dyn Sandboxes, user_id: i64, provider: Provider, 
         let config = sb.read_file(&id, &format!("{home}/.copilot/config.json")).await?.unwrap_or_default();
         let (token, login) = copilot_token(&config).ok_or_else(|| anyhow!("copilot login stored no token"))?;
         let label = if login.is_empty() { "GitHub (signed in)".to_string() } else { format!("GitHub @{login} (signed in)") };
-        ctx.db.set_codex(user_id, &[("copilot_key", text(seal(secret, &token))), ("copilot_label", text(label)), (state, text("connected")), (progress, opt_text(None::<String>))])?;
+        // Only while this sign-in is still wanted: a key pasted or a sign-out meanwhile wins.
+        ctx.db.update_user_if(user_id, &[("copilot_key", text(seal(secret, &token))), ("copilot_label", text(label)), (state, text("connected")), (progress, opt_text(None::<String>))], state, Some("pending"))?;
     } else {
         let auth = sb.read_file(&id, &format!("{home}/{GROK_AUTH_FILE}")).await?.unwrap_or_default();
         let account = grok_account(&auth).ok_or_else(|| anyhow!("grok login wrote no sign-in"))?;
         // A pasted key would win over the sign-in: signing in replaces it.
-        ctx.db.set_codex(
+        ctx.db.update_user_if(
             user_id,
             &[
                 ("grok_auth", text(seal(secret, &auth))),
@@ -268,6 +277,8 @@ async fn login(ctx: &Ctx, sb: &dyn Sandboxes, user_id: i64, provider: Provider, 
                 (state, text("connected")),
                 (progress, opt_text(None::<String>)),
             ],
+            state,
+            Some("pending"),
         )?;
     }
     ctx.db.auto_setup(user_id)?;

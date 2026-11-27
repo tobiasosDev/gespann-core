@@ -383,6 +383,12 @@ pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) 
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
+    // Grok may have refreshed its sign-in too; xAI may hand out each refresh token once.
+    if let Some(now) = sb.read_file(sandbox_id, &format!("{}/{}", sb.home(sandbox_id), crate::agent_auth::GROK_AUTH_FILE)).await? {
+        if let Err(e) = crate::agent_auth::keep_grok(ctx, owner_id, &now) {
+            crate::log("warn", &format!("could not keep the refreshed Grok sign-in of user {owner_id}: {e:#}"));
+        }
+    }
     let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE} ~/{AGENT_KEY_FILE} ~/{}", crate::agent_auth::GROK_AUTH_FILE), 30).await?;
     if rm.exit_code != Some(0) {
         anyhow::bail!("could not remove the agent's sign-in from the sandbox: {}", rm.stderr.trim());

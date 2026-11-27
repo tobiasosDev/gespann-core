@@ -432,6 +432,17 @@ impl Db {
             Ok(())
         })
     }
+    /// Sets `fields` on the user only while `column` still holds `expected` (null: None). True when it did:
+    /// a sign-out, a new key or another job in between wins.
+    pub fn update_user_if(&self, user_id: i64, fields: Fields, column: &str, expected: Option<&str>) -> Result<bool> {
+        self.with(|c| {
+            let set = fields.iter().map(|(k, _)| format!("{k} = ?")).collect::<Vec<_>>().join(", ");
+            let mut params: Vec<&dyn rusqlite::ToSql> = fields.iter().map(|(_, v)| v as &dyn rusqlite::ToSql).collect();
+            params.push(&user_id);
+            params.push(&expected);
+            Ok(c.execute(&format!("update users set {set} where id = ? and {column} is ?"), params.as_slice())? == 1)
+        })
+    }
     /// The owner's sealed Grok sign-in (auth.json).
     pub fn grok_auth(&self, user_id: i64) -> Result<Option<String>> {
         Ok(self.with(|c| c.query_row("select grok_auth from users where id = ?", [user_id], |r| r.get::<_, Option<String>>(0)).optional())?.flatten())

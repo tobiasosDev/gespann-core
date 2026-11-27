@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_fake::Fake;
+use gespann_orchestrator::agent_auth::keep_grok;
 use gespann_orchestrator::codex::{give_back, open, seal, with_agent, with_codex, Agent, Provider};
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, text, Db};
@@ -283,6 +284,20 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     .await
     .unwrap();
     assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), refreshed);
+    // A newer copy of another xAI account (an old job after the owner switched accounts) is not kept either.
+    let other = serde_json::json!({ "https://auth.x.ai::c": { "key": "b1", "user_id": "someone-else", "create_time": at(now + 9000), "expires_at": at(now + 9_000_000), "refresh_token": "r9", "oidc_client_id": "c" } }).to_string();
+    let mine = |created: i64| serde_json::json!({ "https://auth.x.ai::c": { "key": "a3", "user_id": "u-1", "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r3", "oidc_client_id": "c" } }).to_string();
+    c.db.set_codex(u, &[("grok_auth", text(seal(SECRET, &mine(now))))]).unwrap();
+    assert!(!keep_grok(&c, u, &other).unwrap());
+    // A refresh the CLI made during a run that was cancelled and taken over is kept by give_back.
+    sb.files.lock().unwrap().insert(file.to_string(), mine(now + 5000));
+    give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();
+    assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), mine(now + 5000));
+    assert_eq!(sb.file(file), None, "and removed");
+    // Signed out meanwhile: nothing comes back.
+    c.db.set_codex(u, &[("grok_auth", rusqlite::types::Value::Null)]).unwrap();
+    assert!(!keep_grok(&c, u, &mine(now + 6000)).unwrap());
+    assert_eq!(c.db.grok_auth(u).unwrap(), None);
     // An API key wins over the sign-in.
     c.db.set_codex(u, &[("grok_key", text(seal(SECRET, "xai-k")))]).unwrap();
     assert!(!c.db.agent(u).unwrap().unwrap().auth);
