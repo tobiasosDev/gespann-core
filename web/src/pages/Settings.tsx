@@ -144,6 +144,57 @@ function AgentChoice({ agent, onChange, busy }: { agent: AgentProvider; onChange
   );
 }
 
+/**
+ * A test PR in our benchmark (docs/models.md): about 406k input tokens, 90 % of them cached, and 3k
+ * output tokens. Real apps with longer flows use more; the ratio between models roughly holds.
+ */
+const TEST_TOKENS = { input: 40_600, cached: 365_400, output: 3_000 };
+
+/** "≈ $0.07 per test · $1 / $5 per 1M tokens", or "free". */
+function priceLabel(m: OpenRouterModel): string {
+  if (!m.price) return "price set by OpenRouter";
+  if (m.price.input === 0 && m.price.output === 0) return "free";
+  const perTest = (TEST_TOKENS.input * m.price.input + TEST_TOKENS.cached * m.price.cached + TEST_TOKENS.output * m.price.output) / 1_000_000;
+  const usd = (n: number) => `$${Math.round(n * 100) / 100}`;
+  return `${perTest < 0.01 ? "< $0.01" : `≈ $${perTest.toFixed(2)}`} per test · ${usd(m.price.input)} in / ${usd(m.price.output)} out per 1M tokens`;
+}
+
+/** "200k" or "1M" tokens of context. */
+const contextLabel = (n: number) => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : `${Math.round(n / 1000)}k`);
+
+/** One group of OpenRouter models to pick from; a click fills the model field. */
+function ModelPicks({ title, note, models, current, onPick }: { title: string; note?: string; models: OpenRouterModel[]; current: string; onPick: (id: string) => void }) {
+  if (!models.length) return null;
+  return (
+    <div className="space-y-1.5">
+      <p className="text-small font-medium">{title}</p>
+      {note && <p className="text-small text-muted-foreground">{note}</p>}
+      <ul className="grid gap-2 sm:grid-cols-2">
+        {models.map((m) => (
+          <li key={m.id}>
+            <button
+              type="button"
+              aria-pressed={current === m.id}
+              onClick={() => onPick(m.id)}
+              className={`w-full rounded-md border px-3 py-2 text-left transition-colors ${current === m.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+            >
+              <span className="flex flex-wrap items-center gap-2 text-body font-medium">
+                {current === m.id && <Check className="size-4 text-primary" />}
+                {m.name.replace(/^[^:]+:\s*/, "")}
+              </span>
+              <span className="block break-all font-mono text-small text-muted-foreground">{m.id}</span>
+              <span className="block text-small text-muted-foreground">
+                {priceLabel(m)}
+                {m.context ? ` · ${contextLabel(m.context)} context` : ""}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** The user's own OpenRouter key and model. */
 function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promise<void> }) {
   const o = data.openrouter;
@@ -155,6 +206,8 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
   const [modelError, setModelError] = useState<string | null>(null);
   const model = modelDraft ?? o.model ?? "";
   const list = models.data?.models ?? [];
+  const vision = list.filter((m) => m.kind === "vision");
+  const free = list.filter((m) => m.kind === "free");
   const run = async (fn: () => Promise<unknown>, setError: (e: string | null) => void) => {
     setBusy(true);
     setError(null);
@@ -204,7 +257,7 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
         )}
         {keyError && <p className="text-body text-bad">{keyError}</p>}
       </div>
-      <div className="space-y-2 border-t border-border px-4 py-4">
+      <div className="space-y-3 border-t border-border px-4 py-4">
         <form
           className="flex flex-wrap items-center gap-3"
           onSubmit={async (e) => {
@@ -215,24 +268,37 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
           <label htmlFor="openrouter-model" className="text-body font-medium">
             Model
           </label>
-          <Input id="openrouter-model" list="openrouter-models" className="max-w-sm font-mono" placeholder="vendor/model, e.g. anthropic/…" value={model} onChange={(e) => setModelDraft(e.target.value)} maxLength={160} />
-          <datalist id="openrouter-models">
-            {list.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-                {m.context ? ` · ${Math.round(m.context / 1000)}k context` : ""}
-              </option>
-            ))}
-          </datalist>
+          <Input id="openrouter-model" className="max-w-sm font-mono" placeholder="vendor/model" value={model} onChange={(e) => setModelDraft(e.target.value)} maxLength={160} spellCheck={false} autoComplete="off" />
           <Button type="submit" size="sm" disabled={busy || model.trim() === (o.model ?? "")}>
             Save
           </Button>
         </form>
         {modelError && <p className="text-body text-bad">{modelError}</p>}
-        {models.error && <p className="text-small text-warn">Could not load OpenRouter's models: {models.error}. You can still type a model id.</p>}
         <p className="text-small text-muted-foreground">
-          Required. The list shows the {list.length || ""} models that call tools and read screenshots, which the tester needs. Used for all your projects unless a project sets its own model in Setup.
+          Required. Type any OpenRouter model id that calls tools and reads images (the tester runs commands and looks at screenshots), or pick one below. Used for all your projects unless a project sets its own model in Setup.{" "}
+          <a className="underline underline-offset-2" href="https://openrouter.ai/models?fmt=table&input_modalities=image&supported_parameters=tools" target="_blank" rel="noreferrer">
+            All matching models
+          </a>
         </p>
+        {models.error && <p className="text-small text-warn">Could not load OpenRouter's models: {models.error}. You can still type a model id.</p>}
+        {list.length > 0 && (
+          <p className="text-small text-muted-foreground">
+            Suggestions only: we have not tested any of the models below through OpenRouter ourselves. Per test is an estimate for a small PR; a real app with longer flows costs more.
+          </p>
+        )}
+        <ModelPicks
+          title="Vision models"
+          models={vision}
+          current={model.trim()}
+          onPick={setModelDraft}
+        />
+        <ModelPicks
+          title="Free models"
+          note="No cost on your key, but OpenRouter allows free models only a few requests per minute and per day, and a test makes many. Runs may stop halfway: fine for trying gespann, not for every PR."
+          models={free}
+          current={model.trim()}
+          onPick={setModelDraft}
+        />
       </div>
     </Card>
   );
