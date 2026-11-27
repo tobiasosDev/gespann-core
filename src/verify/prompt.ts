@@ -39,7 +39,15 @@ export interface TesterInput {
   mirror?: string;
   /** Feature flags found in the PR's diff (flags.ts); the tester confirms and tests each. */
   flags?: FlagChange[];
+  /** `macos`: an iOS app in a macOS sandbox, driven in the iOS Simulator instead of Chrome. */
+  platform?: Platform;
 }
+
+/** What the project's sandbox runs on; `macos` means an iOS app built with Xcode, tested in the iOS Simulator. */
+export type Platform = "linux" | "macos";
+
+/** How the agent reaches the copy, in each prompt's words. */
+const SIMULATOR = "the iOS Simulator with the simulator tools (look at the screen, tap, type, swipe)";
 
 /**
  * A flag the PR touches is tested on the same copy twice, off first: with it off no user may notice
@@ -75,7 +83,9 @@ function flagRules(t: TesterInput, site: string): string[] {
 export function testerPrompt(t: TesterInput): string {
   const r = t.recipe;
   const issues = t.issues ?? [];
-  const sizes = t.viewports ?? [];
+  const ios = t.platform === "macos";
+  // The simulator shows the device's own screen: screen sizes and the mirror are for browsers.
+  const sizes = ios ? [] : (t.viewports ?? []);
   const sizeList = sizes.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ");
   // The mirror shows every size at once; without it (one size, or it did not start) the tester resizes.
   const mirror = sizes.length > 1 ? t.mirror : undefined;
@@ -87,10 +97,12 @@ export function testerPrompt(t: TesterInput): string {
   parts.push(
     `You are the independent tester for pull request #${t.pr} of ${t.repo}, head ${t.head}, merged onto base ${t.base}. You did not write this change. You test it the way a careful human tester would, and you report what you saw.`,
     "",
-    `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${new URL(mirror).origin}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
+    ios
+      ? `A production-near build of the app from this PR runs in the booted iOS Simulator on this Mac: ${t.url} (the app's bundle id after ios-simulator://). Use only that app and the backend the copy started for it. It is not production: data in it is disposable, and external providers are fakes or recordings.`
+      : `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${new URL(mirror).origin}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
   );
   if (r.login) {
-    const where = r.login.path ? ` at ${new URL(r.login.path, site).toString()}` : "";
+    const where = r.login.path && !ios ? ` at ${new URL(r.login.path, site).toString()}` : "";
     parts.push(`Sign in through the normal login page${where} with ${r.login.user} / ${r.login.password}. This account exists only on the copy.${r.login.note ? ` ${r.login.note}` : ""}`);
   }
   if (r.flags) parts.push(`${t.work}/flags.md says which feature flags the copy runs. Judge the app in that state, apart from the flags the PR touches (below).`);
@@ -122,7 +134,9 @@ export function testerPrompt(t: TesterInput): string {
     `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Do not read unrelated source files once the diff is clear. Before each action, state the result you expect.`,
     `   People watch the run live. As soon as the plan stands, write it to ${t.work}/progress.json, exactly this shape: {"checks":[{"expect":"...","result":null,"focus":true}],"now":"what you are doing, in a few plain words"}. Update the file only when a check starts ("result": "running", updating "now") and when a check finishes ("result": "pass" | "fail" | "blocked", with a short "observed"), not between individual clicks; when a check finishes, combine taking its screenshot and updating progress.json in one shell command. It only shows progress; verdict.json stays the result.`,
     `   Add "focus": true to the checks that show what this PR changes, not to the smoke test or the neighbouring flow. The run page and the PR comment lead with a short video of the recording from the first of them to the last, so a reviewer sees only the change: run the focus checks one after the other. Before you set a focus check "running", do what only leads to it (sign in, load seed data, open the page where the change starts), so that video starts where the change does; when the PR changes sign-in or setup itself, that is part of the check.`,
-    `3. Drive the change in the copy the way a user would, with the computer tools: open ${mirror ?? t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
+    ios
+      ? `3. Drive the change in the app the way a user would, in ${SIMULATOR}: look, tap, type, look again. Move between screens through the app's own navigation. Check the changed behaviour and one neighbouring flow it could break.`
+      : `3. Drive the change in the copy the way a user would, with the computer tools: open ${mirror ?? t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
     ...(t.testerNote ? [`   ${t.testerNote}`] : []),
     ...(mirror && canvas
       ? [
@@ -165,10 +179,12 @@ export interface SetupInput {
   projectDir: string;
   criteria: string;
   testerNote?: string | undefined;
+  platform?: Platform;
 }
 
 /** The one-time setup: Codex writes the recipe and scripts that start a production-near copy fast. */
 export function setupPrompt(s: SetupInput): string {
+  if (s.platform === "macos") return setupPromptMac(s);
   return `You prepare acceptance testing for the repository ${s.repo}, checked out at ${s.repoDir}. From now on, for every pull request, an agent will start a production-near copy of this app on this machine and click through the change. Your job is to make that start fast and reliable.
 
 What must be checked on every PR (a default; make it concrete for this app):
@@ -191,6 +207,29 @@ Rules: do not commit, push or open pull requests. Do not use or ask for real pro
 `;
 }
 
+/** The setup of an iOS app: Xcode builds it, the iOS Simulator runs it. */
+function setupPromptMac(s: SetupInput): string {
+  return `You prepare acceptance testing for the repository ${s.repo}, an iOS app built with Xcode, checked out at ${s.repoDir} on a Mac. From now on, for every pull request, an agent will build this app, run it in the iOS Simulator on this machine and tap through the change. Your job is to make that build and start fast and reliable.
+
+What must be checked on every PR (a default; make it concrete for this app):
+${s.criteria.trim() || DEFAULT_CHECKS}
+
+Write these files into ${s.projectDir} (not into the repository):
+
+1. ${s.projectDir}/verify.yml, a gespann recipe. Read the format reference in ${s.projectDir}/../core/docs/recipe.md. Every command runs with bash in the repo checkout; scripts you write live in ${s.projectDir} and are called as "$GESPANN_PROJECT/<script>". If the repo already has .gespann/verify.yml, start from it.
+2. The scripts the recipe calls: resolve packages (Swift Package Manager, CocoaPods), build the app for the iOS Simulator with \`xcodebuild\` in a configuration close to the App Store build, keep DerivedData under $HOME so later PRs build incrementally, boot one simulator (pick a current iPhone with \`xcrun simctl list devices available\`), install and launch the app. \`env.up\` does that; \`env.url\` is \`ios-simulator://<bundle id>\` (e.g. \`ios-simulator://com.acme.shop\`), and gespann checks that this app runs in the booted simulator; \`env.down\` terminates the app and shuts the simulator down. If the app talks to a backend, start a local copy of it or a local fake, and point the app at it (a launch argument, an environment variable, a debug setting), so nothing reaches a real service and no real secret is needed. Replace other external providers (payment, push, analytics, LLM) with local fakes the same way.
+3. ${s.projectDir}/NOTES.md: what the copy contains, what is faked, the login, which flows cannot work in the simulator (camera, push, purchases) and why. The tester reads it.
+4. ${s.projectDir}/CHECKS.md: the checks above made concrete for this app, one per line, 4 to 8 lines, in plain words a tester can follow (name the real screens and flows, e.g. "Add an item on the Cart tab, the badge shows 1"). Only flows that work in the simulator.
+
+Prove it works before you stop:
+- \`gespann recipe --file ${s.projectDir}/verify.yml\` validates.
+- \`gespann verify prepare --recipe ${s.projectDir}/verify.yml --pr 0 --head HEAD --base HEAD\` builds and launches the app. Look at it in ${SIMULATOR}, sign in with the seeded account if it has one and look at the main screen.${s.testerNote ? ` ${s.testerNote}` : ""} Save a screenshot with \`gespann shot ${s.projectDir}/setup-proof.png\`.
+- \`gespann verify finish --recipe ${s.projectDir}/verify.yml\` tears it down cleanly. Leave nothing running: gespann starts the copy again on its own to check your recipe.
+
+Rules: do not commit, push or open pull requests. Do not use or ask for real production secrets, signing certificates or App Store accounts; simulator builds need no signing. Xcode and the iOS Simulator are installed; Docker may not be. When you are done, reply with how the app is launched, the seeded login if any, and what does not work in the simulator.
+`;
+}
+
 /** A quick read of the repo: concrete checks for every PR, nothing built or started. */
 export function suggestPrompt(repo: string, repoDir: string, out: string, current: string): string {
   return `You help set up acceptance testing for ${repo}, checked out at ${repoDir}. Read the README, the routes or pages, and the main features. Do not build, install or start anything, and do not change files in the repository.
@@ -209,6 +248,7 @@ export interface RepairInput {
   /** What the tester could not test and what the copy lacks, one per gap. */
   gaps: { expect: string; observed: string; fix: string }[];
   testerNote?: string | undefined;
+  platform?: Platform;
 }
 
 /** Codex fixes the copy after a tester was blocked by something the copy could have. */
@@ -223,7 +263,7 @@ Change the recipe and scripts in ${r.projectDir} so the copy provides what is mi
 
 Prove it works before you stop:
 - \`gespann recipe --file ${r.projectDir}/verify.yml\` validates.
-- \`gespann verify prepare --recipe ${r.projectDir}/verify.yml --pr 0 --head HEAD --base HEAD\` brings the copy up. Open it in Chrome with the computer tools and confirm the missing part now works.${r.testerNote ? ` ${r.testerNote}` : ""}
+- \`gespann verify prepare --recipe ${r.projectDir}/verify.yml --pr 0 --head HEAD --base HEAD\` brings the copy up. ${r.platform === "macos" ? `Look at the app in ${SIMULATOR}` : "Open it in Chrome with the computer tools"} and confirm the missing part now works.${r.testerNote ? ` ${r.testerNote}` : ""}
 - \`gespann verify finish --recipe ${r.projectDir}/verify.yml\` tears it down. Leave nothing running.
 
 If the copy cannot provide it at all (a real device, a real third-party account), change nothing and start your reply with "cannot:" and the reason. Otherwise reply with what you changed, in two or three sentences.

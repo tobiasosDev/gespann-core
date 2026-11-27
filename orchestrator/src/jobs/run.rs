@@ -272,7 +272,7 @@ pub(crate) async fn verify_run(cx: &Cx<'_>, p: &Project, run: &Run) -> Result<()
     let conflict = db.run(run.id)?.and_then(|r| r.conflict);
     let outcome = if conflict.is_some() { None } else { Some(a.outcome.clone()) };
     // Several screen sizes: the same page at two sizes can look alike on a small thumbnail, and each size needs its own proof.
-    let sizes = viewports_of(&db.project(p.id)?.map_or_else(|| p.viewports.clone(), |p| p.viewports)).len();
+    let sizes = viewports_of(&web_viewports(&db.project(p.id)?.unwrap_or_else(|| p.clone()))).len();
     let out = format!("{dir}/out");
     let col: Collected = cx.jr.step("collect", || collect(cx, b, run, &out, sizes < 2)).await?;
     if cancelled() {
@@ -332,7 +332,7 @@ async fn stop(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
         }
     }
     if let Some(owner) = cx.ctx.db.project(cx.job.project_id)?.map(|p| p.owner_id) {
-        if let Err(e) = crate::codex::give_back(cx.ctx, &cx.jr, owner, &b.id).await {
+        if let Err(e) = crate::codex::give_back(cx.ctx, &cx.jr, owner, cx.sb(), &b.id).await {
             cx.log(&format!("✗ {e:#}"));
         }
     }
@@ -517,7 +517,7 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let viewports: Vec<Viewport> = cx
         .jr
         .step(&k("screen"), || async move {
-            let viewports = viewports_of(&db.project(p.id)?.map_or_else(|| p.viewports.clone(), |p| p.viewports));
+            let viewports = viewports_of(&web_viewports(&db.project(p.id)?.unwrap_or_else(|| p.clone())));
             if let Some(screen) = screen_for(&viewports) {
                 // The browser window has to fit the largest size on the sandbox's screen, or screenshots cut it off.
                 // Before the copy comes up: a new screen ends whatever ran on the old one.
@@ -591,6 +591,9 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
             if let Some(m) = mirror {
                 input["mirror"] = json!(m);
             }
+            if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+                input["platform"] = json!("macos");
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }
@@ -627,7 +630,7 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let agent = agent_for(cx, p).await?;
     let command = agent_exec(b, &format!("{dir}/work/prompt.txt"), &format!("{dir}/work/last.txt"), &format!("{dir}/work/codex.jsonl"), &agent, "medium");
     let tester_key = k("tester");
-    let tester = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || {
+    let tester = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, cx.sb(), &b.id, &agent, || {
         cx.jr.long(sb, &b.id, &tester_key, &command, Long { timeout: Duration::from_secs_f64(minutes * 60.0), cancelled: &cancelled, on_tick: Some(&tick) })
     })
     .await;
@@ -684,16 +687,15 @@ struct Collected {
 /// maps each skipped one to the screenshot that was kept.
 async fn collect(cx: &Cx<'_>, b: &Sbx, run: &Run, out: &str, dedupe: bool) -> Result<Collected> {
     let sb = cx.sb();
-    let ls = sb.exec(&b.id, &format!("cd {} 2>/dev/null && find . -maxdepth 1 -type f -size -{}c -printf '%f\\n'", q(out), MAX_FILE + 1), 30).await?;
-    let big = sb.exec(&b.id, &format!("cd {} 2>/dev/null && find . -maxdepth 1 -type f -size +{MAX_FILE}c -printf '%f %s\\n'", q(out)), 30).await.ok();
-    for line in big.iter().flat_map(|r| r.stdout.split('\n')).filter(|l| !l.is_empty()) {
-        let mut parts = line.split(' ');
-        let name = parts.next().unwrap_or("");
-        let mb = parts.next().and_then(|s| s.parse::<f64>().ok()).unwrap_or(f64::NAN) / 1024f64.powi(2);
-        cx.log(&format!("✗ {name} is too large to keep ({} MB, limit 100 MB)", if mb.is_nan() { "NaN".into() } else { js_num(mb.round()) }));
+    // Names and sizes with POSIX tools only: a Mac's BSD find has no -printf.
+    let ls = sb.exec(&b.id, &list_command(out), 30).await?;
+    let (small, big) = by_size(&ls.stdout, MAX_FILE);
+    for (name, size) in big {
+        let mb = size as f64 / 1024f64.powi(2);
+        cx.log(&format!("✗ {name} is too large to keep ({} MB, limit 100 MB)", js_num(mb.round())));
     }
     let valid = |f: &str| !f.is_empty() && f.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
-    let all: Vec<String> = ls.stdout.split('\n').filter(|f| valid(f) && (is_image(f) || is_video(f) || *f == "verdict.json")).map(String::from).collect();
+    let all: Vec<String> = small.into_iter().filter(|f| valid(f) && (is_image(f) || is_video(f) || f == "verdict.json")).collect();
     let images: Vec<String> = all.iter().filter(|f| is_image(f)).cloned().collect();
     let thumbs = if dedupe && !images.is_empty() { sb.exec(&b.id, &format!("cd {} && {{ {}; }}", q(out), thumb_command(&images)), 120).await.ok() } else { None };
     let alias = same_screens(&parse_thumbs(thumbs.as_ref().map_or("", |t| t.stdout.as_str())));
@@ -734,6 +736,64 @@ async fn drop_proof(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
             Ok(())
         })
         .await
+}
+
+/// Prints `<size> <name>` for each file of the current directory, on Linux and macOS alike.
+/// Symbolic links are skipped: the tester could point one at a file outside the proof directory.
+const LIST_FILES: &str = r#"for f in * .[!.]*; do [ -f "$f" ] && [ ! -L "$f" ] && printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done; true"#;
+
+/// Lists `dir` with `LIST_FILES`. Grouped: a directory that cannot be entered fails the listing, so the
+/// collection does not count as complete.
+fn list_command(dir: &str) -> String {
+    format!("cd {} 2>/dev/null && {{ {LIST_FILES}; }}", q(dir))
+}
+
+/// `LIST_FILES` output split into names up to `max` bytes and (name, size) of bigger files.
+fn by_size(listing: &str, max: u64) -> (Vec<String>, Vec<(String, u64)>) {
+    let (mut small, mut big) = (vec![], vec![]);
+    for line in listing.lines() {
+        let Some((size, name)) = line.split_once(' ') else { continue };
+        let Ok(size) = size.parse::<u64>() else { continue };
+        if size > max {
+            big.push((name.to_string(), size));
+        } else {
+            small.push(name.to_string());
+        }
+    }
+    (small, big)
+}
+
+/// The project's screen sizes; none for a macOS project: the iOS Simulator shows the device's own screen.
+fn web_viewports(p: &Project) -> String {
+    if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+        String::new()
+    } else {
+        p.viewports.clone()
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::{by_size, list_command};
+
+    #[test]
+    fn files_are_listed_with_their_sizes_without_gnu_find() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.png"), b"12345").unwrap();
+        std::fs::write(dir.path().join("verdict.json"), b"{}").unwrap();
+        std::fs::write(dir.path().join("big.mp4"), vec![0u8; 2048]).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", dir.path().join("hosts.png")).unwrap();
+        let out = std::process::Command::new("bash").arg("-c").arg(list_command(&dir.path().to_string_lossy())).output().unwrap();
+        assert!(out.status.success());
+        let (mut small, big) = by_size(&String::from_utf8_lossy(&out.stdout), 1024);
+        small.sort();
+        assert_eq!(small, ["a.png", "verdict.json"]);
+        assert_eq!(big, [("big.mp4".to_string(), 2048)]);
+        assert_eq!(by_size("", 10), (vec![], vec![]), "an empty directory");
+        let missing = std::process::Command::new("bash").arg("-c").arg(list_command("/nonexistent-gespann-dir")).output().unwrap();
+        assert!(!missing.status.success(), "a directory that is not there fails the listing");
+    }
 }
 
 #[cfg(test)]

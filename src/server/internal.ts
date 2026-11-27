@@ -26,6 +26,8 @@ export interface OrchestratorProvider {
   logins: string[];
   /** Serves everyone not named. */
   default: boolean;
+  /** What its sandboxes run on; missing from orchestrators before macOS sandboxes (Linux). */
+  platform?: "linux" | "macos";
 }
 
 /** What the orchestrator writes to `settings.orchestrator` every 10 s. */
@@ -41,13 +43,19 @@ export interface OrchestratorState {
   beat: string | number;
 }
 
-/** How many jobs at once the sandbox provider of this user runs; null when none serves them or the orchestrator has not said. */
+/** How many jobs at once the Linux sandbox provider of this user runs; null when none serves them or the orchestrator has not said. */
 export function hostSizeFor(s: OrchestratorState | null, login: string): number | null {
   if (!s) return null;
   if (!Array.isArray(s.providers)) return typeof s.parallel === "number" ? s.parallel : null;
   const l = login.toLowerCase();
-  const p = s.providers.find((x) => x.logins?.includes(l)) ?? s.providers.find((x) => x.default);
+  const linux = s.providers.filter((x) => x.platform !== "macos");
+  const p = linux.find((x) => x.logins?.includes(l)) ?? linux.find((x) => x.default);
   return p && typeof p.parallel === "number" ? p.parallel : null;
+}
+
+/** True when the orchestrator runs macOS sandboxes, so projects may choose macOS. */
+export function servesMacos(s: OrchestratorState | null): boolean {
+  return !!s && Array.isArray(s.providers) && s.providers.some((x) => x.platform === "macos");
 }
 
 /** The orchestrator counts as present while its last beat is younger than this. */

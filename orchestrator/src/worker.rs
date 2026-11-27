@@ -206,13 +206,17 @@ pub async fn run(ctx: Arc<Ctx>, instance: String, shutdown: tokio_util::sync::Ca
 /// One pass: beat, take over stale jobs, claim queued ones.
 fn tick(ctx: &Arc<Ctx>, instance: &str, running: &mut Running) -> anyhow::Result<()> {
     ctx.db.beat(instance, &running.ids())?;
-    let mut owners: HashMap<i64, Option<usize>> = HashMap::new();
-    let mut provider_of = |owner: i64| -> anyhow::Result<Option<usize>> {
-        if let Some(p) = owners.get(&owner) {
+    // By project: its owner and its platform pick the provider.
+    let mut projects: HashMap<i64, Option<usize>> = HashMap::new();
+    let mut provider_of = |project: i64| -> anyhow::Result<Option<usize>> {
+        if let Some(p) = projects.get(&project) {
             return Ok(*p);
         }
-        let p = ctx.pool.index_for(ctx.db.user_login(owner)?.as_deref());
-        owners.insert(owner, p);
+        let p = match ctx.db.project(project)? {
+            Some(p) => ctx.pool.index_for(ctx.db.user_login(p.owner_id)?.as_deref(), crate::sandbox::Platform::parse(&p.platform)),
+            None => None,
+        };
+        projects.insert(project, p);
         Ok(p)
     };
     for job in ctx.db.adopt_stale(instance, &ago(STALE_SECS))? {
@@ -221,7 +225,7 @@ fn tick(ctx: &Arc<Ctx>, instance: &str, running: &mut Running) -> anyhow::Result
         }
         crate::log("info", &format!("job {} was running when its orchestrator stopped; picking it up where it was", job.id));
         // A job that was running counts on its provider even when that is full now.
-        let p = ctx.db.project(job.project_id)?.map(|p| provider_of(p.owner_id)).transpose()?.flatten();
+        let p = provider_of(job.project_id)?;
         running.spawn(ctx, job, p);
     }
     // One at a time: each start can change which jobs may go next (a setup runs alone, owner limits).
@@ -232,12 +236,12 @@ fn tick(ctx: &Arc<Ctx>, instance: &str, running: &mut Running) -> anyhow::Result
             let page = ctx.db.next_jobs(after, CANDIDATES)?;
             let Some((last, _)) = page.last() else { break 'claim };
             after = last.id;
-            for (job, owner) in page {
+            for (job, _owner) in page {
                 if running.has(job.id) {
                     continue;
                 }
                 // No provider serves the owner: the job waits. A full provider holds up only its own users.
-                let Some(p) = provider_of(owner)? else { continue };
+                let Some(p) = provider_of(job.project_id)? else { continue };
                 if running.on(p) >= ctx.pool.get(p).parallel.jobs {
                     continue;
                 }
@@ -260,10 +264,11 @@ const CANDIDATES: u32 = 500;
 /// providers), and every provider with whom it serves.
 fn published(ctx: &Ctx, instance: &str) -> serde_json::Value {
     let all = ctx.pool.providers();
-    let main = all.iter().find(|p| p.default).or(all.first());
+    let linux = |p: &&crate::sandbox::pool::Provider| p.platform == crate::sandbox::Platform::Linux;
+    let main = all.iter().find(|p| linux(p) && p.default).or(all.iter().find(linux)).or(all.first());
     let providers: Vec<serde_json::Value> = all
         .iter()
-        .map(|p| serde_json::json!({ "spec": p.spec, "kind": p.sb.kind(), "parallel": p.parallel.jobs, "why": p.parallel.why, "logins": p.logins, "default": p.default }))
+        .map(|p| serde_json::json!({ "spec": p.spec, "platform": p.platform.as_str(), "kind": p.sb.kind(), "parallel": p.parallel.jobs, "why": p.parallel.why, "logins": p.logins, "default": p.default }))
         .collect();
     serde_json::json!({
         "kind": main.map(|p| p.sb.kind().to_string()),

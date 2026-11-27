@@ -81,6 +81,9 @@ async fn fix(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gaps: &[Value], backu
             sb.exec(&b.id, &format!("rm -f {last_file}"), 30).await?;
             let gaps: Vec<Value> = gaps.iter().map(|g| json!({ "expect": g["expect"].as_str().unwrap_or(""), "observed": g["observed"].as_str().unwrap_or(""), "fix": g["fix"].as_str().unwrap_or("") })).collect();
             let mut input = json!({ "repo": p.repo, "repoDir": b.repo, "projectDir": b.project, "gaps": gaps });
+            if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+                input["platform"] = json!("macos");
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }
@@ -92,7 +95,7 @@ async fn fix(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gaps: &[Value], backu
     cx.note("repair.log.codex", &format!("{name} fixes the copy")).await;
     let cancelled = || cx.stopped();
     let command = agent_exec(b, prompt_file, last_file, &format!("{}/repair.jsonl", b.gespann), &agent, "high");
-    let r = with_agent(cx.ctx, &cx.jr, "repair.signin", p.owner_id, &b.id, &agent, || long(cx, b, "repair.codex", &command, Duration::from_secs(60 * 60), &cancelled)).await?;
+    let r = with_agent(cx.ctx, &cx.jr, "repair.signin", p.owner_id, cx.sb(), &b.id, &agent, || long(cx, b, "repair.codex", &command, Duration::from_secs(60 * 60), &cancelled)).await?;
     // Codex may have left its own copy up; it may also have touched the checkout.
     tear_down(cx, b, "repair.teardown", None).await?;
     let last = sb.read_file(&b.id, last_file).await?.unwrap_or_default().trim().to_string();

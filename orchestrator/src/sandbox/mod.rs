@@ -52,6 +52,39 @@ pub enum Purpose {
     Login,
 }
 
+/// What a project's sandboxes run on: Linux (web apps, servers) or macOS (iOS apps, which
+/// only build with Xcode). Each has its own providers (`SANDBOX_PROVIDER`, `SANDBOX_PROVIDER_MACOS`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Platform {
+    #[default]
+    Linux,
+    Macos,
+}
+
+impl Platform {
+    /// The project's stored `platform`; anything else (an older database without it) is Linux.
+    pub fn parse(s: &str) -> Platform {
+        if s.trim().eq_ignore_ascii_case("macos") {
+            Platform::Macos
+        } else {
+            Platform::Linux
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Platform::Linux => "linux",
+            Platform::Macos => "macos",
+        }
+    }
+    /// For users: "Linux", "macOS".
+    pub fn name(self) -> &'static str {
+        match self {
+            Platform::Linux => "Linux",
+            Platform::Macos => "macOS",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateOpts {
     pub name: String,
@@ -128,21 +161,25 @@ pub fn new_handle() -> u64 {
     now * 100 + SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 100
 }
 
-/// The provider one spec names (`docker`, `ssh` or `remote`); None for "" (none).
-pub async fn from_spec(cfg: &Config, spec: &str) -> Result<Option<Arc<dyn Sandboxes>>> {
+/// The provider one spec names (`docker`, `ssh` or `remote`) for this platform; None for "" (none).
+/// Linux providers read the plain variables, the macOS one the `MACOS_` ones (`Config::macos`).
+pub async fn from_spec(cfg: &Config, platform: Platform, spec: &str) -> Result<Option<Arc<dyn Sandboxes>>> {
+    let (ssh, remote, dir) = match platform {
+        Platform::Linux => (&cfg.ssh, &cfg.remote, "ssh"),
+        Platform::Macos => (&cfg.macos.ssh, &cfg.macos.remote, "ssh-macos"),
+    };
     match spec {
-        "docker" => Ok(Some(Arc::new(docker::Docker::new(cfg.docker.clone())))),
-        "ssh" => Ok(Some(Arc::new(ssh::Ssh::new(ssh_options(cfg)?)))),
-        "remote" => Ok(Some(Arc::new(remote::Remote::connect(&cfg.remote.url, &cfg.remote.token).await?))),
+        "docker" if platform == Platform::Linux => Ok(Some(Arc::new(docker::Docker::new(cfg.docker.clone())))),
+        "ssh" => Ok(Some(Arc::new(ssh::Ssh::new(ssh_options(&cfg.data_dir, dir, ssh)?)))),
+        "remote" => Ok(Some(Arc::new(remote::Remote::connect(&remote.url, &remote.token).await?))),
         _ => Ok(None),
     }
 }
 
-/// Writes the key and known_hosts under DATA_DIR/ssh.
-fn ssh_options(cfg: &Config) -> Result<ssh::SshOptions> {
+/// Writes the key and known_hosts under DATA_DIR/`dir`.
+fn ssh_options(data_dir: &str, dir: &str, s: &crate::config::SshConfig) -> Result<ssh::SshOptions> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let s = &cfg.ssh;
-    let dir = std::path::Path::new(&cfg.data_dir).join("ssh");
+    let dir = std::path::Path::new(data_dir).join(dir);
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).with_context(|| format!("could not create {}", dir.display()))?;
     let with_newline = |t: &str| if t.ends_with('\n') { t.to_string() } else { format!("{t}\n") };
     let write = |path: &std::path::Path, text: &str| -> Result<()> {

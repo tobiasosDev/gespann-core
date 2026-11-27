@@ -65,7 +65,7 @@ async fn run() -> i32 {
     };
     let pool = match sandbox::pool::Pool::from_config(&cfg).await {
         Ok(p) if p.is_empty() => {
-            log("warn", "no sandbox provider (SANDBOX_PROVIDER and SANDBOX_PROVIDER_BY_USER are empty): jobs stay queued; only the health endpoint runs");
+            log("warn", "no sandbox provider (SANDBOX_PROVIDER, SANDBOX_PROVIDER_BY_USER and SANDBOX_PROVIDER_MACOS are empty): jobs stay queued; only the health endpoint runs");
             shutdown.cancelled().await;
             return 0;
         }
@@ -79,8 +79,11 @@ async fn run() -> i32 {
     for p in pool.providers() {
         log("info", &format!("sandboxes: {} ({}), parallel jobs: {} ({})", p.sb.kind(), p.serves(named), p.parallel.jobs, p.parallel.why));
     }
-    if !pool.providers().iter().any(|p| p.default) {
-        log("warn", "no SANDBOX_PROVIDER: only the users in SANDBOX_PROVIDER_BY_USER get sandboxes; the jobs of everyone else stay queued");
+    if !pool.serves(sandbox::Platform::Macos) {
+        log("info", "no SANDBOX_PROVIDER_MACOS: jobs of macOS projects stay queued");
+    }
+    if !pool.providers().iter().any(|p| p.default && p.platform == sandbox::Platform::Linux) {
+        log("warn", "no SANDBOX_PROVIDER: web projects get Linux sandboxes only for the users in SANDBOX_PROVIDER_BY_USER; the jobs of everyone else's web projects stay queued");
     }
     let ui = Ui::new(&cfg.ui_url, &cfg.session_secret);
     let ctx = Arc::new(Ctx { db, pool, ui, cfg, locks: Locks::default() });

@@ -43,7 +43,7 @@ async fn run_suggest(cx: &Cx<'_>, p: &Project, b: &Sbx) -> Result<()> {
     let name = agent.provider.agent_name();
     cx.note("suggest.log.codex", &format!("{name} reads the repository and proposes checks")).await;
     let command = agent_exec(b, &prompt_file, &format!("{}/suggest-last.txt", b.gespann), &format!("{}/suggest.jsonl", b.gespann), &agent, "medium");
-    let r = with_agent(cx.ctx, &cx.jr, "suggest.signin", p.owner_id, &b.id, &agent, || long(cx, b, "suggest.codex", &command, Duration::from_secs(20 * 60), &never)).await?;
+    let r = with_agent(cx.ctx, &cx.jr, "suggest.signin", p.owner_id, cx.sb(), &b.id, &agent, || long(cx, b, "suggest.codex", &command, Duration::from_secs(20 * 60), &never)).await?;
     let text_of = match sb.read_file(&b.id, &out).await? {
         Some(t) => Some(t),
         None => sb.read_file(&b.id, &format!("{}/suggest-last.txt", b.gespann)).await?,

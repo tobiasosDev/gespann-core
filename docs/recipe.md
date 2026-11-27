@@ -123,7 +123,7 @@ Every command runs with `sh -c` in the repo root. These variables are set:
 | `setup[]` | | `{name, run}` |
 | `services[]` | | `{name, run, ready?, readyTimeout?}`: background processes for the whole run. `ready` is polled every second until it exits 0 (default 60 s). |
 | `flags` | | `{run, admin?, switch?}`: `run` prints the flag state the tester judges against; `admin` is the page where it switches a flag; `switch` is a command that switches one flag on the running copy, with `GESPANN_FLAG` (the key) and `GESPANN_FLAG_STATE` (`on` or `off`), and exits 0 once the copy runs in that state. See [Feature flags](#feature-flags). |
-| `env` | yes | `{up, down, url}` |
+| `env` | yes | `{up, down, url}`: `url` is where the tester finds the copy, `http(s)://…`, or for an iOS app in a macOS sandbox `ios-simulator://<bundle id>` (the app on the booted simulator) |
 | `replay.misses` | | directory where your replay layer writes one file per request it had no recording for. A replay miss is never a failed check. |
 | `alongside[]` | | `{name, run, output?, required?}`: scripted checks beside the tester. `output` is a file in `GESPANN_WORK` the tester reads. With `required` (default true) a non-zero exit fails the run. |
 | `login` | | `{user, password, path?, note?}`: an account that exists only on the copy. Never a real credential. |

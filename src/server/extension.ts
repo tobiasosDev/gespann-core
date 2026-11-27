@@ -13,6 +13,8 @@ export interface ModuleJob {
   kind: string;
   projectId: number;
   owner: ModuleUser;
+  /** What the job's sandbox runs on: `linux` or `macos`. A module may price the two differently. */
+  platform: "linux" | "macos";
 }
 
 export interface ModuleJobEnd extends ModuleJob {

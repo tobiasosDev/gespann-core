@@ -210,7 +210,7 @@ export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] 
   save(ctx, state);
   if (!runStep(ctx, { name: "environment up", run: r.env.up }, left()).ok) return fail("env.up failed");
   const url = expand(r.env.url, env(ctx));
-  if (!/^https?:\/\/\S+$/.test(url)) return fail(`env.url resolved to ${JSON.stringify(url)}, not a URL`);
+  if (!isCopyUrl(url)) return fail(`env.url resolved to ${JSON.stringify(url)}, not a URL (http(s)://… or ios-simulator://<bundle id>)`);
   state.url = url;
 
   for (const a of r.alongside) {
@@ -329,21 +329,32 @@ export function proofOk(path: string): boolean {
   }
 }
 
-/**
- * Saves a PNG of the sandbox screen. Tries the tools a Linux desktop usually has. The empty screen
- * around a browser window smaller than the screen (a phone size) is cut off.
- */
-export function screenshot(file: string): boolean {
-  mkdirSync(dirname(resolve(file)), { recursive: true });
-  const display = process.env.DISPLAY || ":0";
+/** Where the copy runs: a web address, or an iOS app on the booted simulator (`ios-simulator://<bundle id>`). */
+export function isCopyUrl(url: string): boolean {
+  return /^https?:\/\/\S+$/.test(url) || /^ios-simulator:\/\/[A-Za-z0-9][A-Za-z0-9.-]*$/.test(url);
+}
+
+/** How `screenshot` tries to capture the screen, first try first. */
+export function screenshotTries(file: string, platform: NodeJS.Platform = process.platform, display = process.env.DISPLAY || ":0"): string[] {
   const q = JSON.stringify(resolve(file));
-  const tries = [
+  // A Mac: the booted iOS Simulator's screen (what the tester drives), else the whole desktop.
+  if (platform === "darwin") return [`xcrun simctl io booted screenshot --type=png ${q}`, `screencapture -x -t png ${q}`];
+  return [
     `import -display ${display} -window root -trim +repage ${q}`,
     `scrot -o ${q}`,
     `ffmpeg -loglevel error -y -f x11grab -i ${display} -frames:v 1 ${q}`,
     `xwd -root -display ${display} | convert xwd:- ${q}`,
   ];
-  for (const t of tries) {
+}
+
+/**
+ * Saves a PNG of the sandbox screen. Tries the tools a Linux desktop usually has, or on a Mac the iOS
+ * Simulator. The empty screen around a browser window smaller than the screen (a phone size) is cut off.
+ */
+export function screenshot(file: string): boolean {
+  mkdirSync(dirname(resolve(file)), { recursive: true });
+  const display = process.env.DISPLAY || ":0";
+  for (const t of screenshotTries(file, process.platform, display)) {
     const r = spawnSync("bash", ["-c", t], { env: { ...process.env, DISPLAY: display }, timeout: 20_000 });
     if (r.status === 0 && existsSync(resolve(file))) return true;
   }

@@ -10,6 +10,7 @@ use core_fake::Fake;
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, Db};
 use gespann_orchestrator::sandbox::pool::{Pool, Provider};
+use gespann_orchestrator::sandbox::Platform;
 use gespann_orchestrator::ui::Ui;
 use gespann_orchestrator::{worker, Ctx, Locks};
 
@@ -30,7 +31,7 @@ async fn silent_ui() -> String {
 }
 
 fn provider(sb: Arc<Fake>, jobs: u32, logins: &[&str], default: bool) -> Provider {
-    Provider { spec: "fake".into(), sb, parallel: worker::Parallel { jobs, why: "test".into() }, logins: logins.iter().map(|s| s.to_string()).collect(), default }
+    Provider { spec: "fake".into(), platform: Platform::Linux, sb, parallel: worker::Parallel { jobs, why: "test".into() }, logins: logins.iter().map(|s| s.to_string()).collect(), default }
 }
 
 /// A user with `projects` projects, each with a queued setup (one setup per project runs at a time).
@@ -134,4 +135,80 @@ async fn a_long_queue_for_a_full_provider_hides_no_job_of_another() {
 
     stop.cancel();
     tokio::time::timeout(Duration::from_secs(5), task).await.expect("drains").unwrap();
+}
+
+fn running_on(db: &Db, platform: &str) -> i64 {
+    db.with(|c| c.query_row("select count(*) from jobs j join projects p on p.id = j.project_id where j.status = 'running' and p.platform = ?", [platform], |r| r.get(0))).unwrap()
+}
+
+#[tokio::test]
+async fn macos_projects_go_to_the_macos_provider_and_wait_without_one() {
+    let ui = silent_ui().await;
+    let db = Db::memory().unwrap();
+    // acme has two web projects and three iOS apps; the Mac pool has room for one.
+    user_with_setups(&db, 1, "acme", 5);
+    db.with(|c| c.execute("update projects set platform = 'macos' where id > 2", [])).unwrap();
+    let mac = Provider { platform: Platform::Macos, ..provider(Arc::new(Fake::default()), 1, &[], true) };
+    let pool = Pool::new(vec![provider(Arc::new(Fake::default()), 5, &[], true), mac]);
+    let cfg = Config { session_secret: SECRET.into(), ..Default::default() };
+    let ctx = Arc::new(Ctx { db: db.clone(), pool, ui: Ui::new(&ui, SECRET), cfg, locks: Locks::default() });
+    let stop = tokio_util::sync::CancellationToken::new();
+    let task = tokio::spawn(worker::run(ctx.clone(), "me".into(), stop.clone()));
+
+    // Both web projects on Linux, one iOS app on the Mac; the other two wait for it, not for Linux's room.
+    settle(&db, &[(1, 3)]).await;
+    assert_eq!((running_on(&db, "linux"), running_on(&db, "macos")), (2, 1));
+    let state: serde_json::Value = serde_json::from_str(&db.setting("orchestrator").unwrap().unwrap()).unwrap();
+    assert_eq!(state["parallel"].as_u64(), Some(5), "the top number stays Linux's");
+    assert_eq!(state["providers"][1]["platform"].as_str(), Some("macos"));
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(5), task).await.expect("drains").unwrap();
+
+    // An instance without Mac sandboxes runs the web projects and leaves the iOS apps queued.
+    let db = Db::memory().unwrap();
+    user_with_setups(&db, 1, "acme", 5);
+    db.with(|c| c.execute("update projects set platform = 'macos' where id > 2", [])).unwrap();
+    let pool = Pool::new(vec![provider(Arc::new(Fake::default()), 5, &[], true)]);
+    let cfg = Config { session_secret: SECRET.into(), ..Default::default() };
+    let ctx = Arc::new(Ctx { db: db.clone(), pool, ui: Ui::new(&ui, SECRET), cfg, locks: Locks::default() });
+    let stop = tokio_util::sync::CancellationToken::new();
+    let task = tokio::spawn(worker::run(ctx.clone(), "me".into(), stop.clone()));
+    settle(&db, &[(1, 2)]).await;
+    assert_eq!(running_on(&db, "macos"), 0);
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(5), task).await.expect("drains").unwrap();
+}
+
+#[tokio::test]
+async fn an_unreachable_mac_service_leaves_the_linux_provider_running() {
+    // A service that answers /info with 404, as an app without the macOS service does.
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hosted/macos-sandboxes", l.local_addr().unwrap());
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut s, _)) = l.accept().await {
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 9\r\nconnection: close\r\n\r\nnot found").await;
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let token = "m".repeat(32);
+    let cfg = Config::from(|k| {
+        let v = match k {
+            "SANDBOX_PROVIDER" => "ssh".to_string(),
+            "SSH_HOST" => "ci@linux".to_string(),
+            "SANDBOX_PROVIDER_MACOS" => "remote".to_string(),
+            "MACOS_SANDBOX_REMOTE_URL" => url.clone(),
+            "MACOS_SANDBOX_REMOTE_TOKEN" => token.clone(),
+            "MAX_PARALLEL_JOBS" => "2".to_string(),
+            "DATA_DIR" => dir.path().to_string_lossy().into_owned(),
+            _ => return None,
+        };
+        Some(v)
+    })
+    .unwrap();
+    let pool = tokio::time::timeout(Duration::from_secs(20), Pool::from_config(&cfg)).await.expect("no long wait").expect("the Linux provider still starts");
+    assert!(pool.serves(Platform::Linux));
+    assert!(!pool.serves(Platform::Macos));
 }

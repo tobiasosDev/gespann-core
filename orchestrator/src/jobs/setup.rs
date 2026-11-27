@@ -63,6 +63,9 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
     cx.jr
         .step(&k("prompt"), || async {
             let mut input = json!({ "repo": p.repo, "repoDir": b.repo, "projectDir": b.project, "criteria": p.criteria });
+            if crate::sandbox::Platform::parse(&p.platform) == crate::sandbox::Platform::Macos {
+                input["platform"] = json!("macos");
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }
@@ -75,7 +78,7 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
     let cancelled = || cx.stopped();
     let command = agent_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), &agent, "high");
     let codex_key = k("codex");
-    let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
+    let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, cx.sb(), &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
     let last = sb.read_file(&b.id, &format!("{}/setup-last.txt", b.gespann)).await?.unwrap_or_default();
     if !last.is_empty() {
         cx.log(&format!("{name}: {}", cut(&last, 4000)));
@@ -120,7 +123,7 @@ struct Prepared {
 /// without teardown errors. Runs on whatever the checkout has at HEAD. `pre` keys its steps.
 pub(crate) async fn check_copy(cx: &Cx<'_>, b: &Sbx, pre: &str, cancellable: bool) -> Result<()> {
     let k = |s: &str| format!("{pre}.{s}");
-    cx.note(&k("log"), "checking the recipe without Codex: prepare, open the URL, tear down").await;
+    cx.note(&k("log"), "checking the recipe without Codex: prepare, check that the copy answers, tear down").await;
     let cancelled = || cancellable && cx.stopped();
     let prep = long(cx, b, &k("prepare"), &with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr 0 --head HEAD --base HEAD", b.repo, b.recipe)), Duration::from_secs(60 * 60), &cancelled).await?;
     let line = last_json::<Prepared>(&prep.tail);
@@ -135,7 +138,7 @@ pub(crate) async fn check_copy(cx: &Cx<'_>, b: &Sbx, pre: &str, cancellable: boo
         // Once: after a takeover past the teardown, the copy is down and would answer nothing.
         let http: String = cx
             .jr
-            .step(&k("http"), || async move { Ok(cx.sb().exec(&b.id, &format!("curl -s -o /dev/null -w '%{{http_code}}' --max-time 30 {}", q(url)), 60).await?.stdout.trim().to_string()) })
+            .step(&k("http"), || async move { Ok(cx.sb().exec(&b.id, &probe_command(url), 60).await?.stdout.trim().to_string()) })
             .await?;
         Ok((url.clone(), http))
     }
@@ -143,12 +146,42 @@ pub(crate) async fn check_copy(cx: &Cx<'_>, b: &Sbx, pre: &str, cancellable: boo
     // As `finally` in TypeScript: a failed teardown is the error, else the error from before it.
     tear_down(cx, b, &k("finish"), line.as_ref().and_then(|l| l.run.as_deref())).await?;
     let (url, http) = up?;
+    if let Some(bundle) = url.strip_prefix(SIMULATOR) {
+        if http != "running" {
+            bail!("the app {bundle} was not running in the booted iOS Simulator after prepare");
+        }
+        cx.log(&format!("the app {bundle} came up in the iOS Simulator and went down cleanly"));
+        return Ok(());
+    }
     let answered = http.len() == 3 && matches!(http.as_bytes()[0], b'2' | b'3') && http.bytes().all(|c| c.is_ascii_digit());
     if !answered {
         bail!("the copy answered HTTP {} at {url}", if http.is_empty() { "nothing" } else { &http });
     }
     cx.log(&format!("the copy came up at {url} (HTTP {http}) and went down cleanly"));
     Ok(())
+}
+
+/// An iOS app's copy: `env.url` names its bundle id on the booted simulator.
+const SIMULATOR: &str = "ios-simulator://";
+
+/// How the check sees that the copy answers: the URL's HTTP status, or for an iOS app "running" when
+/// the booted simulator runs it.
+fn probe_command(url: &str) -> String {
+    match url.strip_prefix(SIMULATOR) {
+        Some(bundle) => format!("xcrun simctl spawn booted launchctl list 2>/dev/null | grep -qF {} && echo running || echo stopped", q(&format!("UIKitApplication:{bundle}["))),
+        None => format!("curl -s -o /dev/null -w '%{{http_code}}' --max-time 30 {}", q(url)),
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::probe_command;
+
+    #[test]
+    fn an_ios_app_is_checked_in_the_simulator_a_web_copy_over_http() {
+        assert_eq!(probe_command("ios-simulator://com.acme.shop"), "xcrun simctl spawn booted launchctl list 2>/dev/null | grep -qF 'UIKitApplication:com.acme.shop[' && echo running || echo stopped");
+        assert_eq!(probe_command("http://127.0.0.1:3000"), "curl -s -o /dev/null -w '%{http_code}' --max-time 30 'http://127.0.0.1:3000'");
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

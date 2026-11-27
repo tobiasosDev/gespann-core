@@ -140,10 +140,10 @@ async fn with_codex_writes_once_and_keeps_the_refreshed_sign_in() {
     let j = Journal::new(c.db.clone(), 9);
     // Job tasks are spawned: `with_codex` has to be usable inside them.
     fn assert_send<T: Send>(_: T) {}
-    assert_send(with_codex(&c, &j, "send", u, "box", || async { Ok(()) }));
+    assert_send(with_codex(&c, &j, "send", u, sb.as_ref(), "box", || async { Ok(()) }));
     let file = "/home/user/.codex/auth.json";
     let refreshed = fresh(&(chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339());
-    let got = with_codex(&c, &j, "a1.tester", u, "box", || async {
+    let got = with_codex(&c, &j, "a1.tester", u, sb.as_ref(), "box", || async {
         assert_eq!(sb.file(file).as_deref(), Some(first.as_str()), "the sign-in is in the sandbox while the step runs");
         // Codex refreshed it in place.
         sb.set_file(file, &refreshed);
@@ -157,12 +157,12 @@ async fn with_codex_writes_once_and_keeps_the_refreshed_sign_in() {
     assert_eq!(sb.writes.lock().unwrap().len(), 1);
     // A takeover runs the same code again: the sign-in is not written again.
     sb.set_file(file, &refreshed);
-    with_codex(&c, &j, "a1.tester", u, "box", || async { Ok(()) }).await.unwrap();
+    with_codex(&c, &j, "a1.tester", u, sb.as_ref(), "box", || async { Ok(()) }).await.unwrap();
     assert_eq!(sb.writes.lock().unwrap().len(), 1);
     assert_eq!(sb.file(file).as_deref(), Some(refreshed.as_str()), "a finished step leaves the sign-in of the step running now alone");
     // Without a sign-in.
     c.db.set_codex(u, &[("codex_auth", rusqlite::types::Value::Null)]).unwrap();
-    let err = with_codex(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", || async { Ok(()) }).await.unwrap_err();
+    let err = with_codex(&c, &Journal::new(c.db.clone(), 10), "x", u, sb.as_ref(), "box", || async { Ok(()) }).await.unwrap_err();
     assert!(err.to_string().starts_with("Connect Codex in Settings first"));
 }
 
@@ -173,14 +173,14 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     let (u, _) = user(&c.db);
     let agent = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: None, auth: false };
     let j = Journal::new(c.db.clone(), 9);
-    let err = with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap_err();
+    let err = with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &agent, || async { Ok(()) }).await.unwrap_err();
     assert!(err.to_string().starts_with("Add your OpenRouter key in Settings first"), "{err}");
     let none = Agent { model: None, ..agent.clone() };
-    let err = with_agent(&c, &j, "a1.tester", u, "box", &none, || async { Ok(()) }).await.unwrap_err();
+    let err = with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &none, || async { Ok(()) }).await.unwrap_err();
     assert!(err.to_string().starts_with("Choose an OpenRouter model in Settings first"), "{err}");
     c.db.set_codex(u, &[("agent", text("openrouter")), ("openrouter_key", text(seal(SECRET, "sk-or-v1-secret")))]).unwrap();
     let file = "/home/user/.gespann-openrouter-key";
-    let got = with_agent(&c, &j, "a1.tester", u, "box", &agent, || async {
+    let got = with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &agent, || async {
         assert_eq!(sb.file(file).as_deref(), Some("sk-or-v1-secret"), "the key is in the sandbox while the step runs");
         assert_eq!(sb.file("/home/user/.codex/auth.json"), None, "no Codex sign-in");
         Ok(7)
@@ -192,14 +192,14 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains("sk-or-v1-secret")), "the key never appears in a command");
     // A takeover after the step finished replays it without writing the key again.
     let writes = sb.writes.lock().unwrap().len();
-    with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap();
+    with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &agent, || async { Ok(()) }).await.unwrap();
     assert_eq!(sb.writes.lock().unwrap().len(), writes);
     // A takeover while Codex still runs: its command deleted the key file at its start, and the key
     // is not written again for the process the takeover attaches to.
     let jt = Journal::new(c.db.clone(), 11);
-    let _ = with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async { anyhow::bail!("orchestrator stopped") as anyhow::Result<()> }).await;
+    let _ = with_agent(&c, &jt, "a1.tester", u, sb.as_ref(), "box", &agent, || async { anyhow::bail!("orchestrator stopped") as anyhow::Result<()> }).await;
     let writes = sb.writes.lock().unwrap().len();
-    with_agent(&c, &jt, "a1.tester", u, "box", &agent, || async {
+    with_agent(&c, &jt, "a1.tester", u, sb.as_ref(), "box", &agent, || async {
         assert_eq!(sb.file(file), None, "no key file while the attached Codex runs");
         Ok(())
     })
@@ -207,7 +207,7 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     .unwrap();
     assert_eq!(sb.writes.lock().unwrap().len(), writes, "not written again on a takeover");
     // A failed step removes the key too.
-    let err = with_agent(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", &agent, || async { anyhow::bail!("codex failed") as anyhow::Result<()> }).await.unwrap_err();
+    let err = with_agent(&c, &Journal::new(c.db.clone(), 10), "x", u, sb.as_ref(), "box", &agent, || async { anyhow::bail!("codex failed") as anyhow::Result<()> }).await.unwrap_err();
     assert_eq!(err.to_string(), "codex failed");
     assert_eq!(sb.file(file), None);
 }
@@ -227,11 +227,11 @@ async fn with_agent_on_claude_copilot_or_grok_puts_that_key_in_the_sandbox_only_
         let j = Journal::new(c.db.clone(), 9);
         // An OpenRouter key is not this agent's key.
         c.db.set_codex(u, &[("agent", text(agent)), ("openrouter_key", text(seal(SECRET, "sk-or-v1-other")))]).unwrap();
-        let err = with_agent(&c, &j, "a1.tester", u, "box", &a, || async { Ok(()) }).await.unwrap_err();
+        let err = with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &a, || async { Ok(()) }).await.unwrap_err();
         assert!(err.to_string().starts_with(missing), "{agent}: {err}");
         c.db.set_codex(u, &[(col, text(seal(SECRET, key)))]).unwrap();
         let file = "/home/user/.gespann-agent-key";
-        with_agent(&c, &j, "a1.tester", u, "box", &a, || async {
+        with_agent(&c, &j, "a1.tester", u, sb.as_ref(), "box", &a, || async {
             assert_eq!(sb.file(file).as_deref(), Some(key), "{agent}: the key is in the sandbox while the step starts");
             assert_eq!(sb.file("/home/user/.gespann-openrouter-key"), None);
             assert_eq!(sb.file("/home/user/.codex/auth.json"), None, "no Codex sign-in");
@@ -243,7 +243,7 @@ async fn with_agent_on_claude_copilot_or_grok_puts_that_key_in_the_sandbox_only_
         assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains(key)), "{agent}: the key never appears in a command");
         // give_back (a cancelled run taken over mid-test) removes it too.
         sb.files.lock().unwrap().insert(file.to_string(), key.to_string());
-        give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();
+        give_back(&c, &Journal::new(c.db.clone(), 12), u, sb.as_ref(), "box").await.unwrap();
         assert_eq!(sb.file(file), None, "{agent}: give_back removes the key");
     }
 }
@@ -264,7 +264,7 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     let a = Agent { provider: Provider::Grok, model: None, context: None, auth: true };
     let file = "/home/user/.grok/auth.json";
     let refreshed = auth(now + 1000, "a2");
-    with_agent(&c, &Journal::new(c.db.clone(), 9), "a1.tester", u, "box", &a, || async {
+    with_agent(&c, &Journal::new(c.db.clone(), 9), "a1.tester", u, sb.as_ref(), "box", &a, || async {
         assert_eq!(sb.file(file).as_deref(), Some(stored.as_str()), "the sign-in is in the sandbox while the step runs");
         assert_eq!(sb.file("/home/user/.gespann-agent-key"), None, "no key file");
         // Grok refreshed its sign-in during the step.
@@ -277,7 +277,7 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), refreshed, "the refreshed copy is kept");
     assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains("a1") && !e.contains("r1")), "the sign-in never appears in a command");
     // An older copy never replaces a newer one.
-    with_agent(&c, &Journal::new(c.db.clone(), 10), "a1.tester", u, "box", &a, || async {
+    with_agent(&c, &Journal::new(c.db.clone(), 10), "a1.tester", u, sb.as_ref(), "box", &a, || async {
         sb.files.lock().unwrap().insert(file.to_string(), stored.clone());
         Ok(())
     })
@@ -293,7 +293,7 @@ async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and
     assert!(!keep_grok(&c, u, &no_id).unwrap(), "a copy without a user id is not kept");
     // A refresh the CLI made during a run that was cancelled and taken over is kept by give_back.
     sb.files.lock().unwrap().insert(file.to_string(), mine(now + 5000));
-    give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();
+    give_back(&c, &Journal::new(c.db.clone(), 12), u, sb.as_ref(), "box").await.unwrap();
     assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), mine(now + 5000));
     assert_eq!(sb.file(file), None, "and removed");
     // Signed out meanwhile: nothing comes back.

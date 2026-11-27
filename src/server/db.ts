@@ -96,8 +96,13 @@ export interface Project {
   gate: number;
   /** Screen sizes the tester checks every PR at, preset ids joined with commas (`phone-s,desktop`); empty: the browser's own size. */
   viewports: string;
+  /** What the project's sandboxes run on: `linux` (web apps, servers) or `macos` (iOS apps, built with Xcode). */
+  platform: Platform;
   created: string;
 }
+
+export type Platform = "linux" | "macos";
+export const PLATFORMS: readonly Platform[] = ["linux", "macos"];
 
 export interface Job {
   id: number;
@@ -323,6 +328,7 @@ export class Db {
     if (!pcols.has("suggestion")) this.sql.exec("alter table projects add column suggestion text");
     if (!pcols.has("bundle")) this.sql.exec("alter table projects add column bundle integer not null default 0");
     if (!pcols.has("viewports")) this.sql.exec("alter table projects add column viewports text not null default ''");
+    if (!pcols.has("platform")) this.sql.exec("alter table projects add column platform text not null default 'linux'");
     if (!pcols.has("gate")) {
       // New projects start with the gate off; projects from before the setting keep the gate they had.
       this.sql.exec("alter table projects add column gate integer not null default 0");
@@ -682,6 +688,20 @@ export class Db {
 
   job(id: number): Job | undefined {
     return this.one<Job>("select * from jobs where id = ?", id);
+  }
+
+  /**
+   * Moves the project to another platform and resets what belonged to the old one (setup, recipe, its
+   * sandbox), unless a job of it is queued or running. In one statement, so no job starts in between.
+   */
+  switchPlatform(projectId: number, platform: Platform): boolean {
+    const r = this.sql
+      .prepare(
+        `update projects set platform = ?, setup = 'none', setup_error = null, recipe = null, notes = null, bundle = 0, sandbox_id = null
+         where id = ? and not exists (select 1 from jobs where project_id = ? and status in ('queued', 'running'))`,
+      )
+      .run(platform, projectId, projectId);
+    return Number(r.changes) > 0;
   }
 
   jobs(projectId: number, limit = 20): Job[] {

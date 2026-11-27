@@ -148,8 +148,10 @@ pub trait ShellSandboxes: Send + Sync {
             r#"cat > "$f.cmd.tmp""#.to_string(),
             format!(r#"if [ "$(wc -c < "$f.cmd.tmp" | tr -d ' ')" != {} ]; then rm -rf "$f.cmd.tmp" "$f.lock"; echo "the command arrived incomplete" >&2; exit 1; fi"#, command.len()),
             r#"mv "$f.cmd.tmp" "$f.cmd""#.to_string(),
-            // setsid gives the command its own process group, so kill reaches everything it started.
+            // setsid gives the command its own process group, so kill reaches everything it started. macOS
+            // has no setsid; perl's setpgrp gives it the group there.
             r#"s="$(command -v setsid || true)""#.to_string(),
+            r#"[ -n "$s" ] || ! command -v perl > /dev/null 2>&1 || s="perl -e setpgrp(0,0);exec(@ARGV)""#.to_string(),
             r#"nohup $s bash -c 'echo $$ > "$1.pid"; bash "$1.cmd" > "$1.out" 2> "$1.err" < /dev/null; echo $? > "$1.exit.tmp"; mv "$1.exit.tmp" "$1.exit"' _ "$f" > /dev/null 2>&1 < /dev/null &"#.to_string(),
             r#"i=0; while [ ! -s "$f.pid" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done"#.to_string(),
             r#"test -s "$f.pid""#.to_string(),

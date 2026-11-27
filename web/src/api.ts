@@ -215,6 +215,10 @@ export interface ProjectDetail extends ProjectRow {
   /** Screen sizes the tester checks every PR at (preset ids); empty: the browser's own size. */
   viewports: string[];
   viewport_presets: Viewport[];
+  /** What the project's sandboxes run on: `linux` (web apps, servers) or `macos` (iOS apps, in the iOS Simulator). */
+  platform: "linux" | "macos";
+  /** The instance runs macOS sandboxes. */
+  macos_available: boolean;
   suggestion: string | null;
   model: string | null;
   sandbox_id: string | null;

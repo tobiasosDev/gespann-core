@@ -173,7 +173,7 @@ fn auth_file(sb: &dyn Sandboxes, id: &str) -> String {
 
 /// Runs `f` (a Grok step) with the owner's Grok sign-in in the sandbox. Under the journal key `key`:
 /// written once per step, so a takeover attaches to the running step without writing it again.
-pub async fn with_grok_auth<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, f: F) -> Result<T>
+pub async fn with_grok_auth<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sb: &dyn Sandboxes, sandbox_id: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -182,8 +182,6 @@ where
     if j.step_done(&done)? {
         return f().await;
     }
-    let sandboxes = ctx.sandboxes_for(owner_id)?;
-    let sb = sandboxes.as_ref();
     let file = auth_file(sb, sandbox_id);
     let outcome = async {
         j.step(&format!("{key}.grok"), || async {
@@ -215,7 +213,7 @@ pub async fn run_agent_login(ctx: &Ctx, user_id: i64, provider: Provider) -> Res
     let failed = |lines: String| -> Result<()> {
         ctx.db.update_user_if(user_id, &[(state, text("failed")), (progress, text(json!({ "url": null, "code": null, "lines": lines }).to_string()))], state, Some("pending")).map(|_| ())
     };
-    let sandboxes = match ctx.sandboxes_for(user_id) {
+    let sandboxes = match ctx.sign_in_sandboxes(user_id) {
         Ok(sb) => sb,
         Err(e) => {
             failed(format!("{e:#}"))?;
