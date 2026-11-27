@@ -254,6 +254,13 @@ export class LastMessage {
     return this.last;
   }
 
+  /** A line the agent printed on stderr: never its answer, kept for a failed step's error. */
+  note(l: string): void {
+    if (!l.trim()) return;
+    this.plain.push(l);
+    if (this.plain.length > 200) this.plain.shift();
+  }
+
   /** The end of what the agent printed besides its events: why a failed step failed. */
   get printed(): string {
     return this.plain.slice(-20).join("\n").trim();
@@ -337,7 +344,11 @@ export async function runAgent(r: AgentRun): Promise<number> {
   process.on("SIGINT", onInt);
   child.stdin.on("error", () => {});
   child.stdin.end(l.stdin ?? "");
-  child.stderr.pipe(log, { end: false });
+  // stderr goes to the log too, and its end into a failed step's error (an auth failure is often only there).
+  createInterface({ input: child.stderr, crlfDelay: Infinity }).on("line", (line) => {
+    log.write(`${line}\n`);
+    last.note(line);
+  });
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   lines.on("line", (line) => {
     log.write(`${line}\n`);
@@ -355,6 +366,8 @@ export async function runAgent(r: AgentRun): Promise<number> {
   await new Promise<void>((resolve) => log.end(resolve));
   // Like `codex exec -o`: an answer only from a step that finished; a failed one says why in the step's output.
   writeFileSync(r.lastFile, code === 0 ? last.text : "");
-  if (code !== 0) say(`${l.bin} exited ${code}${last.printed ? `: ${last.printed.slice(-1500)}` : ""}`);
+  // Its last message (Claude Code's error result) or else what it printed besides its events.
+  const why = (last.text || last.printed).trim();
+  if (code !== 0) say(`${l.bin} exited ${code}${why ? `: ${why.slice(-1500)}` : ""}`);
   return code;
 }

@@ -121,6 +121,9 @@ test("the last message is the agent's final answer, as codex exec -o writes it",
   plain.line("Error: not authenticated");
   assert.equal(plain.text, "", "an error is no answer: it would become the suggested checks");
   assert.equal(plain.printed, "Error: not authenticated", "it goes into the failed step's output instead");
+  plain.note("401: invalid x-api-key");
+  assert.equal(plain.text, "");
+  assert.match(plain.printed, /401: invalid x-api-key$/, "stderr counts for the error too");
 });
 
 test("gespann agent: the key file is gone before the agent starts, and the agent gets the key and the browser", async () => {
