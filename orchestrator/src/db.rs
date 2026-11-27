@@ -109,10 +109,26 @@ pub fn int(n: i64) -> Value {
 }
 
 /// SQL over `users`: the owner's agent can run on the provider they chose (`AGENT_READY` in src/server/db.ts).
-pub const AGENT_READY: &str = "(case agent when 'openrouter' then openrouter_key is not null and openrouter_model is not null when 'claude' then claude_key is not null when 'copilot' then copilot_key is not null when 'grok' then grok_key is not null else codex_state = 'connected' end)";
+pub const AGENT_READY: &str = "(case agent when 'openrouter' then openrouter_key is not null and openrouter_model is not null when 'claude' then claude_key is not null when 'copilot' then copilot_key is not null when 'grok' then grok_key is not null or grok_auth is not null else codex_state = 'connected' end)";
 
 /// The users columns of Claude Code, Copilot and Grok: sealed key, its label, the chosen model.
-pub const AGENT_COLUMNS: [&str; 9] = ["claude_key text", "claude_label text", "claude_model text", "copilot_key text", "copilot_label text", "copilot_model text", "grok_key text", "grok_label text", "grok_model text"];
+/// Plus the device-code sign-ins of Copilot and Grok (state and progress for the UI) and Grok's sealed auth.json.
+pub const AGENT_COLUMNS: [&str; 14] = [
+    "claude_key text",
+    "claude_label text",
+    "claude_model text",
+    "copilot_key text",
+    "copilot_label text",
+    "copilot_model text",
+    "grok_key text",
+    "grok_label text",
+    "grok_model text",
+    "copilot_login_state text",
+    "copilot_login text",
+    "grok_login_state text",
+    "grok_login text",
+    "grok_auth text",
+];
 
 /// The owner's agent provider from Settings, with that provider's model (Codex: the Codex model) and,
 /// for OpenRouter, the model's context size. Keys stay in the database (`Db::agent_key`).
@@ -121,6 +137,8 @@ pub struct AgentRow {
     pub provider: Provider,
     pub model: Option<String>,
     pub context: Option<i64>,
+    /// Grok signed in with xAI and has no API key: its steps use the sealed auth.json.
+    pub auth: bool,
 }
 
 /// The UI's tables as `src/server/db.ts` makes them (SCHEMA plus the columns added later), for tests.
@@ -132,7 +150,8 @@ create table if not exists users (
   codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text, codex_model text,
   repos_synced text, max_jobs integer, job_cap integer,
   agent text not null default 'codex', openrouter_key text, openrouter_label text, openrouter_model text, openrouter_context integer,
-  claude_key text, claude_label text, claude_model text, copilot_key text, copilot_label text, copilot_model text, grok_key text, grok_label text, grok_model text);
+  claude_key text, claude_label text, claude_model text, copilot_key text, copilot_label text, copilot_model text, grok_key text, grok_label text, grok_model text,
+  copilot_login_state text, copilot_login text, grok_login_state text, grok_login text, grok_auth text);
 create table if not exists projects (
   id integer primary key, owner_id integer not null references users(id), installation_id integer not null,
   repo text not null unique, repo_id integer not null, default_branch text not null,
@@ -352,7 +371,7 @@ impl Db {
     /// The provider the owner chose for their agent, with what it needs (`AGENT_READY` decides the same).
     pub fn agent(&self, user_id: i64) -> Result<Option<AgentRow>> {
         self.with(|c| {
-            c.query_row("select agent, codex_model, openrouter_model, openrouter_context, claude_model, copilot_model, grok_model from users where id = ?", [user_id], |r| {
+            c.query_row("select agent, codex_model, openrouter_model, openrouter_context, claude_model, copilot_model, grok_model, grok_key is null and grok_auth is not null from users where id = ?", [user_id], |r| {
                 let provider = Provider::parse(r.get::<_, Option<String>>(0)?.as_deref());
                 let col = match provider {
                     Provider::Codex => 1,
@@ -362,7 +381,8 @@ impl Db {
                     Provider::Grok => 6,
                 };
                 let context = if provider == Provider::Openrouter { r.get(3)? } else { None };
-                Ok(AgentRow { provider, model: r.get::<_, Option<String>>(col)?.filter(|m| !m.is_empty()), context })
+                let auth = provider == Provider::Grok && r.get::<_, bool>(7)?;
+                Ok(AgentRow { provider, model: r.get::<_, Option<String>>(col)?.filter(|m| !m.is_empty()), context, auth })
             })
             .optional()
         })
@@ -410,6 +430,18 @@ impl Db {
                 c.execute("insert into jobs (project_id, kind, status, run_id, created) values (?, 'setup', 'queued', null, ?)", rusqlite::params![id, now()])?;
             }
             Ok(())
+        })
+    }
+    /// The owner's sealed Grok sign-in (auth.json).
+    pub fn grok_auth(&self, user_id: i64) -> Result<Option<String>> {
+        Ok(self.with(|c| c.query_row("select grok_auth from users where id = ?", [user_id], |r| r.get::<_, Option<String>>(0)).optional())?.flatten())
+    }
+    /// Copilot and Grok sign-ins waiting for the orchestrator.
+    pub fn pending_agent_logins(&self) -> Result<Vec<(i64, Provider)>> {
+        self.with(|c| {
+            let mut st = c.prepare("select id, coalesce(copilot_login_state, '') = 'pending', coalesce(grok_login_state, '') = 'pending' from users where copilot_login_state = 'pending' or grok_login_state = 'pending' order by id")?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.into_iter().flat_map(|(u, copilot, grok)| [(copilot, Provider::Copilot), (grok, Provider::Grok)].into_iter().filter(|(on, _)| *on).map(move |(_, p)| (u, p))).collect())
         })
     }
     /// Users whose Codex sign-in waits for the orchestrator (`codex_state = 'pending'`).

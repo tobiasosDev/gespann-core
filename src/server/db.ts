@@ -14,14 +14,19 @@ export const AGENT_PROVIDERS: readonly AgentProvider[] = ["codex", "openrouter",
 
 /** SQL over `users`: the agent can run, on the provider the user chose. The orchestrator's db.rs has the same. */
 export const AGENT_READY =
-  "(case agent when 'openrouter' then openrouter_key is not null and openrouter_model is not null when 'claude' then claude_key is not null when 'copilot' then copilot_key is not null when 'grok' then grok_key is not null else codex_state = 'connected' end)";
+  "(case agent when 'openrouter' then openrouter_key is not null and openrouter_model is not null when 'claude' then claude_key is not null when 'copilot' then copilot_key is not null when 'grok' then grok_key is not null or grok_auth is not null else codex_state = 'connected' end)";
 
 /** A key agent's connection in Settings, without the key. */
 export interface KeyAgentState {
   connected: boolean;
   label: string | null;
   model: string | null;
+  /** The device-code sign-in (Copilot, Grok): its state and what the CLI printed so far. */
+  login: { state: string; url: string | null; code: string | null; lines: string } | null;
 }
+
+/** Agents that sign in with a device code in the orchestrator (`<agent>_login_state`, `<agent>_login`). */
+export const SIGN_IN_AGENTS = ["copilot", "grok"] as const;
 export type SetupState = "none" | "queued" | "running" | "ready" | "failed";
 export type JobKind = "login" | "setup" | "run" | "suggest";
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -271,6 +276,8 @@ export class Db {
       ["openrouter_model", "text"],
       ["openrouter_context", "integer"],
       ...KEY_AGENTS.flatMap((a) => [[`${a}_key`, "text"], [`${a}_label`, "text"], [`${a}_model`, "text"]] as const),
+      ...SIGN_IN_AGENTS.flatMap((a) => [[`${a}_login_state`, "text"], [`${a}_login`, "text"]] as const),
+      ["grok_auth", "text"],
     ] as const) {
       if (cols.has(name)) continue;
       try {
@@ -329,14 +336,31 @@ export class Db {
 
   /** The user's agent provider and their connections, without the keys. */
   agent(userId: number): ({ agent: AgentProvider; openrouter: boolean; openrouter_label: string | null; openrouter_model: string | null; openrouter_context: number | null; ready: boolean } & Record<KeyAgent, KeyAgentState>) | undefined {
-    const keyCols = KEY_AGENTS.map((a) => `${a}_key is not null as ${a}_has, ${a}_label, ${a}_model`).join(", ");
+    const keyCols = [
+      ...KEY_AGENTS.map((a) => `${a}_key is not null as ${a}_has, ${a}_label, ${a}_model`),
+      ...SIGN_IN_AGENTS.map((a) => `${a}_login_state, ${a}_login`),
+      "grok_auth is not null as grok_signed_in",
+    ].join(", ");
     const r = this.one<Record<string, string | number | null>>(
       `select agent, openrouter_key is not null as has_key, openrouter_label, openrouter_model, openrouter_context, ${keyCols}, ${AGENT_READY} as ready from users where id = ?`,
       userId,
     );
     if (!r) return undefined;
     const s = (k: string) => (typeof r[k] === "string" ? (r[k] as string) : null);
-    const keyed = Object.fromEntries(KEY_AGENTS.map((a) => [a, { connected: !!r[`${a}_has`], label: s(`${a}_label`), model: s(`${a}_model`) }])) as Record<KeyAgent, KeyAgentState>;
+    const login = (a: KeyAgent): KeyAgentState["login"] => {
+      const state = s(`${a}_login_state`);
+      if (!state) return null;
+      let progress = { url: null, code: null, lines: "" };
+      try {
+        progress = { ...progress, ...JSON.parse(s(`${a}_login`) ?? "{}") };
+      } catch {
+        // A half-written progress: the state alone.
+      }
+      return { state, ...progress };
+    };
+    const keyed = Object.fromEntries(
+      KEY_AGENTS.map((a) => [a, { connected: !!r[`${a}_has`] || (a === "grok" && !!r.grok_signed_in), label: s(`${a}_label`), model: s(`${a}_model`), login: login(a) }]),
+    ) as Record<KeyAgent, KeyAgentState>;
     const agent = AGENT_PROVIDERS.find((p) => p === r.agent) ?? "codex";
     return { agent, openrouter: !!r.has_key, openrouter_label: s("openrouter_label"), openrouter_model: s("openrouter_model"), openrouter_context: typeof r.openrouter_context === "number" ? r.openrouter_context : null, ready: !!r.ready, ...keyed };
   }
@@ -348,7 +372,7 @@ export class Db {
   }
 
   /** Sets a key agent's sealed key, its label or its model. */
-  setKeyAgent(userId: number, agent: KeyAgent, fields: Partial<{ key: string | null; label: string | null; model: string | null }>): void {
+  setKeyAgent(userId: number, agent: KeyAgent, fields: Partial<{ key: string | null; label: string | null; model: string | null; login_state: string | null; login: string | null; auth: string | null }>): void {
     const keys = Object.keys(fields) as (keyof typeof fields)[];
     if (!keys.length) return;
     this.run(`update users set ${keys.map((k) => `${agent}_${k} = ?`).join(", ")} where id = ?`, ...keys.map((k) => fields[k] ?? null), userId);

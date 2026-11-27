@@ -16,35 +16,50 @@ export function isKeyAgent(s: unknown): s is KeyAgent {
 export interface KeyAgentInfo {
   id: KeyAgent;
   name: string;
-  /** What the key field asks for. */
-  keyHint: string;
   /** Where the user gets a key. */
   keyUrl: string;
   /** Models to suggest; the CLI's default when none is chosen. */
   models: string[];
+  /** How to get the key, step by step, for the Settings card. */
+  steps: string[];
+  /** The device-code sign-in's button, when the CLI has one (`copilot login`, `grok login`); null: key only. */
+  signIn: string | null;
 }
 
 export const KEY_AGENT_INFO: Record<KeyAgent, KeyAgentInfo> = {
   claude: {
     id: "claude",
     name: "Claude Code",
-    keyHint: "an Anthropic API key (sk-ant-api…) or the token that claude setup-token prints for your Claude Pro or Max plan (sk-ant-oat…)",
     keyUrl: "https://console.anthropic.com/settings/keys",
     models: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-2"],
+    steps: [
+      "Claude Pro or Max: install Claude Code on your computer (npm install -g @anthropic-ai/claude-code) and run claude setup-token in a terminal.",
+      "Sign in with your Claude account in the browser it opens, then copy the token it prints (sk-ant-oat…) and paste it here.",
+      "Or paste an Anthropic API key from the Console (sk-ant-api…); Anthropic bills it per token.",
+    ],
+    signIn: null,
   },
   copilot: {
     id: "copilot",
     name: "GitHub Copilot",
-    keyHint: "a GitHub token of an account with Copilot (fine-grained, with the permission Copilot Requests)",
     keyUrl: "https://github.com/settings/personal-access-tokens/new",
     models: ["auto", "claude-sonnet-5-5", "gpt-6.1-terra"],
+    steps: [
+      "Easiest: Sign in with GitHub and enter the code it shows on github.com with the account that has Copilot.",
+      "Or create a fine-grained token (Get a key), add the account permission Copilot Requests, and paste it here (github_pat_…). Classic tokens (ghp_) do not work with Copilot.",
+    ],
+    signIn: "Sign in with GitHub",
   },
   grok: {
     id: "grok",
     name: "Grok",
-    keyHint: "an xAI API key (xai-…)",
     keyUrl: "https://console.x.ai",
     models: ["grok-4.7", "grok-4.20-0309-reasoning", "grok-4.6"],
+    steps: [
+      "Easiest: Sign in with xAI and confirm the code it shows on accounts.x.ai. The tester then runs on your Grok plan.",
+      "Or create an API key in the xAI Console under API Keys and paste it here (xai-…); xAI bills it per token.",
+    ],
+    signIn: "Sign in with xAI",
   },
 };
 
@@ -88,7 +103,8 @@ export async function checkAgentKey(agent: KeyAgent, raw: string, f: Fetch = fet
     return { key, label: `Anthropic API key ${shortKey(key)}` };
   }
   if (agent === "copilot") {
-    if (!/^(gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/.test(key)) throw new AgentKeyError(400, "key: a GitHub token starts with github_pat_, ghp_ or gho_");
+    if (/^ghp_/.test(key)) throw new AgentKeyError(400, "key: classic tokens (ghp_) do not work with Copilot; create a fine-grained token with the permission Copilot Requests, or sign in with GitHub");
+    if (!/^(gh[ou]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/.test(key)) throw new AgentKeyError(400, "key: a fine-grained GitHub token starts with github_pat_");
     const res = await ask(f, "GitHub", "https://api.github.com/user", { Authorization: `Bearer ${key}`, Accept: "application/vnd.github+json", "User-Agent": "gespann" });
     if (res.status === 401 || res.status === 403) throw new AgentKeyError(400, "GitHub does not accept this token");
     if (!res.ok) throw new AgentKeyError(502, `GitHub answered ${res.status}`);

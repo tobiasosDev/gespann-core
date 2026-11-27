@@ -6,7 +6,7 @@ import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono, Select } from "../components/ui.tsx";
 import { Sandboxes } from "./Sandboxes.tsx";
 
-const codexPending = (d: Settings) => d.codex.state === "pending";
+const codexPending = (d: Settings) => d.codex.state === "pending" || d.keyAgents.some((a) => a.login?.state === "pending");
 
 /** Agent sign-ins and personal tokens for the MCP endpoint, and how to connect Claude Code or Codex. */
 function AgentAccess() {
@@ -118,8 +118,8 @@ function AgentChoice({ agent, onChange, busy }: { agent: AgentProvider; onChange
     { id: "codex", title: "ChatGPT plan", text: "Codex on your Plus, Pro or Team plan. No extra model bill." },
     { id: "openrouter", title: "OpenRouter", text: "Codex on any OpenRouter model with your own API key. OpenRouter bills you per token." },
     { id: "claude", title: "Claude Code", text: "Claude Code on your Anthropic API key or your Claude Pro or Max plan." },
-    { id: "copilot", title: "GitHub Copilot", text: "The Copilot CLI on your GitHub account's Copilot plan." },
-    { id: "grok", title: "Grok", text: "The Grok CLI on your xAI API key. xAI bills you per token." },
+    { id: "copilot", title: "GitHub Copilot", text: "The Copilot CLI on your GitHub account's Copilot plan (sign in with GitHub)." },
+    { id: "grok", title: "Grok", text: "The Grok CLI on your Grok plan (sign in with xAI) or an xAI API key." },
   ];
   return (
     <Card>
@@ -316,6 +316,7 @@ function KeyAgentCard({ a, reload }: { a: KeyAgent; reload: () => Promise<void> 
   const [modelError, setModelError] = useState<string | null>(null);
   const model = modelDraft ?? a.model ?? "";
   const base = `/settings/agents/${a.id}`;
+  const login = a.login;
   const run = async (fn: () => Promise<unknown>, setError: (e: string | null) => void) => {
     setBusy(true);
     setError(null);
@@ -334,7 +335,7 @@ function KeyAgentCard({ a, reload }: { a: KeyAgent; reload: () => Promise<void> 
     <Card className="mt-6">
       <CardHeader
         title={a.name}
-        description={`The tester runs in ${a.name} on your own key, for all your projects. gespann keeps the key encrypted and puts it into a project's sandbox only while a job runs.`}
+        description={`The tester runs in ${a.name} on your own account, for all your projects. gespann keeps the key or sign-in encrypted and puts it into a project's sandbox only while a job runs.`}
         action={a.connected ? <Badge tone="ok">ready</Badge> : <Badge>not connected</Badge>}
       />
       <div className="space-y-3 px-4 py-4">
@@ -343,12 +344,45 @@ function KeyAgentCard({ a, reload }: { a: KeyAgent; reload: () => Promise<void> 
             <Check className="size-4 text-ok" />
             <Mono>{a.label ?? `${a.name} key`}</Mono>
             <Button size="sm" variant="danger" className="ml-auto" disabled={busy} onClick={() => void run(() => api(`${base}/logout`, {}), setKeyError)}>
-              Remove key
+              {a.login?.state === "connected" ? "Sign out" : "Remove key"}
             </Button>
           </div>
         ) : (
           <>
-            <p className="text-body text-muted-foreground">Paste {a.keyHint}.</p>
+            <ol className="list-decimal space-y-1 pl-5 text-body text-muted-foreground">
+              {a.steps.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ol>
+            {a.signIn && login?.state === "pending" ? (
+              login.code ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-body">Open the page and enter this code:</span>
+                  <Mono className="rounded-md border border-dashed border-info/60 bg-info/10 px-3 py-1.5 text-title tracking-widest text-info">{login.code}</Mono>
+                  <Button variant="ghost" size="sm" onClick={() => void navigator.clipboard.writeText(login.code ?? "")}>
+                    <Copy className="size-3.5" /> Copy
+                  </Button>
+                  {login.url && (
+                    <LinkButton href={login.url} target="_blank" rel="noreferrer" size="sm" variant="outline">
+                      Open page <ExternalLink className="size-3.5" />
+                    </LinkButton>
+                  )}
+                  <span className="w-full text-small text-muted-foreground">The code expires after 15 minutes. This page updates by itself once you confirmed it.</span>
+                </div>
+              ) : (
+                <p className="flex items-center gap-2 text-body text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin motion-reduce:animate-none" /> Preparing the sign-in…
+                </p>
+              )
+            ) : (
+              a.signIn && (
+                <Button disabled={busy} onClick={() => void run(() => api(`${base}/login`, {}), setKeyError)}>
+                  {a.signIn}
+                </Button>
+              )
+            )}
+            {login?.state === "failed" && login.lines && <Log text={login.lines} className="border-bad/40 text-bad" />}
+            <p className="text-body text-muted-foreground">{a.signIn ? "Or paste a key or token:" : "Paste the token or key:"}</p>
             <form
               className="flex flex-wrap items-center gap-2"
               onSubmit={async (e) => {

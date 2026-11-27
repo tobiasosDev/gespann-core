@@ -269,7 +269,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     return c.json({
       agent: agent?.agent ?? "codex",
       openrouter: { connected: !!agent?.openrouter, label: agent?.openrouter_label ?? null, model: agent?.openrouter_model ?? null },
-      keyAgents: KEY_AGENTS.map((a) => ({ ...KEY_AGENT_INFO[a], ...(agent?.[a] ?? { connected: false, label: null, model: null }) })),
+      keyAgents: KEY_AGENTS.map((a) => ({ ...KEY_AGENT_INFO[a], ...(agent?.[a] ?? { connected: false, label: null, model: null, login: null }) })),
       codex: {
         state: codex?.codex_state ?? "none",
         account: codex?.codex_account ?? null,
@@ -388,7 +388,17 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.post("/api/settings/agents/:agent/logout", (c) => {
     const agent = c.req.param("agent");
     if (!isKeyAgent(agent)) throw new HttpError(404, "no such agent");
-    db.setKeyAgent(me(c).id, agent, { key: null, label: null });
+    db.setKeyAgent(me(c).id, agent, { key: null, label: null, login_state: null, login: null, ...(agent === "grok" ? { auth: null } : {}) });
+    return c.json({ ok: true });
+  });
+
+  // Copilot and Grok sign in with a device code: the orchestrator runs `copilot login` or `grok login` in a
+  // short-lived sandbox for every pending user and shows the code here, as for Codex.
+  app.post("/api/settings/agents/:agent/login", (c) => {
+    const agent = c.req.param("agent");
+    if (!isKeyAgent(agent) || !KEY_AGENT_INFO[agent].signIn) throw new HttpError(404, "no sign-in for this agent");
+    if (!orchestratorPresent(db)) throw new HttpError(409, "the orchestrator is not running, and the sign-in needs it; try again in a minute");
+    if (db.agent(me(c).id)?.[agent].login?.state !== "pending") db.setKeyAgent(me(c).id, agent, { login_state: "pending", login: null });
     return c.json({ ok: true });
   });
 

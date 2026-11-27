@@ -116,6 +116,7 @@ pub async fn run(ctx: Arc<Ctx>, instance: String, shutdown: tokio_util::sync::Ca
     let mut running = Running { tasks: JoinSet::new(), jobs: HashMap::new(), provider: HashMap::new() };
     let mut logins: JoinSet<()> = JoinSet::new();
     let mut signing_in: HashMap<Id, i64> = HashMap::new();
+    let mut agent_signing_in: HashMap<Id, (i64, crate::codex::Provider)> = HashMap::new();
     let mut last_publish: Option<Instant> = None;
     // Its own task: a UI that is down must not hold up the beats and the queue.
     let outbox = tokio::spawn({
@@ -145,6 +146,7 @@ pub async fn run(ctx: Arc<Ctx>, instance: String, shutdown: tokio_util::sync::Ca
                 Err(e) => e.id(),
             };
             signing_in.remove(&task);
+            agent_signing_in.remove(&task);
         }
         if let Err(e) = tick(&ctx, &instance, &mut running) {
             crate::log("error", &format!("queue: {e:#}"));
@@ -164,6 +166,22 @@ pub async fn run(ctx: Arc<Ctx>, instance: String, shutdown: tokio_util::sync::Ca
                 }
             }
             Err(e) => crate::log("error", &format!("pending Codex sign-ins: {e:#}")),
+        }
+        // Copilot and Grok sign-ins the UI started: one per user and agent at a time.
+        match ctx.db.pending_agent_logins() {
+            Ok(pending) => {
+                let busy: HashSet<(i64, crate::codex::Provider)> = agent_signing_in.values().copied().collect();
+                for (user, provider) in pending.into_iter().filter(|p| !busy.contains(p)) {
+                    let c = ctx.clone();
+                    let handle = logins.spawn(async move {
+                        if let Err(e) = crate::agent_auth::run_agent_login(&c, user, provider).await {
+                            crate::log("warn", &format!("{} sign-in of user {user} failed: {e:#}", provider.agent_name()));
+                        }
+                    });
+                    agent_signing_in.insert(handle.id(), (user, provider));
+                }
+            }
+            Err(e) => crate::log("error", &format!("pending agent sign-ins: {e:#}")),
         }
         if last_publish.is_none_or(|t| t.elapsed() >= PUBLISH_EVERY) {
             last_publish = Some(Instant::now());

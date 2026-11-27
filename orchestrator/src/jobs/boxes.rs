@@ -164,7 +164,7 @@ fn pick_agent(row: &AgentRow, project_model: Option<&str>) -> Agent {
     };
     // The context size belongs to the owner's model; a project's own model goes without it.
     let context = if own.is_some() { None } else { row.context };
-    Agent { provider: row.provider, model: own.or(row.model.clone()), context }
+    Agent { provider: row.provider, model: own.or(row.model.clone()), context, auth: row.auth }
 }
 
 /// The command of one agent step: Codex (`codex exec`, on the ChatGPT plan or OpenRouter) or another
@@ -175,12 +175,13 @@ pub(crate) fn agent_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file
         let model = agent.model.as_deref().filter(|m| !m.is_empty()).map(|m| format!(" --model {}", q(m))).unwrap_or_default();
         // Copilot's levels depend on the model, and a level its model lacks fails the run.
         let effort = if agent.provider == Provider::Copilot { String::new() } else { format!(" --effort {effort}") };
-        let key = format!(r#""$HOME/{}""#, crate::codex::AGENT_KEY_FILE);
+        // Grok signed in with xAI reads its own auth.json; every other agent gets its key from the file.
+        let key = if agent.auth { String::new() } else { format!(r#" --key-file "$HOME/{}""#, crate::codex::AGENT_KEY_FILE) };
         return with_env(
             b,
             &format!(
                 // What gespann itself says (installing the CLI, a missing key) stays in the step's output.
-                "cd {} && gespann agent {cli} --prompt {} --last {} --log {} --key-file {key}{model}{effort} 2>&1",
+                "cd {} && gespann agent {cli} --prompt {} --last {} --log {}{key}{model}{effort} 2>&1",
                 b.repo,
                 q(prompt_file),
                 q(last_file),
@@ -401,25 +402,25 @@ mod tests {
 
     #[test]
     fn a_projects_model_counts_only_for_its_own_provider() {
-        let or = AgentRow { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
-        assert_eq!(pick_agent(&or, Some("gpt-6.2-sol")), Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) });
-        assert_eq!(pick_agent(&or, Some("openai/gpt-x")), Agent { provider: Provider::Openrouter, model: Some("openai/gpt-x".into()), context: None });
+        let or = AgentRow { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000), auth: false };
+        assert_eq!(pick_agent(&or, Some("gpt-6.2-sol")), Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000), auth: false });
+        assert_eq!(pick_agent(&or, Some("openai/gpt-x")), Agent { provider: Provider::Openrouter, model: Some("openai/gpt-x".into()), context: None, auth: false });
         let codex = AgentRow { model: Some("gpt-6.2-astra".into()), ..AgentRow::default() };
         assert_eq!(pick_agent(&codex, Some("openai/gpt-x")).model.as_deref(), Some("gpt-6.2-astra"));
         assert_eq!(pick_agent(&codex, Some("gpt-6.2-sol")).model.as_deref(), Some("gpt-6.2-sol"));
         assert_eq!(pick_agent(&AgentRow::default(), Some("")).model, None);
-        let claude = AgentRow { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None };
-        assert_eq!(pick_agent(&claude, Some("gpt-6.2-sol")), Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None });
+        let claude = AgentRow { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None, auth: false };
+        assert_eq!(pick_agent(&claude, Some("gpt-6.2-sol")), Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None, auth: false });
         assert_eq!(pick_agent(&AgentRow { provider: Provider::Grok, ..AgentRow::default() }, Some("openai/gpt-x")).model, None);
     }
 
     #[test]
     fn agent_exec_passes_requested_reasoning_effort() {
         let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
-        let codex = |model: Option<&str>| Agent { provider: Provider::Codex, model: model.map(str::to_string), context: None };
+        let codex = |model: Option<&str>| Agent { provider: Provider::Codex, model: model.map(str::to_string), context: None, auth: false };
         assert!(agent_exec(&b, "/p", "/l", "/j", &codex(None), "medium").contains("&& codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -c model_reasoning_effort=medium"));
         assert!(agent_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
-        let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None };
+        let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None, auth: false };
         let c = agent_exec(&b, "/p", "/l", "/j", &or, "high");
         assert!(c.contains(r#"&& test -n "$_k" && OPENROUTER_API_KEY="$_k" codex exec "#), "{c}");
         assert!(c.contains("-m 'x/y' -c model_provider=openrouter -c 'model_providers.openrouter="), "{c}");
@@ -428,15 +429,17 @@ mod tests {
     #[test]
     fn other_tester_agents_run_through_gespann_agent() {
         let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
-        let claude = Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None };
+        let claude = Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None, auth: false };
         assert_eq!(
             agent_exec(&b, "/p", "/l", "/j", &claude, "medium"),
             r#". /g/env.sh 2>/dev/null; cd /r && gespann agent claude --prompt '/p' --last '/l' --log '/j' --key-file "$HOME/.gespann-agent-key" --model 'claude-sonnet-5-5' --effort medium 2>&1"#
         );
-        let copilot = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Copilot, model: None, context: None }, "high");
+        let copilot = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Copilot, model: None, context: None, auth: false }, "high");
         assert!(copilot.contains("gespann agent copilot --prompt '/p' --last '/l' --log '/j' --key-file \"$HOME/.gespann-agent-key\" 2>&1"), "no model, no effort: {copilot}");
-        let grok = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Grok, model: Some("grok-build".into()), context: None }, "high");
+        let grok = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Grok, model: Some("grok-build".into()), context: None, auth: false }, "high");
         assert!(grok.contains("gespann agent grok ") && grok.contains("--model 'grok-build' --effort high"), "{grok}");
         assert!(!grok.contains("codex"), "{grok}");
+        let signed_in = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Grok, model: None, context: None, auth: true }, "high");
+        assert!(signed_in.contains("gespann agent grok --prompt '/p' --last '/l' --log '/j' --effort high 2>&1"), "a sign-in, no key file: {signed_in}");
     }
 }
