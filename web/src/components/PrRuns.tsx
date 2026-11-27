@@ -1,4 +1,4 @@
-import { ChevronRight, ExternalLink } from "lucide-react";
+import { ChevronRight, Clapperboard, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import { ago, duration, type RunRow } from "../api.ts";
 import { navigate } from "../live.ts";
@@ -97,6 +97,11 @@ function Section({ state, groups }: { state: PrState; groups: PrGroup<RunRow>[] 
             <Link to={`/runs/${g.latest.id}`} className="hover:underline" aria-label={`#${g.pr} ${g.title ?? ""}, open the latest run`}>
               <Mono className="text-muted-foreground">#{g.pr}</Mono> {g.title}
             </Link>
+            {g.latest.clip && (
+              <span className="ml-2 text-muted-foreground" role="img" aria-label="Has a video of just the change" title="Has a video of just the change">
+                <Clapperboard className="inline size-3.5 align-[-2px]" />
+              </span>
+            )}
             {state === "closed" && g.closed && <span className="ml-2 text-small">{g.closed}</span>}
           </td>
           <td className="px-4 py-2.5">

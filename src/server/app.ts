@@ -572,7 +572,8 @@ export function createApp(d: AppDeps): Hono<Env> {
       /** The instance runs macOS sandboxes (the orchestrator says so); without them a macOS project's jobs wait. */
       macos_available: servesMacos(orchestratorState(db)),
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
-      runs: db.runs(p.id).map((r) => ({ ...r, waitingForChecks: ciWait.has(r.id) })),
+      // clip: the run has change.mp4, the part of its recording that shows what the PR changes.
+      runs: db.runs(p.id).map((r) => ({ ...r, waitingForChecks: ciWait.has(r.id), clip: (JSON.parse(r.files) as string[]).includes("change.mp4") })),
       closed: db.closedPrs(p.id),
       jobs: db.jobs(p.id, 30).map((j) => ({ ...j, log: j.kind === "run" ? "" : j.log })),
     });
