@@ -214,7 +214,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
               }
             }}
           />
-          {chosen.length > 1 && <p className="mt-2 text-body text-muted-foreground">Each size beyond the first adds about half the run time.</p>}
+          {chosen.length > 1 && <p className="mt-2 text-body text-muted-foreground">The tester sees every size at once; each size beyond the first adds about a quarter of the run time.</p>}
         </Step>
 
         <Step
