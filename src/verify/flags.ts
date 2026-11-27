@@ -36,7 +36,8 @@ const NOT_A_FLAG = /FLAGS|_FLAG_|_(?:MS|URL|KEY|TOKEN|SECRET|PATH|TIMEOUT|INTERV
 function keysOf(line: string, file: string): { key: string; env: boolean }[] {
   const keys: { key: string; env: boolean }[] = [];
   for (const re of [CALL, INDEX]) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
-  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
+  // A registry names a flag's variable too (`env: { name: "NEW_CART_ENABLED" }`): an upper-case name there is the variable.
+  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: /^[A-Z0-9_]+$/.test(m[1]) });
   for (const m of line.matchAll(ENV)) if (m[1] && !NOT_A_FLAG.test(m[1]) && !keys.some((k) => k.key === m[1])) keys.push({ key: m[1], env: true });
   return keys;
 }

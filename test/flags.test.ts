@@ -21,7 +21,7 @@ diff --git a/apps/web/lib/feature-flags/registry.ts b/apps/web/lib/feature-flags
 +++ b/apps/web/lib/feature-flags/registry.ts
 @@ -88,0 +89,5 @@
 +  "async-source-upload": {
-+    env: "ASYNC_SOURCE_UPLOAD_ENABLED",
++    env: { name: "ASYNC_SOURCE_UPLOAD_ENABLED" },
 +    default: false,
 +  },
 diff --git a/apps/web/app/api/analysis-runs/[id]/sources/route.ts b/apps/web/app/api/analysis-runs/[id]/sources/route.ts
