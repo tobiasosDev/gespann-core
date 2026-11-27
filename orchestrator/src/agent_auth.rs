@@ -211,7 +211,10 @@ where
 /// The device-code sign-in of `provider` (Copilot or Grok) for a user whose sign-in is pending.
 pub async fn run_agent_login(ctx: &Ctx, user_id: i64, provider: Provider) -> Result<()> {
     let (state, progress) = columns(provider)?;
-    let failed = |lines: String| -> Result<()> { ctx.db.set_codex(user_id, &[(state, text("failed")), (progress, text(json!({ "url": null, "code": null, "lines": lines }).to_string()))]) };
+    // Only while the sign-in is still wanted: after a sign-out the user sees no failure of the old attempt.
+    let failed = |lines: String| -> Result<()> {
+        ctx.db.update_user_if(user_id, &[(state, text("failed")), (progress, text(json!({ "url": null, "code": null, "lines": lines }).to_string()))], state, Some("pending")).map(|_| ())
+    };
     let sandboxes = match ctx.sandboxes_for(user_id) {
         Ok(sb) => sb,
         Err(e) => {
