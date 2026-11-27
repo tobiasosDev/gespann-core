@@ -343,8 +343,9 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                 header={
                   <CardHeader
                     title="Pull requests"
-                    // Phones: the list explains itself, the line would only push it down.
-                    description={<span className="hidden sm:inline">Each pull request once, with all its runs. Select a row to open its latest run.</span>}
+                    description="Each pull request once, with all its runs. Select a row to open its latest run."
+                    // Phones: every row carries a chevron, so the line would only push the list down.
+                    descriptionClassName="hidden sm:block"
                     action={
                       <form
                         className="flex w-full items-center gap-2 sm:w-auto"
@@ -354,8 +355,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
                           if (r.runId) navigate(`/runs/${r.runId}`);
                         }}
                       >
-                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" inputMode="numeric" className="min-w-0 flex-1 font-mono sm:w-20 sm:flex-none" disabled={setup !== "done"} />
-                        <Button size="sm" variant="outline" disabled={busy || setup !== "done" || !pr}>
+                        <Input value={pr} onChange={(e) => setPr(e.target.value.replace(/\D/g, ""))} placeholder="PR #" inputMode="numeric" aria-label="Pull request number" className="h-11 min-w-0 flex-1 font-mono sm:h-9 sm:w-20 sm:flex-none" disabled={setup !== "done"} />
+                        <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={busy || setup !== "done" || !pr}>
                           <Play className="size-3.5" /> Test PR
                         </Button>
                       </form>
