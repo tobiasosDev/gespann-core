@@ -537,8 +537,8 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     // once: a takeover attaches to the running prepare, which has taken the file already.
     let keys_file = format!("{dir}/keys.json");
     let keys_file = &keys_file;
-    let keyed: bool = cx
-        .jr
+    // Always written, `{}` without keys: without `--keys` prepare would take keys from the sandbox's own environment.
+    cx.jr
         .step(&k("keys"), || async move {
             let mut keys = serde_json::Map::new();
             for (name, sealed) in db.access_keys(p.id)? {
@@ -549,21 +549,15 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
                     Err(_) => cx.log(&format!("✗ the key for {name} cannot be opened; that service runs as a fake. Store it again on the Setup page.")),
                 }
             }
-            if keys.is_empty() {
-                return Ok(false);
-            }
             sb.exec(&b.id, &format!("umask 077 && : > {}", q(keys_file)), 30).await?;
             sb.write_file(&b.id, keys_file, Value::Object(keys).to_string().as_bytes()).await?;
-            Ok(true)
+            Ok(())
         })
         .await?;
-    let keys = if keyed { format!(" --keys {}", q(keys_file)) } else { String::new() };
-    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}{sizes}{keys}", b.repo, b.recipe, run.pr, run.head, run.base));
+    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}{sizes} --keys {}", b.repo, b.recipe, run.pr, run.head, run.base, q(keys_file)));
     let prep = long(cx, b, &k("prepare"), &prepare, Duration::from_secs(60 * 60), &cancelled).await;
-    if keyed {
-        // prepare deleted it when it started; this covers a prepare that never ran.
-        let _ = sb.exec(&b.id, &format!("rm -f {}", q(keys_file)), 30).await;
-    }
+    // prepare deleted it when it started; this covers a prepare that never ran.
+    let _ = sb.exec(&b.id, &format!("rm -f {}", q(keys_file)), 30).await;
     let prep = prep?;
     let prepared = last_json::<Prepared>(&prep.tail);
     let (url, mirror) = match &prepared {

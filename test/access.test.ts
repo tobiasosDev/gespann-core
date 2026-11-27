@@ -18,7 +18,9 @@ const KEY = "mac-provider-key-0123456789";
 const recipe = (access: string) => `
 version: 1
 trigger: { paths: ["**"] }
-flags: { run: 'true', switch: 'echo "switch saw \${MAC_PROVIDER_TOKEN:-nothing}"' }
+setup:
+  - { name: sneaky, run: 'echo "MAC_PROVIDER_TOKEN=from-env-file" >> "$GESPANN_ENV"' }
+flags: { run: 'echo "flags with $MAC_PROVIDER_TOKEN"', switch: 'echo "switch saw \${MAC_PROVIDER_TOKEN:-nothing}"' }
 env:
   up: 'echo "up saw \${MAC_PROVIDER_TOKEN:-nothing}" > "$GESPANN_WORK/seen"; echo "token is $MAC_PROVIDER_TOKEN"'
   down: 'echo "down saw \${MAC_PROVIDER_TOKEN:-nothing}" >> "$GESPANN_WORK/seen"'
@@ -92,11 +94,13 @@ test("a PR that changes the service's code runs against the real service; the ke
   assert.ok(log.includes("token is [key]"), log);
   assert.equal(log.includes(KEY), false, "the key never reaches the run log the tester reads");
   for (const f of ["env", "state.json", "context.json"]) assert.equal(existsSync(join(c.work, f)) && readFileSync(join(c.work, f), "utf8").includes(KEY), false, f);
-  // A later process (a flag switch, finish) has no key file: there the key is gone.
+  assert.equal(readFileSync(join(c.work, "flags.md"), "utf8"), "flags with [key]\n", "the flag sheet the tester reads has no key");
+  // A later process (a flag switch, finish) has no key file: there the key is gone, and the result says
+  // that checks after the switch may have used the fake.
   assert.match(switchFlag(c, r, "x", "on").output, /switch saw nothing/);
   writeFileSync(join(c.out, "verdict.json"), JSON.stringify({ verdict: "SKIP", summary: "nothing to test", checks: [], proof: [] }));
   const f = await finish(c, r, 1000);
-  assert.deepEqual(f.judged.access, access, "the result names what ran for real");
+  assert.deepEqual(f.judged.access, [{ name: "MAC_PROVIDER_TOKEN", about: "Mac sandbox provider", real: false, why: `the PR changes orchestrator/src/sandbox/macos.rs, but a feature-flag switch ran without the key, so checks after it may have used the fake` }]);
 });
 
 test("every other PR runs against the fake, even when the machine's environment has the variable", async () => {
@@ -108,7 +112,7 @@ test("every other PR runs against the fake, even when the machine's environment 
   } finally {
     delete process.env.MAC_PROVIDER_TOKEN;
   }
-  assert.equal(readFileSync(join(c.work, "seen"), "utf8"), "up saw nothing\n");
+  assert.equal(readFileSync(join(c.work, "seen"), "utf8"), "up saw nothing\n", "neither the machine nor a step's $GESPANN_ENV line hands the variable out");
   assert.deepEqual(JSON.parse(readFileSync(join(c.work, "access.json"), "utf8")), [{ name: "MAC_PROVIDER_TOKEN", about: "Mac sandbox provider", real: false, why: "the PR does not change its code" }]);
   writeFileSync(join(c.out, "verdict.json"), JSON.stringify({ verdict: "SKIP", summary: "nothing to test", checks: [], proof: [] }));
   assert.equal((await finish(c, r, 1000)).judged.access?.[0]?.real, false);

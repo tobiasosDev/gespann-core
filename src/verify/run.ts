@@ -103,8 +103,9 @@ export function takeKeys(file: string | undefined, names: string[], environ: Nod
 
 /** Files the PR changes (`base...head`); null when git cannot tell. */
 export function changedFiles(root: string, base: string, head: string): string[] | null {
-  const r = spawnSync("git", ["-C", root, "diff", "--name-only", "--no-renames", `${base}...${head}`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
-  return r.status === 0 ? r.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : null;
+  // NUL-separated: git would quote unusual names line by line.
+  const r = spawnSync("git", ["-C", root, "diff", "--name-only", "--no-renames", "-z", `${base}...${head}`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
+  return r.status === 0 ? r.stdout.split("\0").filter(Boolean) : null;
 }
 
 /** Which services run for real: a key is stored and the PR changes a file of that service's code. */
@@ -161,8 +162,6 @@ function env(ctx: RunContext): NodeJS.ProcessEnv {
   const unset = Object.fromEntries(services.map((a) => [a.name, undefined]));
   return {
     ...process.env,
-    ...unset,
-    ...keyEnv,
     GESPANN_PR: ctx.pr,
     GESPANN_HEAD: ctx.head,
     GESPANN_BASE: ctx.base,
@@ -172,6 +171,9 @@ function env(ctx: RunContext): NodeJS.ProcessEnv {
     GESPANN_ENV: envFile(ctx),
     GESPANN_PROJECT: dirname(resolve(ctx.recipeFile)),
     ...readEnvFile(envFile(ctx)),
+    // Last: a step's $GESPANN_ENV line cannot hand out a key gespann withheld, or replace the stored one.
+    ...unset,
+    ...keyEnv,
   };
 }
 
@@ -182,7 +184,8 @@ function runStep(ctx: RunContext, step: Step, timeoutMs: number): { ok: boolean;
   if (r.stderr) appendFileSync(logFile(ctx), scrub(r.stderr));
   const ok = r.status === 0;
   log(ctx, `${ok ? "✓" : "✗"} ${step.name}${ok ? "" : ` (exit ${r.status ?? r.signal ?? r.error?.message})`}`);
-  return { ok, stdout: r.stdout ?? "" };
+  // Scrubbed too: `flags.run`'s output becomes the flag sheet the tester reads.
+  return { ok, stdout: scrub(r.stdout ?? "") };
 }
 
 /** Starts a long-running command in its own process group so teardown can stop all of it. */
@@ -388,6 +391,13 @@ export function contextOf(work: string): RunContext {
 export function switchFlag(ctx: RunContext, r: Recipe, key: string, state: "on" | "off"): { ok: boolean; output: string } {
   if (!r.flags?.switch) return { ok: false, output: "the recipe has no flags.switch" };
   useAccess(ctx, r, takeKeys(undefined, r.access.map((a) => a.name)));
+  // The orchestrator's keys went with prepare: a switch that restarts the app restarts it on the fake,
+  // so the result must not claim the real service for what is tested after it.
+  const uses = readAccess(ctx.work);
+  if (uses.some((u) => u.real && !keyEnv[u.name])) {
+    const lost = uses.map((u) => (u.real && !keyEnv[u.name] ? { ...u, real: false, why: `${u.why}, but a feature-flag switch ran without the key, so checks after it may have used the fake` } : u));
+    writeFileSync(join(ctx.work, ACCESS_FILE), `${JSON.stringify(lost, null, 2)}\n`);
+  }
   log(ctx, `▶ flag ${key} ${state}`);
   const res = spawnSync("bash", ["-c", r.flags.switch], { cwd: ctx.root, env: { ...env(ctx), GESPANN_FLAG: key, GESPANN_FLAG_STATE: state }, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   const output = scrub(`${res.stdout ?? ""}${res.stderr ?? ""}`);
