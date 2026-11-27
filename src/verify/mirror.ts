@@ -397,7 +397,7 @@ const CLIENT = String.raw`
       tag: el.tagName,
       path: path,
       id: el.id || "",
-      testid: el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy") || "",
+      testid: testid(el),
       name: el.getAttribute("name") || "",
       type: el.tagName === "INPUT" ? el.type : el.getAttribute("type") || "",
       href: el.getAttribute("href") || "",
@@ -417,13 +417,17 @@ const CLIENT = String.raw`
     return true;
   }
 
-  // How well an element matches a description; -1 when it is another field (another type, name or id).
+  function testid(el) { return el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy") || ""; }
+
+  // How well an element matches a description; -1 when it is another field (another type, name or test id).
+  // A differing DOM id alone does not count: frameworks generate them.
   function same(el, d) {
     if (el.tagName !== d.tag) return -1;
     if ((el.tagName === "INPUT" ? el.type : el.getAttribute("type") || "") !== d.type) return -1;
-    if ((d.name && el.getAttribute("name") && el.getAttribute("name") !== d.name) || (d.id && el.id && el.id !== d.id)) return -1;
+    if (d.name && el.getAttribute("name") && el.getAttribute("name") !== d.name) return -1;
+    if (d.testid && testid(el) && testid(el) !== d.testid) return -1;
     var score = 0;
-    if (d.testid && (el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy")) === d.testid) score += 8;
+    if (d.testid && testid(el) === d.testid) score += 8;
     if (d.id && el.id === d.id) score += 6;
     if (d.href && el.getAttribute("href") === d.href) score += 4;
     if (d.name && el.getAttribute("name") === d.name) score += 4;
