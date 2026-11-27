@@ -158,37 +158,38 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
   const recommended = c.models.find((m) => m.recommended);
   const saves = useRef({ tail: Promise.resolve() as Promise<unknown>, n: 0 });
   const selected = picked ?? c.model ?? "";
-  const pick = (id: string) => {
-    setCustomOpen(false);
-    setCustomDraft(null);
+  /** Saves after the saves still on their way; only the newest one reloads, clears the pick and reports. */
+  const queue = (model: string, done?: () => void) => {
     setModelError(null);
-    setPicked(id);
     const n = ++saves.current.n;
     const last = () => n === saves.current.n;
+    let ok = false;
     saves.current.tail = saves.current.tail
-      .then(() => api("/settings/codex/model", { model: id }))
+      .then(() => api("/settings/codex/model", { model }))
       .then(
-        () => undefined,
+        () => void (ok = true),
         (err: Error) => last() && setModelError(err.message),
       )
       .then(async () => {
         if (!last()) return;
         await reload();
-        if (last()) setPicked(null);
+        if (!last()) return;
+        setPicked(null);
+        if (ok) done?.();
       });
   };
-  /** A typed model id: saved after the row picks still on their way, and it has the last word over them. */
-  const saveCustom = async (next: string) => {
-    saves.current.n++;
-    const saved = saves.current.tail.then(() => api("/settings/codex/model", { model: next }));
-    saves.current.tail = saved.catch(() => undefined);
-    // On an error the typed id stays in the field.
-    if (await run(() => saved, setModelError)) {
-      setPicked(null);
+  const pick = (id: string) => {
+    setCustomOpen(false);
+    setCustomDraft(null);
+    setPicked(id);
+    queue(id);
+  };
+  /** A typed model id; on an error it stays in the field. */
+  const saveCustom = (next: string) =>
+    queue(next, () => {
       if (!next || c.models.some((m) => m.id === next)) setCustomOpen(false);
       setCustomDraft(null);
-    }
-  };
+    });
   return (
     <>
       <Block title="ChatGPT account">
@@ -255,7 +256,7 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
                 className="flex flex-wrap items-center gap-2 bg-foreground/[0.04] px-4 py-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void saveCustom(customValue.trim());
+                  saveCustom(customValue.trim());
                 }}
               >
                 <Radio on />
