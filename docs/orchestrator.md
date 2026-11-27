@@ -73,7 +73,10 @@ OpenRouter and stores it sealed in `users.openrouter_key` (same scheme as `codex
 Codex step through `with_agent`: the Codex sign-in, or the OpenRouter key in the sandbox for the length of the step
 (see `orchestrator/src/codex.rs`). Claude Code, Copilot and Grok keep their sealed key, its label and an optional
 model in `users.<agent>_key`, `_label` and `_model`; their steps run `gespann agent <agent>` (src/verify/agents.ts) with the
-key in `~/.gespann-agent-key` for the start of the step. `AGENT_READY` (in both `db.ts` and `db.rs`) says whether an owner's agent can run;
+key in `~/.gespann-agent-key` for the start of the step. Copilot and Grok also sign in with a device code
+(`<agent>_login_state` pending → the orchestrator's `agent_auth::run_agent_login`, progress in `<agent>_login`): Copilot's
+token lands in `copilot_key`, Grok's auth.json sealed in `grok_auth`, which `with_grok_auth` refreshes and writes into the
+sandbox for a step. `AGENT_READY` (in both `db.ts` and `db.rs`) says whether an owner's agent can run;
 setup, suggest and the automatic first setup wait for it.
 
 Codex sign-in: the UI only sets the user's `codex_state` to `pending` (`codex_login` null). The

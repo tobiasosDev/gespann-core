@@ -218,7 +218,8 @@ test("keys are checked with their provider; a Claude token by its form", async (
   await assert.rejects(checkAgentKey("claude", `sk-ant-api03-${"b".repeat(30)}`, f), /Anthropic does not accept this key/);
   await assert.rejects(checkAgentKey("claude", "sk-or-v1-abc", f), /sk-ant-api/);
   assert.equal((await checkAgentKey("copilot", `github_pat_${"g".repeat(30)}`, f)).label, "GitHub @tobi · github_pat_g…gggg");
-  await assert.rejects(checkAgentKey("copilot", `ghp_${"h".repeat(36)}`, f), /GitHub does not accept this token/);
+  await assert.rejects(checkAgentKey("copilot", `gho_${"h".repeat(36)}`, f), /GitHub does not accept this token/);
+  await assert.rejects(checkAgentKey("copilot", `ghp_${"g".repeat(36)}`, f), /classic tokens \(ghp_\) do not work with Copilot/, "Copilot refuses classic tokens");
   assert.match((await checkAgentKey("grok", `xai-${"x".repeat(40)}`, f)).label, /^xAI key "gespann"/);
   await assert.rejects(checkAgentKey("grok", `xai-${"y".repeat(40)}`, f), /xAI does not accept this key/);
   const down = (async () => {
@@ -283,4 +284,28 @@ test("API: Claude Code, Copilot and Grok keys and models; setup starts once the 
   assert.equal((await post("/settings/agents/copilot/logout", {})).status, 200);
   assert.equal(db.agentReady(u.id), false);
   assert.equal(db.agent(u.id)?.claude.connected, true, "removing one key leaves the others");
+  assert.equal((await post("/settings/agents/claude/logout", {})).status, 200, "Claude Code has no sign-in columns to clear");
+  assert.equal(db.agent(u.id)?.claude.connected, false);
+
+  // Signing in with a device code: the orchestrator runs it and fills in the code, then the key or sign-in.
+  assert.equal((await post("/settings/agents/claude/login", {})).status, 404, "Claude Code has no device-code sign-in");
+  assert.equal((await post("/settings/agents/grok/login", {})).status, 409, "no orchestrator, no sign-in");
+  db.setSetting("orchestrator", JSON.stringify({ kind: "ssh", parallel: 2, why: "", instance: "i", beat: new Date().toISOString() }));
+  assert.equal((await post("/settings/agent", { agent: "grok" })).status, 200);
+  assert.equal((await post("/settings/agents/grok/logout", {})).status, 200);
+  assert.equal((await post("/settings/agents/grok/login", {})).status, 200);
+  let grok = (await get("/settings")).keyAgents.find((a: { id: string }) => a.id === "grok");
+  assert.deepEqual([grok.connected, grok.login.state, grok.signIn], [false, "pending", "Sign in with xAI"]);
+  assert.ok(grok.steps.length >= 2, "the card says how to get a key");
+  db.setKeyAgent(u.id, "grok", { login: JSON.stringify({ url: "https://accounts.x.ai/oauth2/device?user_code=AB12-CD34", code: "AB12-CD34", lines: "" }) });
+  grok = (await get("/settings")).keyAgents.find((a: { id: string }) => a.id === "grok");
+  assert.equal(grok.login.code, "AB12-CD34");
+  // What the orchestrator writes once the code was confirmed.
+  db.setKeyAgent(u.id, "grok", { auth: "sealed-auth-json", label: "xAI account t@example.com", login_state: "connected", login: null });
+  assert.equal(db.agentReady(u.id), true, "the sign-in alone runs Grok");
+  grok = (await get("/settings")).keyAgents.find((a: { id: string }) => a.id === "grok");
+  assert.deepEqual([grok.connected, grok.label], [true, "xAI account t@example.com"]);
+  assert.equal(JSON.stringify(grok).includes("sealed-auth-json"), false, "the sign-in never leaves the server");
+  assert.equal((await post("/settings/agents/grok/logout", {})).status, 200);
+  assert.equal(db.agentReady(u.id), false, "signing out removes the sign-in");
 });

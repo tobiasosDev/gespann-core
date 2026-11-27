@@ -37,7 +37,7 @@ use crate::sandbox::{run_long, CreateOpts, Purpose, Sandboxes, WaitOpts};
 use crate::Ctx;
 
 /// Who runs the model for a job's Codex steps.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     /// The owner's ChatGPT plan (`codex login`).
@@ -115,6 +115,9 @@ pub struct Agent {
     /// The OpenRouter model's context size, when OpenRouter named it: Codex knows only OpenAI's models.
     #[serde(default)]
     pub context: Option<i64>,
+    /// Grok signed in with xAI (its auth.json) instead of an API key.
+    #[serde(default)]
+    pub auth: bool,
 }
 
 /// Where the OpenRouter key lies in the sandbox's home while a Codex step runs.
@@ -152,6 +155,9 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    if agent.auth {
+        return crate::agent_auth::with_grok_auth(ctx, j, key, owner_id, sandbox_id, f).await;
+    }
     match agent.provider.key_file() {
         None => with_codex(ctx, j, key, owner_id, sandbox_id, f).await,
         Some(key_file) => with_key(ctx, j, key, owner_id, sandbox_id, agent, key_file, f).await,
@@ -377,7 +383,13 @@ pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) 
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
-    let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE} ~/{AGENT_KEY_FILE}"), 30).await?;
+    // Grok may have refreshed its sign-in too; xAI may hand out each refresh token once.
+    if let Some(now) = sb.read_file(sandbox_id, &format!("{}/{}", sb.home(sandbox_id), crate::agent_auth::GROK_AUTH_FILE)).await? {
+        if let Err(e) = crate::agent_auth::keep_grok(ctx, owner_id, &now) {
+            crate::log("warn", &format!("could not keep the refreshed Grok sign-in of user {owner_id}: {e:#}"));
+        }
+    }
+    let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE} ~/{AGENT_KEY_FILE} ~/{}", crate::agent_auth::GROK_AUTH_FILE), 30).await?;
     if rm.exit_code != Some(0) {
         anyhow::bail!("could not remove the agent's sign-in from the sandbox: {}", rm.stderr.trim());
     }
@@ -394,7 +406,7 @@ pub fn login_progress(tail: &str) -> serde_json::Value {
     let (ansi, url, code) = RE.get_or_init(|| {
         (
             regex::Regex::new(r"\x1b\[[0-9;]*m").expect("regex"),
-            regex::Regex::new(r"https://\S*(?:auth\.openai\.com|chatgpt\.com)\S*").expect("regex"),
+            regex::Regex::new(r"https://\S*(?:auth\.openai\.com|chatgpt\.com|github\.com/login/device|accounts\.x\.ai)\S*").expect("regex"),
             regex::Regex::new(r"(?-u:\b)([A-Z0-9]{4,5}-[A-Z0-9]{4,6})(?-u:\b)").expect("regex"),
         )
     });
@@ -501,10 +513,10 @@ mod tests {
 
     #[test]
     fn codex_args_per_provider() {
-        let codex = Agent { provider: Provider::Codex, model: Some("gpt-6.2-sol".into()), context: None };
+        let codex = Agent { provider: Provider::Codex, model: Some("gpt-6.2-sol".into()), context: None, auth: false };
         assert_eq!(codex.codex_args(), (String::new(), " -m 'gpt-6.2-sol'".to_string()));
-        assert_eq!(Agent { provider: Provider::Codex, model: None, context: None }.codex_args().1, "");
-        let or = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
+        assert_eq!(Agent { provider: Provider::Codex, model: None, context: None, auth: false }.codex_args().1, "");
+        let or = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000), auth: false };
         let (env, args) = or.codex_args();
         assert_eq!(
             env,

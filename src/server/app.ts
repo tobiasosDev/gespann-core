@@ -12,7 +12,7 @@ import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
-import { AGENT_PROVIDERS, type Db, type Project, type User } from "./db.ts";
+import { AGENT_PROVIDERS, type Db, type Project, SIGN_IN_AGENTS, type User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
@@ -269,7 +269,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     return c.json({
       agent: agent?.agent ?? "codex",
       openrouter: { connected: !!agent?.openrouter, label: agent?.openrouter_label ?? null, model: agent?.openrouter_model ?? null },
-      keyAgents: KEY_AGENTS.map((a) => ({ ...KEY_AGENT_INFO[a], ...(agent?.[a] ?? { connected: false, label: null, model: null }) })),
+      keyAgents: KEY_AGENTS.map((a) => ({ ...KEY_AGENT_INFO[a], ...(agent?.[a] ?? { connected: false, label: null, model: null, login: null }) })),
       codex: {
         state: codex?.codex_state ?? "none",
         account: codex?.codex_account ?? null,
@@ -380,7 +380,9 @@ export function createApp(d: AppDeps): Hono<Env> {
       if (err instanceof AgentKeyError) return c.json({ error: err.message }, err.status);
       throw err;
     }
-    db.setKeyAgent(me(c).id, agent, { key: seal(config.sessionSecret, checked.key), label: checked.label });
+    // A pasted key ends a sign-in still waiting for its code, so that sign-in cannot replace it later.
+    const signIn = (SIGN_IN_AGENTS as readonly string[]).includes(agent) ? { login_state: null, login: null } : {};
+    db.setKeyAgent(me(c).id, agent, { key: seal(config.sessionSecret, checked.key), label: checked.label, ...signIn });
     db.autoSetup(me(c).id);
     return c.json({ ok: true, label: checked.label });
   });
@@ -388,7 +390,19 @@ export function createApp(d: AppDeps): Hono<Env> {
   app.post("/api/settings/agents/:agent/logout", (c) => {
     const agent = c.req.param("agent");
     if (!isKeyAgent(agent)) throw new HttpError(404, "no such agent");
-    db.setKeyAgent(me(c).id, agent, { key: null, label: null });
+    // Only Copilot and Grok have sign-in columns; Grok's sign-in itself goes too.
+    const signIn = (SIGN_IN_AGENTS as readonly string[]).includes(agent) ? { login_state: null, login: null } : {};
+    db.setKeyAgent(me(c).id, agent, { key: null, label: null, ...signIn, ...(agent === "grok" ? { auth: null } : {}) });
+    return c.json({ ok: true });
+  });
+
+  // Copilot and Grok sign in with a device code: the orchestrator runs `copilot login` or `grok login` in a
+  // short-lived sandbox for every pending user and shows the code here, as for Codex.
+  app.post("/api/settings/agents/:agent/login", (c) => {
+    const agent = c.req.param("agent");
+    if (!isKeyAgent(agent) || !KEY_AGENT_INFO[agent].signIn) throw new HttpError(404, "no sign-in for this agent");
+    if (!orchestratorPresent(db)) throw new HttpError(409, "the orchestrator is not running, and the sign-in needs it; try again in a minute");
+    if (db.agent(me(c).id)?.[agent].login?.state !== "pending") db.setKeyAgent(me(c).id, agent, { login_state: "pending", login: null });
     return c.json({ ok: true });
   });
 

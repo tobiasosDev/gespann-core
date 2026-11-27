@@ -51,12 +51,16 @@ export type AgentProvider = "codex" | "openrouter" | KeyAgentId;
 export interface KeyAgent {
   id: KeyAgentId;
   name: string;
-  keyHint: string;
   keyUrl: string;
   models: string[];
+  /** How to get the key, step by step. */
+  steps: string[];
+  /** The device-code sign-in's button (Copilot, Grok); null: key only. */
+  signIn: string | null;
   connected: boolean;
   label: string | null;
   model: string | null;
+  login: { state: "pending" | "connected" | "failed" | string; url: string | null; code: string | null; lines: string } | null;
 }
 
 /** A model the OpenRouter picker offers; the field takes any other OpenRouter id too. */

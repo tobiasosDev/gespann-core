@@ -192,7 +192,7 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
   mirror --url u --sizes phone-s,desktop [--notes f] [--out f] [--port n]
                                          show the copy at every size side by side; what you do in
                                          one size happens in all (until stopped)
-  agent <claude|copilot|grok> --prompt f --last f --log f --key-file f [--model m] [--effort e]
+  agent <claude|copilot|grok> --prompt f --last f --log f [--key-file f] [--model m] [--effort e]
                                          run one agent step with a tester agent other than Codex
                                          (used by the orchestrator)
   shot <file.png>                        save a screenshot of the desktop (for the tester)
@@ -223,7 +223,8 @@ export async function main(argv: string[]): Promise<void> {
       promptFile: need(str(args, "prompt"), "--prompt"),
       lastFile: need(str(args, "last"), "--last"),
       logFile: need(str(args, "log"), "--log"),
-      keyFile: need(str(args, "key-file"), "--key-file"),
+      // Only Grok may run on its own sign-in (~/.grok/auth.json); the others need their key.
+      keyFile: agent === "grok" ? str(args, "key-file") : need(str(args, "key-file"), "--key-file"),
     });
     return;
   }

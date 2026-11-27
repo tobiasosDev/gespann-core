@@ -1,6 +1,7 @@
 //! gespann's orchestrator: the job queue, sandboxes and every job step, apart from the UI.
 //! See docs/orchestrator.md.
 
+pub mod agent_auth;
 pub mod codex;
 pub mod config;
 pub mod db;

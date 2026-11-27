@@ -301,19 +301,22 @@ export interface AgentRun {
   promptFile: string;
   lastFile: string;
   logFile: string;
-  keyFile: string;
+  /** The user's key; without one the agent signs in with its own login file (Grok's ~/.grok/auth.json). */
+  keyFile?: string;
 }
 
 /** Runs one agent step; resolves with the agent's exit code. */
 export async function runAgent(r: AgentRun): Promise<number> {
-  // The key leaves its file before anything else runs; without one the agent does not start.
+  // The key leaves its file before anything else runs; a key file without a key does not start the agent.
   let key = "";
-  try {
-    key = readFileSync(r.keyFile, "utf8").trim();
-  } finally {
-    rmSync(r.keyFile, { force: true });
+  if (r.keyFile) {
+    try {
+      key = readFileSync(r.keyFile, "utf8").trim();
+    } finally {
+      rmSync(r.keyFile, { force: true });
+    }
+    if (!key) throw new Error("no key for the agent: add it in Settings");
   }
-  if (!key) throw new Error("no key for the agent: add it in Settings");
   const home = process.env.HOME ?? homedir();
   // Grok installs into ~/.grok/bin, npm into NPM_CONFIG_PREFIX (on PATH in every sandbox).
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${join(home, ".grok", "bin")}:${process.env.PATH ?? ""}` };
@@ -343,7 +346,7 @@ export async function runAgent(r: AgentRun): Promise<number> {
   const l = launch(r.agent, { model: r.model, effort: r.effort, prompt, promptFile: r.promptFile, mcpFile });
   const log = createWriteStream(r.logFile);
   const last = new LastMessage(r.agent);
-  const child = spawn(l.bin, l.args, { env: { ...env, ...l.env, [keyVariable(r.agent, key)]: key }, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(l.bin, l.args, { env: { ...env, ...l.env, ...(key ? { [keyVariable(r.agent, key)]: key } : {}) }, stdio: ["pipe", "pipe", "pipe"] });
   key = "";
   const forward = (sig: NodeJS.Signals) => () => child.kill(sig);
   const onTerm = forward("SIGTERM");

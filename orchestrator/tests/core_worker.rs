@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_fake::Fake;
+use gespann_orchestrator::agent_auth::keep_grok;
 use gespann_orchestrator::codex::{give_back, open, seal, with_agent, with_codex, Agent, Provider};
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, text, Db};
@@ -170,7 +171,7 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     let sb = Arc::new(Fake::default());
     let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
     let (u, _) = user(&c.db);
-    let agent = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: None };
+    let agent = Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: None, auth: false };
     let j = Journal::new(c.db.clone(), 9);
     let err = with_agent(&c, &j, "a1.tester", u, "box", &agent, || async { Ok(()) }).await.unwrap_err();
     assert!(err.to_string().starts_with("Add your OpenRouter key in Settings first"), "{err}");
@@ -222,7 +223,7 @@ async fn with_agent_on_claude_copilot_or_grok_puts_that_key_in_the_sandbox_only_
         let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
         let (u, _) = user(&c.db);
         // No model: the CLI's default model, which needs no choice in Settings.
-        let a = Agent { provider, model: None, context: None };
+        let a = Agent { provider, model: None, context: None, auth: false };
         let j = Journal::new(c.db.clone(), 9);
         // An OpenRouter key is not this agent's key.
         c.db.set_codex(u, &[("agent", text(agent)), ("openrouter_key", text(seal(SECRET, "sk-or-v1-other")))]).unwrap();
@@ -246,3 +247,75 @@ async fn with_agent_on_claude_copilot_or_grok_puts_that_key_in_the_sandbox_only_
         assert_eq!(sb.file(file), None, "{agent}: give_back removes the key");
     }
 }
+
+#[tokio::test]
+async fn grok_signed_in_with_xai_gets_its_auth_json_only_while_the_step_runs_and_keeps_a_refresh() {
+    let sb = Arc::new(Fake::default());
+    let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
+    let (u, _) = user(&c.db);
+    // Valid for 5 more hours: longer than any step, so no refresh at xAI.
+    let at = |ms: i64| chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339();
+    let now = chrono::Utc::now().timestamp_millis();
+    let auth = |created: i64, key: &str| serde_json::json!({ "https://auth.x.ai::c": { "key": key, "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r1", "email": "t@example.com", "user_id": "u-1", "oidc_client_id": "c" } }).to_string();
+    let stored = auth(now, "a1");
+    c.db.set_codex(u, &[("agent", text("grok")), ("grok_auth", text(seal(SECRET, &stored)))]).unwrap();
+    let row = c.db.agent(u).unwrap().unwrap();
+    assert!(row.auth, "signed in, no key: the sign-in runs Grok");
+    let a = Agent { provider: Provider::Grok, model: None, context: None, auth: true };
+    let file = "/home/user/.grok/auth.json";
+    let refreshed = auth(now + 1000, "a2");
+    with_agent(&c, &Journal::new(c.db.clone(), 9), "a1.tester", u, "box", &a, || async {
+        assert_eq!(sb.file(file).as_deref(), Some(stored.as_str()), "the sign-in is in the sandbox while the step runs");
+        assert_eq!(sb.file("/home/user/.gespann-agent-key"), None, "no key file");
+        // Grok refreshed its sign-in during the step.
+        sb.files.lock().unwrap().insert(file.to_string(), refreshed.clone());
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(sb.file(file), None, "removed after the step");
+    assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), refreshed, "the refreshed copy is kept");
+    assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains("a1") && !e.contains("r1")), "the sign-in never appears in a command");
+    // An older copy never replaces a newer one.
+    with_agent(&c, &Journal::new(c.db.clone(), 10), "a1.tester", u, "box", &a, || async {
+        sb.files.lock().unwrap().insert(file.to_string(), stored.clone());
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), refreshed);
+    // A newer copy of another xAI account (an old job after the owner switched accounts) is not kept either.
+    let other = serde_json::json!({ "https://auth.x.ai::c": { "key": "b1", "user_id": "someone-else", "create_time": at(now + 9000), "expires_at": at(now + 9_000_000), "refresh_token": "r9", "oidc_client_id": "c" } }).to_string();
+    let mine = |created: i64| serde_json::json!({ "https://auth.x.ai::c": { "key": "a3", "user_id": "u-1", "create_time": at(created), "expires_at": at(created + 5 * 3_600_000 + 60_000), "refresh_token": "r3", "oidc_client_id": "c" } }).to_string();
+    c.db.set_codex(u, &[("grok_auth", text(seal(SECRET, &mine(now))))]).unwrap();
+    assert!(!keep_grok(&c, u, &other).unwrap());
+    let no_id = serde_json::json!({ "https://auth.x.ai::c": { "key": "b2", "email": "x@example.com", "create_time": at(now + 9000), "expires_at": at(now + 9_000_000), "refresh_token": "r8", "oidc_client_id": "c" } }).to_string();
+    assert!(!keep_grok(&c, u, &no_id).unwrap(), "a copy without a user id is not kept");
+    // A refresh the CLI made during a run that was cancelled and taken over is kept by give_back.
+    sb.files.lock().unwrap().insert(file.to_string(), mine(now + 5000));
+    give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();
+    assert_eq!(open(SECRET, &c.db.grok_auth(u).unwrap().unwrap()).unwrap(), mine(now + 5000));
+    assert_eq!(sb.file(file), None, "and removed");
+    // Signed out meanwhile: nothing comes back.
+    c.db.set_codex(u, &[("grok_auth", rusqlite::types::Value::Null)]).unwrap();
+    assert!(!keep_grok(&c, u, &mine(now + 6000)).unwrap());
+    assert_eq!(c.db.grok_auth(u).unwrap(), None);
+    // An API key wins over the sign-in.
+    c.db.set_codex(u, &[("grok_key", text(seal(SECRET, "xai-k")))]).unwrap();
+    assert!(!c.db.agent(u).unwrap().unwrap().auth);
+}
+
+#[test]
+fn copilot_and_grok_sign_ins_wait_for_the_orchestrator() {
+    let db = Db::memory().unwrap();
+    let (u, _) = user(&db);
+    assert!(db.pending_agent_logins().unwrap().is_empty());
+    // Only one of them started: the other's state is still null.
+    db.set_codex(u, &[("grok_login_state", text("pending"))]).unwrap();
+    assert_eq!(db.pending_agent_logins().unwrap(), vec![(u, Provider::Grok)]);
+    db.set_codex(u, &[("copilot_login_state", text("pending")), ("grok_login_state", text("pending"))]).unwrap();
+    assert_eq!(db.pending_agent_logins().unwrap(), vec![(u, Provider::Copilot), (u, Provider::Grok)]);
+    db.set_codex(u, &[("copilot_login_state", text("connected"))]).unwrap();
+    assert_eq!(db.pending_agent_logins().unwrap(), vec![(u, Provider::Grok)]);
+}
+
