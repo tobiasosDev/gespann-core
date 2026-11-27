@@ -50,6 +50,8 @@ export interface RunRow {
   error: string | null;
   /** JSON list of the files in conflict with the base: the PR was not tested. */
   conflict: string | null;
+  /** The run has a video of just the change; set in a project's run list. */
+  clip?: boolean;
 }
 
 export type CodexState = "none" | "pending" | "connected" | "failed";
