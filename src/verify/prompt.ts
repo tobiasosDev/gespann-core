@@ -1,4 +1,5 @@
 import { loadRecipe, type Recipe } from "./recipe.ts";
+import { mirrorCanvas } from "./mirror.ts";
 import type { Viewport } from "./viewports.ts";
 
 /**
@@ -31,6 +32,8 @@ export interface TesterInput {
   issues?: string[];
   /** Screen sizes the team wants every check run at; empty: the browser's own size. */
   viewports?: Viewport[];
+  /** The mirror page showing the copy at every size at once (two sizes or more); see mirror.ts. */
+  mirror?: string;
 }
 
 /** The generic tester prompt. Project knowledge comes from the criteria, the recipe and its addendum. */
@@ -39,19 +42,25 @@ export function testerPrompt(t: TesterInput): string {
   const issues = t.issues ?? [];
   const sizes = t.viewports ?? [];
   const sizeList = sizes.map((v) => `${v.name} ${v.width}x${v.height}`).join(", ");
+  // The mirror shows every size at once; without it (one size, or it did not start) the tester resizes.
+  const mirror = sizes.length > 1 ? t.mirror : undefined;
+  const canvas = mirror ? mirrorCanvas(sizes) : undefined;
+  // With the mirror, every page of the copy is opened under the mirror's address.
+  const site = mirror ? new URL(mirror).origin : t.url;
+  const widest = sizes.reduce<Viewport | undefined>((a, v) => (!a || v.width > a.width ? v : a), undefined);
   const parts: string[] = [];
   parts.push(
     `You are the independent tester for pull request #${t.pr} of ${t.repo}, head ${t.head}, merged onto base ${t.base}. You did not write this change. You test it the way a careful human tester would, and you report what you saw.`,
     "",
-    `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
+    `A production-near copy of the app built from this PR runs at ${t.url}. Use only that URL${mirror ? `, through the mirror at ${site}: the same pages under another address` : ""}. It is not production: data in it is disposable, and external providers are fakes or recordings.`,
   );
   if (r.login) {
-    const where = r.login.path ? ` at ${new URL(r.login.path, t.url).toString()}` : "";
+    const where = r.login.path ? ` at ${new URL(r.login.path, site).toString()}` : "";
     parts.push(`Sign in through the normal login page${where} with ${r.login.user} / ${r.login.password}. This account exists only on the copy.${r.login.note ? ` ${r.login.note}` : ""}`);
   }
   if (r.flags) {
     parts.push(
-      `${t.work}/flags.md says which feature flags the copy runs. Judge the app in that state.${r.flags.admin ? ` When the change adds or changes a flag, also switch it at ${new URL(r.flags.admin, t.url).toString()} and test both states.` : ""}`,
+      `${t.work}/flags.md says which feature flags the copy runs. Judge the app in that state.${r.flags.admin ? ` When the change adds or changes a flag, also switch it at ${new URL(r.flags.admin, site).toString()} and test both states.` : ""}`,
     );
   }
   if (r.seeds.length) {
@@ -80,14 +89,19 @@ export function testerPrompt(t: TesterInput): string {
       : []),
     `2. Write a short test plan from the diff and the criteria above${issues.length ? ", and at least one check per issue goal" : ""}, not from the PR text alone: the checks that matter, usually 4 to 8, not every variant. Do not read unrelated source files once the diff is clear. Before each action, state the result you expect.`,
     `   People watch the run live. As soon as the plan stands, write it to ${t.work}/progress.json, exactly this shape: {"checks":[{"expect":"...","result":null}],"now":"what you are doing, in a few plain words"}. Update the file only when a check starts ("result": "running", updating "now") and when a check finishes ("result": "pass" | "fail" | "blocked", with a short "observed"), not between individual clicks; when a check finishes, combine taking its screenshot and updating progress.json in one shell command. It only shows progress; verdict.json stays the result.`,
-    `3. Drive the change in the copy the way a user would, with the computer tools: open ${t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
+    `3. Drive the change in the copy the way a user would, with the computer tools: open ${mirror ?? t.url} in Chrome, look, click, type, look again. Move between pages through the app's own links and menus. Check the changed behaviour and one neighbouring flow it could break.`,
     ...(t.testerNote ? [`   ${t.testerNote}`] : []),
-    ...(sizes.length
+    ...(mirror && canvas
       ? [
-          `   The team wants the app tested at ${sizes.length === 1 ? "this screen size" : "these screen sizes"}: ${sizeList}. Run every check of your plan at each size, one size after the other: set the browser's viewport to exactly that width and height first (the browser tool's resize, e.g. browser_resize), reload the page, and confirm with \`window.innerWidth\` and \`window.innerHeight\` that the page sees that size. Look for what breaks only at that size: content cut off or overlapping, horizontal scrolling, a menu that cannot be opened, buttons out of reach or too small to tap.`,
+          `   The team wants the app tested at these screen sizes: ${sizeList}. Test them all at once, not one after the other. The mirror at ${mirror} shows the copy once per size, side by side, and repeats what you do in the size you drive in all the others: clicks, typing, selects, file uploads, form submits, Enter, Escape and arrow keys, scrolling and page changes. First set the browser's viewport to ${canvas.width}x${canvas.height} (the browser tool's resize, e.g. browser_resize) and open the mirror; any page of the copy opened under the mirror's address (${new URL(mirror).origin}/<path>) opens in the mirror at that path. You drive ${widest?.name ?? "the widest size"} first, marked "you drive this size"; only that size appears in your page snapshot, so act there. Go through each check once and look at every size in the screenshot.`,
+          `   The mirror's bar lists notes, newest first (also in ${t.work}/mirror-notes.txt): a step a size could not repeat, mostly because its element sits behind a menu or is hidden at that size, and pages wider than their size (horizontal scrolling). The other sizes follow you to the new page anyway. When a note concerns what you test, press that size's button under "Drive" and do the step there the way a user would (open the menu, scroll to the button), then switch back. Look for what breaks only at some sizes: content cut off or overlapping, horizontal scrolling, a menu that cannot be opened, buttons out of reach or too small to tap. A flow that leaves the copy for another site cannot be mirrored: open that page in its own tab and check the sizes there one by one with browser_resize.`,
         ]
-      : []),
-    `4. Save one screenshot per check with \`gespann shot ${t.out}/<short-name>.png\`, at the moment that proves its result, with the changed part in view.${sizes.length > 1 ? " Each check gets one screenshot per size, the size in the name (e.g. `checkout-small-phone.png`)." : ""} No screenshots of steps in between. Never save the same screen twice: when two checks end on the same screen (the same dialog with another option selected counts as the same screen), both name the same file in proof. A reviewer reads every picture, so fewer and clearer is better.`,
+      : sizes.length
+        ? [
+            `   The team wants the app tested at ${sizes.length === 1 ? "this screen size" : "these screen sizes"}: ${sizeList}. Run every check of your plan at each size, one size after the other: set the browser's viewport to exactly that width and height first (the browser tool's resize, e.g. browser_resize), reload the page, and confirm with \`window.innerWidth\` and \`window.innerHeight\` that the page sees that size. Look for what breaks only at that size: content cut off or overlapping, horizontal scrolling, a menu that cannot be opened, buttons out of reach or too small to tap.`,
+          ]
+        : []),
+    `4. Save one screenshot per check with \`gespann shot ${t.out}/<short-name>.png\`, at the moment that proves its result, with the changed part in view.${mirror ? " It shows the mirror with every size; scroll first so the part that proves the result is in view. When a size needs a step of its own, save that moment too." : sizes.length > 1 ? " Each check gets one screenshot per size, the size in the name (e.g. `checkout-small-phone.png`)." : ""} No screenshots of steps in between. Never save the same screen twice: when two checks end on the same screen (the same dialog with another option selected counts as the same screen), both name the same file in proof. A reviewer reads every picture, so fewer and clearer is better.`,
     `5. Write ${t.out}/verdict.json, exactly this shape:`,
     `   {"verdict":"PASS"|"FAIL"|"BLOCKED"|"SKIP","summary":"one or two sentences","checks":[{"expect":"...","observed":"...","result":"pass"|"fail"|"blocked","proof":["file.png"],"fix":"only for blocked checks, see below","pre_existing":"only for failed checks that behave the same on the base, see below"}],${issues.length ? '"goals":[{"issue":"#12","goal":"what the issue asks for, one sentence","observed":"what the PR achieves of it","result":"met"|"missed"|"blocked","proof":["file.png"]}],' : ""}"proof":["file names in ${t.out}"]}`,
     ...(issues.length
@@ -95,7 +109,11 @@ export function testerPrompt(t: TesterInput): string {
           `   One goal per issue (${issues.join(", ")}), judged against the issue's description. met: what the issue asks for works in the copy. missed: it does not, or the PR does only part of it, or it does something else; say in observed what is missing. blocked: the copy cannot show it (same rule as a blocked check). A missed goal is a FAIL even when every check passed; PASS needs every goal met.`,
         ]
       : []),
-    ...(sizes.length > 1 ? [`   One check per size: start \`expect\` with the size in brackets, e.g. "[${sizes[0]?.name} ${sizes[0]?.width}x${sizes[0]?.height}] ...". A check that works at one size and fails at another is a fail.`] : []),
+    ...(mirror
+      ? [`   Each check covers every size. A check that works at one size and fails at another is a fail; start \`observed\` with the sizes it failed at in brackets, e.g. "[${sizes[0]?.name} ${sizes[0]?.width}x${sizes[0]?.height}] the menu does not open".`]
+      : sizes.length > 1
+        ? [`   One check per size: start \`expect\` with the size in brackets, e.g. "[${sizes[0]?.name} ${sizes[0]?.width}x${sizes[0]?.height}] ...". A check that works at one size and fails at another is a fail.`]
+        : []),
     "   PASS only if every check passed (a failed check marked pre_existing does not count) and you saved proof. A check is blocked when the copy cannot produce the state it needs (no recorded answer, missing payment or webhook credentials, no device), with what it lacks as the observation. Any other check you could not run is a fail. BLOCKED when no check failed and at least one is blocked; FAIL when any check failed that is not pre_existing.",
     `   Tell a broken change from a bug that is already on the base. When a check fails, look at the base revision (\`git show ${t.base}:<file>\`, \`git diff ${t.base}...${t.head} -- <file>\`): the failure is already on ${t.base} only when the same user action reaches the same failing code there: the diff changes neither that code nor what leads to it (the callers, the data and the state it reads), and the PR does not set out to change that behaviour. Then keep the check's "result" "fail" and add \`pre_existing\`: in one sentence, why ${t.base} fails the same way (which file and line, and why the diff does not reach it). Such a check does not count against the PR: write the verdict as if it were not there, by the rules below for the other checks and goals. When you are not sure, leave it unmarked: a real failure of the PR must never be excused. Never mark a check pre_existing when the PR text or a linked issue says the PR fixes exactly that behaviour.`,
     "   Tell a broken change from an incomplete copy. When something is missing because the copy does not build or start it (a site or app of the repo not built, a worker not running, no seed data, no local fake for a payment, mail or webhook provider), that is not a fault of the change: the check is blocked, and `fix` says in one sentence what the copy has to add, e.g. \"build and serve the landing site from apps/landing\". gespann then fixes the copy and runs the test again. Leave `fix` out when the copy cannot provide it at all (a real device, a real third-party account).",

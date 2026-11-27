@@ -11,7 +11,9 @@ import { gitOk, repoRoot } from "./util.ts";
 import { renderPlan, triggered } from "./verify/plan.ts";
 import { PROMPT_KINDS, type PromptKind, promptFor } from "./verify/prompt.ts";
 import { loadRecipe, RECIPE_PATH, recipeLine } from "./verify/recipe.ts";
+import { startMirror } from "./verify/mirror.ts";
 import { finish, prepare, type RunContext, screenshot } from "./verify/run.ts";
+import { VIEWPORTS, viewportsOf } from "./verify/viewports.ts";
 
 const VERSION = "0.3.0";
 
@@ -118,11 +120,31 @@ function cmdVerifyTool(args: Args): void {
   process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
 }
 
+/** `--sizes phone-s,desktop`: known screen sizes in preset order; an unknown one is an error. */
+function sizes(args: Args) {
+  const list = (str(args, "sizes") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = list.filter((id) => !VIEWPORTS.some((v) => v.id === id));
+  if (unknown.length) throw new Error(`unknown screen size ${unknown.join(", ")}; known: ${VIEWPORTS.map((v) => v.id).join(", ")}`);
+  return viewportsOf(list.join(","));
+}
+
+/** `gespann mirror`: the copy at every size side by side until stopped; prints and writes `{"url"}`. */
+async function cmdMirror(args: Args) {
+  const m = await startMirror({ target: need(str(args, "url"), "--url"), viewports: sizes(args), ...(str(args, "notes") ? { notes: str(args, "notes") as string } : {}), ...(str(args, "port") ? { port: Number(str(args, "port")) } : {}) });
+  const line = JSON.stringify({ url: m.url });
+  const out = str(args, "out");
+  if (out) writeFileSync(out, `${line}\n`);
+  say(line);
+  const stop = () => void m.close().then(() => process.exit(0));
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+}
+
 async function cmdVerify(root: string, args: Args) {
   const sub = args._[1];
   if (sub === "prepare") {
     const ctx = runContext(root, args, true);
-    const p = await prepare(ctx, loadRecipe(ctx.recipeFile));
+    const p = await prepare(ctx, loadRecipe(ctx.recipeFile), sizes(args));
     say(JSON.stringify({ ...p, run: ctx.run, work: ctx.work, out: ctx.out }));
     if (!p.ok) process.exitCode = 1;
     return;
@@ -148,12 +170,16 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
   recipe trigger --base b [--labels a,b] [--file f] < changed-files
                                          exit 0 when the PR runs, 1 when it does not
 
-  verify prepare [--recipe f] [--pr n --head sha --base sha]
-                                         bring the copy up; prints {"ok","url","run","work","out"}
+  verify prepare [--recipe f] [--pr n --head sha --base sha] [--sizes phone-s,desktop]
+                                         bring the copy up; prints {"ok","url","mirror","run","work","out"}
+                                         (two sizes or more also start the mirror)
   verify finish [--run id] [--wait s]    wait for alongside checks, judge verdict.json, tear down
   verify recipe --recipe f               check a recipe; prints {"ok","timeout","prompt"} or {"ok":false,"error"}
   verify prompt <tester|setup|repair|suggest> --input f.json
                                          print an agent prompt (used by the orchestrator)
+  mirror --url u --sizes phone-s,desktop [--notes f] [--out f] [--port n]
+                                         show the copy at every size side by side; what you do in
+                                         one size happens in all (until stopped)
   shot <file.png>                        save a screenshot of the desktop (for the tester)
   serve                                  run the gespann web service (see docs/self-host.md)
 
@@ -170,6 +196,7 @@ export async function main(argv: string[]): Promise<void> {
     return say(resolve(args._[1] as string));
   }
   if (cmd === "serve") return (await import("./server/main.ts")).serve();
+  if (cmd === "mirror") return cmdMirror(args);
   if (cmd === "verify" && (args._[1] === "recipe" || args._[1] === "prompt")) return cmdVerifyTool(args);
   const root = repoRoot(process.cwd());
   switch (cmd) {

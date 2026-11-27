@@ -417,6 +417,8 @@ struct Prepared {
     #[serde(default)]
     url: Option<String>,
     #[serde(default)]
+    mirror: Option<String>,
+    #[serde(default)]
     error: Option<String>,
 }
 
@@ -516,18 +518,25 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     cx.note(&k("log.copy"), "bringing the copy up").await;
     stage(cx, run.id, n, Stage::Copy).await;
     let cancelled = || cx.stopped();
-    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}", b.repo, b.recipe, run.pr, run.head, run.base));
+    // Two sizes or more: prepare also starts the mirror, which shows the copy at every size at once.
+    let sizes = if viewports.len() > 1 { format!(" --sizes {}", viewports.iter().map(|v| v.id.as_str()).collect::<Vec<_>>().join(",")) } else { String::new() };
+    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}{sizes}", b.repo, b.recipe, run.pr, run.head, run.base));
     let prep = long(cx, b, &k("prepare"), &prepare, Duration::from_secs(60 * 60), &cancelled).await?;
     let prepared = last_json::<Prepared>(&prep.tail);
-    let url = match &prepared {
-        Some(Prepared { ok: true, url: Some(url), .. }) => url.clone(),
+    let (url, mirror) = match &prepared {
+        Some(Prepared { ok: true, url: Some(url), mirror, .. }) => (url.clone(), mirror.clone()),
         _ => bail!("the copy did not come up: {}", prepared.and_then(|l| l.error).unwrap_or_else(|| tail(&prep.tail, 800))),
     };
     cx.note(&k("log.up"), &format!("copy is up at {url}")).await;
     // The copy is up from here on, whatever happens before the tester starts.
     stage(cx, run.id, n, Stage::Read).await;
 
-    let (url, viewports) = (&url, &viewports);
+    if let Some(m) = &mirror {
+        cx.note(&k("log.mirror"), &format!("every screen size side by side at {m}")).await;
+    } else if viewports.len() > 1 {
+        cx.note(&k("log.mirror"), "the mirror did not start: the tester checks the screen sizes one after the other").await;
+    }
+    let (url, viewports, mirror) = (&url, &viewports, &mirror);
     let minutes: f64 = cx
         .jr
         .step(&k("prompt"), || async move {
@@ -541,8 +550,10 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
                 None => String::new(),
             };
             let notes = sb.read_file(&b.id, &format!("{}/NOTES.md", b.project)).await?.unwrap_or_default();
-            // Every further screen size repeats the checks: half the recipe's time more for each.
-            let minutes = recipe.timeout * (1.0 + viewports.len().saturating_sub(1) as f64 / 2.0);
+            // Every further screen size takes longer: a quarter of the recipe's time more for each when the
+            // mirror shows them all at once, half when the tester repeats the checks size by size.
+            let extra = if mirror.is_some() { 0.25 } else { 0.5 };
+            let minutes = recipe.timeout * (1.0 + viewports.len().saturating_sub(1) as f64 * extra);
             if !viewports.is_empty() {
                 let sizes = viewports.iter().map(|v| format!("{} {}x{}", v.name, v.width, v.height)).collect::<Vec<_>>().join(", ");
                 cx.log(&format!("screen sizes to test: {sizes}"));
@@ -563,6 +574,9 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
                 "issues": issues,
                 "viewports": viewports,
             });
+            if let Some(m) = mirror {
+                input["mirror"] = json!(m);
+            }
             if let Some(note) = sb.tester_note() {
                 input["testerNote"] = json!(note);
             }

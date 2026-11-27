@@ -195,7 +195,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           summary={
             chosen.length === 0
               ? "The browser's own size, 1440 × 900. Pick the sizes your users have."
-              : `Every check runs at ${chosen.length === 1 ? "one size" : `${chosen.length} sizes`}: ${p.viewport_presets
+              : `Every check runs at ${chosen.length === 1 ? "one size" : `${chosen.length} sizes at once, side by side`}: ${p.viewport_presets
                   .filter((v) => chosen.includes(v.id))
                   .map((v) => v.name)
                   .join(", ")}.`
