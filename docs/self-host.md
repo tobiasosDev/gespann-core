@@ -41,7 +41,7 @@ The UI (`gespann serve`):
 | `ADMIN_TOKEN` | guards `/setup`; remove it after the GitHub App exists |
 | `ALLOWED_USERS` | GitHub logins that may sign in, comma-separated (`alice,bob`). Everyone else is turned away, and sessions and agent tokens of users not on the list stop working. Default: every GitHub user may sign in |
 | `MEDIA_RETENTION_DAYS` | days after a PR is merged or closed until its runs' screenshots and recordings are deleted; verdicts and checks stay. Default `10`, `off` keeps them |
-| `SERVER_MODULE` | path of a module that adds pages, Settings cards and a say over jobs ([Server module](#server-module)); default: none |
+| `SERVER_MODULE` | path of a module that adds pages, Settings sections and a say over jobs ([Server module](#server-module)); default: none |
 
 The orchestrator:
 
@@ -226,7 +226,7 @@ Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo
 
 - `routes(app, { user })` mounts routes on the server's Hono app, before the web app. `user(c)` is the signed-in user (`{ id, login }`) or null. API calls under `/api/` need the header `x-gespann: 1`; your own paths guard themselves against cross-site posts.
 - `links` puts links in the sidebar for signed-in users, e.g. `[{ label: "Usage", href: "/usage" }]`.
-- `settings(user)` returns cards for the top of the Settings page: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the card. `/settings#<id>` scrolls to a card. If `settings` throws, only its cards are missing.
+- `settings(user)` returns sections for the Settings page, listed under *Account* beside the built-in ones, each with its badge text: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the section. `/settings#<id>` opens a section. If `settings` throws, only its sections are missing.
 The module runs in the UI; the orchestrator asks it through the UI's internal API.
 
 - `admit(job)` runs before a job takes a sandbox. Return a string and the job fails with `not started: <string>` (a PR gets a neutral check with that text); return null to let it start. `job` names the job, its kind, its project and the project's owner.

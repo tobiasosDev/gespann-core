@@ -3,7 +3,8 @@ import { useState } from "react";
 import { api, type Boxes, duration, hours, type RunningBox } from "../api.ts";
 import { useResource, useTick } from "../live.ts";
 import { Link } from "../nav.tsx";
-import { Badge, Button, Card, CardHeader, cn } from "../components/ui.tsx";
+import { Block, Rows, SettingsPane } from "../components/settings.tsx";
+import { Badge, Button, cn } from "../components/ui.tsx";
 
 /** Up to this many jobs at once the limit is drawn as one tile per sandbox; above it, only the stepper. */
 const MAX_TILES = 12;
@@ -32,7 +33,7 @@ function RunningTile({ b, over }: { b: RunningBox; over: boolean }) {
 function Tiles({ data, busy, setLimit }: { data: Boxes & { host: number; limit: number }; busy: boolean; setLimit: (n: number) => void }) {
   const cells = Array.from({ length: Math.max(data.host, data.running.length) }, (_, i) => i);
   return (
-    <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6" aria-label="Sandboxes">
+    <ol className="grid grid-cols-2 gap-2 sm:grid-cols-5" aria-label="Sandboxes">
       {cells.map((i) => {
         const b = data.running[i];
         const on = i < data.limit;
@@ -113,15 +114,16 @@ function Days({ days }: { days: Boxes["time"]["days"] }) {
   );
 }
 
-const always = () => true;
+/** /boxes keeps reloading while Settings is open: the list beside it counts running jobs too. */
+export const boxesLive = () => true;
 
 export function Sandboxes() {
-  const { data, error, at: loadedAt, reload } = useResource<Boxes>("/boxes", always, 5000);
+  const { data, error, at: loadedAt, reload } = useResource<Boxes>("/boxes", boxesLive, 5000);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   useTick(!!data?.running.length);
-  if (error) return <p className="mt-6 text-bad">{error}</p>;
-  if (!data) return null;
+  if (error) return <p className="text-bad">{error}</p>;
+  if (!data) return <p className="text-muted-foreground">Loading…</p>;
   const setLimit = async (limit: number) => {
     setBusy(true);
     setFailed(null);
@@ -142,30 +144,28 @@ export function Sandboxes() {
   // The server counts running jobs up to its answer; the seconds since then are added here.
   const live = (running.length * Math.max(0, Date.now() - loadedAt)) / 1000;
   return (
-    <Card className="mt-6">
-      <CardHeader
-        title="Sandboxes"
-        description="Each job (a pull request test, preparing the environment) runs in a sandbox of its own. Choose how many of your jobs run at the same time; the others wait in line."
-        action={
-          running.length ? (
-            <Badge tone="info" dot>
-              {running.length} running
-            </Badge>
-          ) : (
-            <Badge>idle</Badge>
-          )
-        }
-      />
-      <div className="space-y-4 px-4 py-4">
+    <SettingsPane
+      title="Sandboxes"
+      lead="Each job (a pull request test, preparing the environment) runs in a sandbox of its own. Choose how many of your jobs run at the same time; the others wait in line."
+      action={
+        running.length ? (
+          <Badge tone="info" dot>
+            {running.length} running
+          </Badge>
+        ) : (
+          <Badge>idle</Badge>
+        )
+      }
+    >
+      <Block title="At the same time">
         {data.noProvider ? (
           <p className="text-body text-warn">No sandboxes are set up for your account on this instance, so your jobs wait. They start once its operator gives your account sandboxes.</p>
         ) : host === null || limit === null ? (
           <p className="text-body text-warn">The service that runs jobs is not running right now, so your jobs wait. They start once it is back.</p>
         ) : (
-          <>
+          <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
-              <span className="text-body font-medium">At the same time</span>
-              <div className="flex items-center rounded-md border border-border">
+              <div className="flex items-center rounded-md border border-border bg-card">
                 <Button variant="ghost" size="sm" className="rounded-r-none" disabled={busy || limit <= 1} onClick={() => void setLimit(limit - 1)} aria-label="One fewer at once">
                   <Minus className="size-3.5" />
                 </Button>
@@ -178,23 +178,21 @@ export function Sandboxes() {
                 </Button>
               </div>
               <span className="text-small text-muted-foreground">{cap && cap.jobs <= (hostRoom ?? 0) ? capText : `${capText} The sandbox host has room for ${hostRoom}.`.trim()}</span>
-              {queued > 0 && (
-                <span className="text-small text-foreground">
-                  {queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox.
-                </span>
-              )}
-              {waitingForChecks > 0 && (
-                <span className="text-small text-muted-foreground">
-                  {waitingForChecks === 1 ? "One PR waits" : `${waitingForChecks} PRs wait`} for its other checks to pass first.
-                </span>
-              )}
               {failed && <span className="text-body text-bad">{failed}</span>}
             </div>
+            {(queued > 0 || waitingForChecks > 0) && (
+              <p className="text-small">
+                {queued > 0 && <span className="text-foreground">{queued === 1 ? "One job waits" : `${queued} jobs wait`} for a free sandbox. </span>}
+                {waitingForChecks > 0 && (
+                  <span className="text-muted-foreground">{waitingForChecks === 1 ? "One PR waits" : `${waitingForChecks} PRs wait`} for its other checks to pass first.</span>
+                )}
+              </p>
+            )}
             {host <= MAX_TILES ? (
               <Tiles data={{ ...data, host, limit }} busy={busy} setLimit={(n) => void setLimit(n)} />
             ) : (
               running.length > 0 && (
-                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                   {running.map((b, i) => (
                     <li key={b.job_id} className="min-w-0">
                       <RunningTile b={b} over={i >= limit} />
@@ -204,19 +202,22 @@ export function Sandboxes() {
               )
             )}
             {running.length > limit && <p className="text-small text-warn">{running.length - limit} more than your limit still run; they finish, and no new job starts until fewer than {limit} run.</p>}
-          </>
+          </div>
         )}
-      </div>
-      <div className="grid gap-6 border-t border-border px-4 py-4 md:grid-cols-[minmax(0,18rem)_1fr]">
-        <div>
-          <h3 className="text-body font-medium">Sandbox time in {monthName}</h3>
-          <p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">{hours(time.monthSeconds + live)}</p>
-          <p className="mt-1 text-small text-muted-foreground">
-            {time.jobs} {time.jobs === 1 ? "job" : "jobs"} this month, {hours(time.totalSeconds + live)} in total. Counted from the start to the end of each job, by calendar month in UTC.
-          </p>
-        </div>
-        <Days days={time.days} />
-      </div>
-    </Card>
+      </Block>
+      <Block title={`Sandbox time in ${monthName}`}>
+        <Rows>
+          <div className="grid gap-6 px-4 py-4 sm:grid-cols-[minmax(0,13rem)_1fr]">
+            <div>
+              <p className="text-3xl font-semibold tracking-tight tabular-nums">{hours(time.monthSeconds + live)}</p>
+              <p className="mt-1 text-small text-muted-foreground">
+                {time.jobs} {time.jobs === 1 ? "job" : "jobs"} this month, {hours(time.totalSeconds + live)} in total. Counted from the start to the end of each job, by calendar month in UTC.
+              </p>
+            </div>
+            <Days days={time.days} />
+          </div>
+        </Rows>
+      </Block>
+    </SettingsPane>
   );
 }

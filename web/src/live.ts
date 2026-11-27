@@ -114,6 +114,29 @@ export function usePath(): string {
   return useSyncExternalStore(onPathChange, () => location.pathname);
 }
 
+/** The fragment changes on a hash link (hashchange) and on navigate() or Back to another path (popstate). */
+function onHashChange(notify: () => void): () => void {
+  window.addEventListener("hashchange", notify);
+  window.addEventListener("popstate", notify);
+  return () => {
+    window.removeEventListener("hashchange", notify);
+    window.removeEventListener("popstate", notify);
+  };
+}
+
+/** The address bar's fragment without `#`, raw: `/settings#plan` gives "plan". */
+export function useHash(): string {
+  return useSyncExternalStore(onHashChange, () => location.hash.slice(1));
+}
+
+/** Sets the fragment as a new history entry, without the browser's jump to an element of that id. */
+export function setHash(hash: string): void {
+  if (location.hash.slice(1) === hash) return;
+  const old = location.href;
+  history.pushState(null, "", `#${hash}`);
+  window.dispatchEvent(new HashChangeEvent("hashchange", { oldURL: old, newURL: location.href }));
+}
+
 /** Every move inside the app (link, back, forward) refreshes what stays on screen, such as the sidebar's projects. */
 if (typeof window !== "undefined") window.addEventListener("popstate", () => setTimeout(refreshAll, 0));
 
