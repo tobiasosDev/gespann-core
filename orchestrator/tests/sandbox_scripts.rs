@@ -130,8 +130,8 @@ fn the_clip_of_the_change_is_cut_from_the_recording() {
     assert!(sh(&clip_recording_script(rec, clip, 20.0, 12.5)).status.success());
     assert!((seconds(clip) - 12.5).abs() < 0.5, "12.5 s from 0:20, got {}", seconds(clip));
     assert!((seconds(rec) - 60.0).abs() < 0.5, "the recording stays whole");
-    // Nearly the whole recording: no second file, and a clip from before stays gone.
-    assert!(sh(&clip_recording_script(rec, clip, 0.0, 58.0)).status.success());
+    // A window past the end: no file, and a clip from before stays gone.
+    assert!(sh(&clip_recording_script(rec, clip, 70.0, 5.0)).status.success());
     assert!(!std::path::Path::new(clip).exists());
     assert!(sh(&clip_recording_script(&format!("{rec}.missing"), clip, 1.0, 5.0)).status.success(), "no recording: nothing to do");
     std::fs::remove_dir_all(&dir).unwrap();
