@@ -9,6 +9,12 @@ import { cn } from "../cn.ts";
 import { Link, RunStatus } from "../nav.tsx";
 
 const CLIP = "change.mp4";
+
+/** 84.2 → "1:24". */
+const minutes = (s: number) => {
+  const t = Math.round(s);
+  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
+};
 const GOAL = { met: RESULT_ICON.pass, missed: RESULT_ICON.fail, blocked: RESULT_ICON.blocked };
 const GOAL_TONE = { met: "ok", missed: "bad", blocked: "warn" } as const;
 
@@ -51,6 +57,8 @@ export function Run({ id }: { id: number }) {
   const [busy, setBusy] = useState(false);
   const [fullLog, setFullLog] = useState(false);
   const [wholeTest, setWholeTest] = useState(false);
+  // The length of the video on screen, read from the file once it loads.
+  const [length, setLength] = useState<{ file: string; seconds: number } | null>(null);
   useTick(r?.status === "running");
   if (error) return <p className="text-bad">{error}</p>;
   if (!r) return <p className="text-muted-foreground">Loading…</p>;
@@ -76,7 +84,7 @@ export function Run({ id }: { id: number }) {
     <Card className="mb-6">
       <CardHeader
         title="Recording"
-        description={video ? (video === clip ? "The part of the test that shows what this pull request changes." : "The tester's screen during the whole test.") : undefined}
+        description={video ? `${video === clip ? "The part of the test that shows what this pull request changes." : "The tester's screen during the whole test."}${length?.file === video ? ` ${minutes(length.seconds)} long.` : ""}` : undefined}
         action={
           clip && whole ? (
             <Button size="sm" variant="outline" onClick={() => setWholeTest(!wholeTest)}>
@@ -90,7 +98,7 @@ export function Run({ id }: { id: number }) {
           {/* Asks the browser to buffer the whole recording up front (7 minutes are about 1.5 MB): with only the
               metadata it fetches each spot on a seek. Smooth scrubbing also needs the keyframe every 5 s that
               finish_recording_script (orchestrator/src/sandbox/scripts.rs) gives the recording. */}
-          <video key={video} controls playsInline preload="auto" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
+          <video key={video} onLoadedMetadata={(e) => Number.isFinite(e.currentTarget.duration) && setLength({ file: video, seconds: e.currentTarget.duration })} controls playsInline preload="auto" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
         </div>
       ) : (
         <Empty>{live ? "The recording appears when the tester is done." : r.media_cleared ? `The recording and screenshots were deleted ${ago(r.media_cleared)}, after the pull request closed.` : "This run has no recording. The log below says why."}</Empty>
