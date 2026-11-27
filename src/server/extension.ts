@@ -23,7 +23,7 @@ export interface ModuleJobEnd extends ModuleJob {
   seconds: number;
 }
 
-/** One line of a module's card on the Settings page. */
+/** One line of a module's section on the Settings page. */
 export type SettingsRow =
   | { kind: "text"; text: string; tone?: "muted" | "warn" | "bad" }
   /** A bar filled to `value` of `max`, with a line of text above it. */
@@ -34,12 +34,12 @@ export type SettingsRow =
   | { kind: "number"; label: string; name: string; value: number; min?: number; max?: number; step?: number; prefix?: string; button: string; action: string };
 
 /**
- * A card on the Settings page. The page renders it with its own components; the module only
+ * A section on the Settings page, listed under Account. The page renders it with its own components; the module only
  * describes it. Its actions answer JSON: `{ redirect }` leaves for that URL, `{ error }` shows the
- * message under the card, anything else reloads the card.
+ * message under the section, anything else reloads it.
  */
 export interface SettingsSection {
-  /** Anchor on the Settings page: `/settings#<id>` scrolls to the card. */
+  /** Anchor on the Settings page: `/settings#<id>` opens this section. */
   id: string;
   title: string;
   description?: string;
@@ -49,7 +49,7 @@ export interface SettingsSection {
 
 /**
  * What `SERVER_MODULE=<path>` adds to the server. Every part is optional: pages of its own, links to
- * them in the sidebar, cards on the Settings page, a say in whether a job starts, and a note when a
+ * them in the sidebar, sections on the Settings page, a say in whether a job starts, and a note when a
  * job gave its sandbox back.
  */
 export interface ServerModule {

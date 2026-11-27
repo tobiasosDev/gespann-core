@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type SettingsRow, type SettingsSection } from "../api.ts";
-import { useResource } from "../live.ts";
-import { Badge, Button, Card, CardHeader, cn, Input } from "./ui.tsx";
+import { Rows, SettingsPane } from "./settings.tsx";
+import { Badge, Button, cn, Input } from "./ui.tsx";
 
 /** What a module action answers: leave for a URL (a checkout, a billing portal), show an error, or reload. */
 type ActionResult = { redirect?: string; error?: string };
@@ -56,12 +56,8 @@ function Row({ row, busy, run }: { row: SettingsRow; busy: boolean; run: (action
   );
 }
 
-/** `/settings#plan` scrolls to that card when it appears; the page loads the cards after the first paint. */
-function scrollHere(el: HTMLDivElement | null): void {
-  el?.scrollIntoView();
-}
-
-function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<void> }) {
+/** A section the instance's server module adds to Settings (a plan and its usage, for example), opened as `/settings#<id>`. */
+export function ModuleSection({ s, reload }: { s: SettingsSection; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const run = async (action: string, body: unknown) => {
@@ -75,7 +71,7 @@ function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<v
         location.href = r.redirect;
         return;
       }
-      // On an error the card stays as it is, so a value typed into a field can be corrected.
+      // On an error the section stays as it is, so a value typed into a field can be corrected.
       if (r.error) setFailed(r.error);
       else await reload();
       setBusy(false);
@@ -85,27 +81,15 @@ function ModuleCard({ s, reload }: { s: SettingsSection; reload: () => Promise<v
     }
   };
   return (
-    // Raw, not decoded: card ids are plain words, and decoding throws on a link like /settings#%.
-    <Card id={s.id} ref={s.id === location.hash.slice(1) ? scrollHere : undefined} className="mb-6 scroll-mt-6">
-      <CardHeader title={s.title} description={s.description} action={s.badge && <Badge tone={s.badge.tone}>{s.badge.text}</Badge>} />
-      <div className="space-y-3 px-4 py-4">
-        {s.rows.map((row, i) => (
-          <Row key={`${s.id}-${i}`} row={row} busy={busy} run={(a, b) => void run(a, b)} />
-        ))}
-        {failed && <p className="text-body text-bad">{failed}</p>}
-      </div>
-    </Card>
-  );
-}
-
-/** Cards the instance's server module adds to Settings (a plan and its usage, for example). None without a module. */
-export function ModuleSections() {
-  const { data, error, reload } = useResource<{ sections: SettingsSection[]; error?: string }>("/settings/sections");
-  const problem = error ?? data?.error;
-  return (
-    <>
-      {problem && <p className="mb-6 text-body text-bad">{problem}</p>}
-      {data?.sections.map((s) => <ModuleCard key={s.id} s={s} reload={reload} />)}
-    </>
+    <SettingsPane title={s.title} lead={s.description} action={s.badge && <Badge tone={s.badge.tone}>{s.badge.text}</Badge>}>
+      <Rows>
+        <div className="space-y-3 px-4 py-4">
+          {s.rows.map((row, i) => (
+            <Row key={`${s.id}-${i}`} row={row} busy={busy} run={(a, b) => void run(a, b)} />
+          ))}
+          {failed && <p className="text-body text-bad">{failed}</p>}
+        </div>
+      </Rows>
+    </SettingsPane>
   );
 }
