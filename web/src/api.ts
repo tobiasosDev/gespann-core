@@ -6,6 +6,29 @@ export interface Me {
   installUrl: string | null;
   /** Pages a server module of this instance adds, shown in the sidebar. */
   links?: { label: string; href: string }[];
+  /** The instance sends mail and has no address for this user: ask for one. */
+  askEmail?: boolean;
+}
+
+/** One kind of mail in Settings → Mail, with the user's choice. */
+export interface MailKind {
+  id: string;
+  label: string;
+  description: string;
+  defaultAfter: number;
+  on: boolean;
+  after: number;
+}
+
+export interface MailSettings {
+  /** False: the instance has no SMTP_URL and mails nothing. */
+  sends: boolean;
+  email: string | null;
+  /** `github`, another sign-in's id, or `user`. */
+  source: string | null;
+  pending: string | null;
+  maxAfter: number;
+  kinds: MailKind[];
 }
 
 export interface RunRow {

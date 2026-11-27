@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { mailSettings } from "./mail.ts";
 
 export interface Config {
   baseUrl: string;
@@ -15,6 +16,8 @@ export interface Config {
   /** `ALLOWED_USERS`: GitHub logins (lowercase) that may sign in; empty lets every GitHub user in. */
   allowedUsers: string[];
   production: boolean;
+  /** `SMTP_URL` and `MAIL_FROM`; an empty `smtpUrl` sends no mail (mail.ts). */
+  mail: { smtpUrl: string; from: string };
   /** Overrides for the GitHub App; otherwise they come from the settings table (manifest flow). */
   github: Partial<GithubApp>;
 }
@@ -59,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminToken: env.ADMIN_TOKEN ?? "",
     allowedUsers,
     production,
+    mail: mailSettings(env),
     github,
   };
 }

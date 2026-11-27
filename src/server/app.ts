@@ -12,6 +12,7 @@ import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
+import { ALERT_KINDS, ALERT_MAX_AFTER, alertRules, confirmMail, readConfirmToken } from "./alerts.ts";
 import { AGENT_PROVIDERS, type Db, type Project, SIGN_IN_AGENTS, type User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
@@ -21,6 +22,7 @@ import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
 import { AGENT_MODEL_RE, AgentKeyError, checkAgentKey, isKeyAgent, KEY_AGENT_INFO, KEY_AGENTS } from "./agentkeys.ts";
 import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal, suggestModels } from "./openrouter.ts";
+import { type Mailer, validEmail } from "./mail.ts";
 import { recordPrState } from "./pulls.ts";
 
 /**
@@ -83,6 +85,8 @@ export interface AppDeps {
   module?: ServerModule | null;
   /** For calls to OpenRouter (tests pass a fake); default the global fetch. */
   fetch?: Fetch;
+  /** gespann's mail (mail.ts); without one, nobody is asked for an address and nothing is mailed. */
+  mailer?: Mailer | null;
 }
 
 export function githubApp(config: Config, db: Db): GithubApp | null {
@@ -253,7 +257,9 @@ export function createApp(d: AppDeps): Hono<Env> {
     const u = c.get("user");
     let installUrl: string | null = null;
     if (d.githubReady()) installUrl = d.github().installUrl();
-    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [] });
+    // An instance that sends mail asks a user without an address for one, once, right after sign-in.
+    const askEmail = !!u && !!d.mailer?.sends && !u.email && !u.email_pending;
+    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [], askEmail });
   });
 
   app.post("/api/logout", (c) => {
@@ -278,6 +284,58 @@ export function createApp(d: AppDeps): Hono<Env> {
         login: codex?.codex_login ? JSON.parse(codex.codex_login) : null,
       },
     });
+  });
+
+  app.get("/api/settings/mail", (c) => {
+    const u = db.user(me(c).id) as User;
+    const rules = alertRules(db, u.id);
+    return c.json({
+      sends: !!d.mailer?.sends,
+      email: u.email ?? null,
+      source: u.email_source ?? null,
+      pending: u.email_pending ?? null,
+      maxAfter: ALERT_MAX_AFTER,
+      kinds: ALERT_KINDS.map((k) => ({ id: k.id, label: k.label, description: k.description, defaultAfter: k.after, ...rules.find((r) => r.id === k.id) })),
+    });
+  });
+
+  // An address the user types counts only once they open the link mailed to it.
+  app.post("/api/settings/email", async (c) => {
+    if (!d.mailer?.sends) throw new HttpError(409, "this instance sends no mail");
+    const { email } = await c.req.json<{ email?: unknown }>();
+    const address = String(email ?? "").trim();
+    if (!validEmail(address)) throw new HttpError(400, "that is not an email address");
+    const u = db.user(me(c).id) as User;
+    if (u.email?.toLowerCase() === address.toLowerCase()) {
+      db.setPendingEmail(u.id, null);
+      return c.json({ ok: true, confirmed: true });
+    }
+    db.setPendingEmail(u.id, address);
+    await d.mailer.send(confirmMail(config.baseUrl, config.sessionSecret, u, address)).catch((err: Error) => {
+      throw new HttpError(409, `the confirmation mail could not be sent: ${err.message.slice(0, 200)}`);
+    });
+    return c.json({ ok: true, confirmed: false });
+  });
+
+  app.post("/api/settings/email/cancel", (c) => {
+    db.setPendingEmail(me(c).id, null);
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/settings/alerts", async (c) => {
+    const { id, on, after } = await c.req.json<{ id?: unknown; on?: unknown; after?: unknown }>();
+    if (!ALERT_KINDS.some((k) => k.id === id)) throw new HttpError(400, "unknown kind of mail");
+    if (typeof on !== "boolean") throw new HttpError(400, "on: true or false");
+    if (typeof after !== "number" || !Number.isInteger(after) || after < 1 || after > ALERT_MAX_AFTER) throw new HttpError(400, `after: a whole number from 1 to ${ALERT_MAX_AFTER}`);
+    db.setAlertRule(me(c).id, { category: String(id), on: on ? 1 : 0, after });
+    return c.json({ ok: true });
+  });
+
+  // The link in the confirmation mail. It carries its own proof, so it works in another browser too.
+  app.get("/email/confirm", (c) => {
+    const t = readConfirmToken(config.sessionSecret, c.req.query("t") ?? "");
+    if (!t || !db.confirmEmail(t.userId, t.email)) return c.redirect("/settings?email=stale#mail");
+    return c.redirect("/settings?email=confirmed#mail");
   });
 
   // The server module's cards. A module that fails costs only its own cards, not the page.
@@ -613,6 +671,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     const u = await gh.user(token);
     if (!allowed(u.login)) return c.redirect("/?closed=1");
     const user = db.upsertUser({ github_id: u.id, login: u.login, name: u.name, avatar: u.avatar_url });
+    const email = await gh.verifiedEmail(token, u.email);
+    if (email) db.offerEmail(user.id, email, "github");
     const repos = [];
     for (const i of await gh.userInstallations(token)) {
       for (const r of await gh.userRepos(token, i.id)) repos.push({ repo_id: r.id, installation_id: i.id, account: i.account, full_name: r.full_name, private: r.private, default_branch: r.default_branch });

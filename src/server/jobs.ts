@@ -1,9 +1,11 @@
+import { alertJobEnded } from "./alerts.ts";
 import { conflictNote } from "./comment.ts";
 import type { Config } from "./config.ts";
 import type { Db, Job, Project, Run } from "./db.ts";
 import type { ServerModule } from "./extension.ts";
 import { applyGate, approvedHead, gated, gateLine, gateState, type GateState, runComment, upsertComment, withPrLock } from "./gate.ts";
 import type { Github, LinkedIssue, OtherChecks } from "./github.ts";
+import type { Mailer } from "./mail.ts";
 import type { Judged } from "../verify/verdict.ts";
 
 /**
@@ -17,6 +19,8 @@ export interface JobDeps {
   config: Config;
   /** `SERVER_MODULE`: asked before each job starts, told when it ended. */
   module?: ServerModule | null;
+  /** Mails owners whose jobs keep going wrong (alerts.ts); none in tests that do not ask for it. */
+  mailer?: Mailer | null;
 }
 
 const CONCLUSION = { PASS: "success", SKIP: "neutral", BLOCKED: "neutral", FAIL: "failure" } as const;
@@ -205,7 +209,7 @@ export async function awaitChecks(d: ReportDeps, job: Job, p: Project, run: Run,
 }
 
 /** What the server module's calls need. */
-export type ModuleDeps = Pick<JobDeps, "db" | "module">;
+export type ModuleDeps = Pick<JobDeps, "db" | "module"> & Partial<Pick<JobDeps, "config" | "mailer">>;
 
 function moduleJob(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project) {
   const owner = d.db.user(p.owner_id);
@@ -255,5 +259,7 @@ async function endOnce(d: ModuleDeps, job: Pick<Job, "id" | "kind">, p: Project)
     }
   }
   // Noted once the module took it: a call that failed is asked again, one that went through never.
-  d.db.noteEnded(job.id);
+  if (!d.db.noteEnded(job.id) || !d.mailer || !d.config) return;
+  // Once per job, after the note. The orchestrator does not wait for the mail server.
+  void alertJobEnded({ db: d.db, config: d.config, mailer: d.mailer }, job.id).catch((err: unknown) => console.error(JSON.stringify({ level: "error", at: "alerts", job: job.id, message: errText(err) })));
 }
