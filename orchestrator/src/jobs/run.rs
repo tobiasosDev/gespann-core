@@ -19,10 +19,10 @@ use super::{cut, never, tail, Cx};
 use crate::codex::with_agent;
 use crate::db::{now, opt_text, text, Db, Project, Run};
 use crate::journal::Long;
-use crate::sandbox::scripts::{finish_recording_script, q};
+use crate::sandbox::scripts::{clip_recording_script, finish_recording_script, q};
 use crate::sandbox::LongResult;
 use crate::ui::Context;
-use crate::verify::{combine, copy_gaps, empty_progress, merge_tester, parse_progress, same_screens, parse_thumbs, screen_for, start_stage, thumb_command, viewports_of, with_aliases, Progress, Stage, Viewport, FIRST};
+use crate::verify::{change_window, combine, copy_gaps, empty_progress, merge_tester, parse_progress, same_screens, parse_thumbs, screen_for, start_stage, thumb_command, viewports_of, with_aliases, Progress, Stage, Viewport, FIRST};
 
 /// Marks the files in conflict in the output of a failed merge.
 const UNMERGED: &str = "gespann-unmerged: ";
@@ -451,6 +451,18 @@ async fn attempt(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str, dir: &
         async { long(cx, b, &k("finish"), &command, Duration::from_secs(30 * 60), &never).await.unwrap_or_else(|e| LongResult { exit_code: None, tail: format!("{e:#}"), timed_out: false }) },
         async {
             if recording {
+                // First the short video of the change, from the untrimmed recording the window counts from.
+                let db = &cx.ctx.db;
+                let _ = cx
+                    .jr
+                    .step(&k("record.clip"), || async move {
+                        let progress = db.run(run.id)?.and_then(|r| parse_progress(r.progress.as_deref()));
+                        if let Some((start, length)) = progress.and_then(|p| change_window(&p, sb.min_poll().max(Duration::from_secs(2)).as_secs_f64())) {
+                            let _ = sb.exec(&b.id, &clip_recording_script(rec, &format!("{dir}/out/{CLIP}"), start, length), 300).await;
+                        }
+                        Ok(())
+                    })
+                    .await;
                 let _ = cx
                     .jr
                     .step(&k("record.finish"), || async move {
@@ -593,8 +605,13 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let recording: bool = cx
         .jr
         .step(&k("record"), || async move {
+            let at = now();
             match sb.start_recording(&b.id, rec).await {
-                Ok(()) => Ok(true),
+                Ok(()) => {
+                    // The clip of the change counts its window from here.
+                    set_progress(db, run.id, |x| Progress { recording_at: Some(at), ..x });
+                    Ok(true)
+                }
                 Err(e) => {
                     cx.log(&format!("✗ no recording of this run: {e:#}"));
                     Ok(false)
@@ -640,6 +657,9 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
 }
 
 const MAX_FILE: u64 = 100 * 1024 * 1024;
+
+/// The part of the recording that shows what the PR changes; the run page and PR comment lead with it.
+const CLIP: &str = "change.mp4";
 
 fn is_image(f: &str) -> bool {
     let f = f.to_ascii_lowercase();

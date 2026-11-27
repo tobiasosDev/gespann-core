@@ -103,6 +103,25 @@ pub fn finish_recording_script(file: &str) -> String {
     .join("\n")
 }
 
+/// Cuts the part of a finished recording that shows the PR's change to `out`: `length` seconds from
+/// `start`, encoded like `finish_recording_script`. Run before that script, which trims the start of
+/// `file`. Writes nothing when the part is nearly the whole recording or the cut fails.
+pub fn clip_recording_script(file: &str, out: &str, start: f64, length: f64) -> String {
+    let (f, o) = (q(file), q(out));
+    let tmp = q(&format!("{out}.tmp.mp4"));
+    [
+        format!("rm -f {o} {tmp}"),
+        format!("test -s {f} || exit 0"),
+        format!(r#"d="$(ffmpeg -nostdin -hide_banner -i {f} 2>&1 | sed -n 's/.*Duration: \([0-9]*\):\([0-9]*\):\([0-9.]*\).*/\1 \2 \3/p' | head -n 1 | awk '{{ print $1 * 3600 + $2 * 60 + $3 }}')""#),
+        // A part of 90 % or more of the recording is no shorter video worth a second file.
+        format!(r#"[ -n "$d" ] && awk -v s={start} -v l={length} -v d="$d" 'BEGIN {{ exit !(s < d && l < 0.9 * d) }}' || exit 0"#),
+        format!(r#"ffmpeg -nostdin -loglevel error -y -ss {start} -i {f} -t {length} -an -c:v libx264 -preset veryfast -crf 32 -force_key_frames 'expr:gte(t,n_forced*5)' -pix_fmt yuv420p -movflags +faststart {tmp} && test -s {tmp} && mv {tmp} {o}"#),
+        format!("rm -f {tmp}"),
+        "true".to_string(),
+    ]
+    .join("\n")
+}
+
 /// Starts a virtual screen for the sandbox at `dir` unless it has a live one, and writes its display to
 /// `dir/.gespann-display` (which `prelude` exports). Does nothing on a machine without `DISPLAY` or Xvfb.
 pub fn screen_script(dir: &str) -> String {

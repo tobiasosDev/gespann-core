@@ -152,6 +152,12 @@ pub struct LiveCheck {
     /// When the server first saw the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    /// When the server first saw the tester on this check ("running").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// The tester marked it as a check of what the PR changes: the clip of the change covers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +183,9 @@ pub struct Progress {
     /// What the tester said it is doing, newest last, at most `TRAIL`.
     #[serde(default)]
     pub now: Vec<Said>,
+    /// When the recording of this attempt started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_at: Option<String>,
 }
 
 fn one() -> u32 {
@@ -188,7 +197,7 @@ const MAX_CHECKS: usize = 20;
 const MAX_TEXT: usize = 300;
 
 pub fn empty_progress() -> Progress {
-    Progress { at: StageTimes::default(), attempt: 1, sandbox_done: None, checks: vec![], now: vec![] }
+    Progress { at: StageTimes::default(), attempt: 1, sandbox_done: None, checks: vec![], now: vec![], recording_at: None }
 }
 
 fn current(p: &Progress) -> Option<Stage> {
@@ -206,7 +215,7 @@ pub fn start_stage(p: &Progress, stage: Stage, at: &str, attempt: Option<u32>) -
     let mut next = if attempt == p.attempt {
         p.clone()
     } else {
-        Progress { at: StageTimes { sandbox: p.at.sandbox.clone(), ..Default::default() }, attempt, sandbox_done, checks: vec![], now: vec![] }
+        Progress { at: StageTimes { sandbox: p.at.sandbox.clone(), ..Default::default() }, attempt, sandbox_done, checks: vec![], now: vec![], recording_at: None }
     };
     // A stage that starts again (a second attempt) drops the stages after it.
     let from = STAGES.iter().position(|s| *s == stage).unwrap_or(0);
@@ -244,7 +253,9 @@ pub fn merge_tester(p: &Progress, raw: Option<&str>, at: &str) -> Progress {
                 Some(b) if b.result.as_ref() == Some(r) && b.at.is_some() => b.at.clone().unwrap_or_default(),
                 _ => at.to_string(),
             });
-            checks.push(LiveCheck { expect, result, active: active.then_some(true), observed, at: seen });
+            let started = before.and_then(|b| b.started.clone()).or_else(|| active.then(|| at.to_string()));
+            let focus = c.get("focus").and_then(Value::as_bool) == Some(true);
+            checks.push(LiveCheck { expect, result, active: active.then_some(true), observed, at: seen, started, focus: focus.then_some(true) });
         }
     }
     let mut next = p.clone();
@@ -262,6 +273,42 @@ pub fn merge_tester(p: &Progress, raw: Option<&str>, at: &str) -> Progress {
         }
     }
     next
+}
+
+/// Seconds of the recording before the change starts that the clip keeps: the server sees a check
+/// start only at its next look at progress.json, `poll` later.
+const CLIP_LEAD: f64 = 4.0;
+const CLIP_TAIL: f64 = 3.0;
+
+/// The part of the recording that shows what the PR changes, as (start, length) in seconds from the
+/// recording's start: from when the first check the tester marked `focus` started to when the last one
+/// got its result. None without a recording time, focus checks or a finished one.
+pub fn change_window(p: &Progress, poll: f64) -> Option<(f64, f64)> {
+    let secs = |t: &str| chrono::DateTime::parse_from_rfc3339(t).ok().map(|d| d.timestamp_millis() as f64 / 1000.0);
+    let rec = secs(p.recording_at.as_deref()?)?;
+    let ends: Vec<f64> = p.checks.iter().filter_map(|c| c.at.as_deref().and_then(secs)).collect();
+    let mut from = f64::INFINITY;
+    let mut to = f64::NEG_INFINITY;
+    for c in p.checks.iter().filter(|c| c.focus == Some(true)) {
+        let end = c.at.as_deref().and_then(secs);
+        // A check the tester never set running started when the check before it ended, or with the plan.
+        let start = c.started.as_deref().and_then(secs).or_else(|| {
+            let end = end?;
+            ends.iter().copied().filter(|e| *e < end).reduce(f64::max).or_else(|| p.at.checks.as_deref().and_then(secs))
+        });
+        if let Some(s) = start {
+            from = from.min(s);
+        }
+        if let Some(e) = end {
+            to = to.max(e);
+        }
+    }
+    if !from.is_finite() || !to.is_finite() || to <= from {
+        return None;
+    }
+    let start = (from - rec - CLIP_LEAD - poll).max(0.0);
+    let end = to - rec + CLIP_TAIL;
+    (end > start).then(|| ((start * 10.0).round() / 10.0, ((end - start) * 10.0).round() / 10.0))
 }
 
 pub fn parse_progress(raw: Option<&str>) -> Option<Progress> {
@@ -464,7 +511,7 @@ mod tests {
     }
 
     fn check(expect: &str, result: Option<&str>) -> LiveCheck {
-        LiveCheck { expect: expect.into(), result: result.map(String::from), active: None, observed: None, at: None }
+        LiveCheck { expect: expect.into(), result: result.map(String::from), active: None, observed: None, at: None, started: None, focus: None }
     }
 
     #[test]
@@ -488,7 +535,7 @@ mod tests {
         assert_eq!(p.checks, vec![check("A", None), check("B", None)]);
         p = merge_tester(&p, Some(&json!({"checks": [{"expect": "A", "result": "pass", "observed": "fine"}, {"expect": "B"}], "now": "Opening B"}).to_string()), T1);
         p = merge_tester(&p, Some(&json!({"checks": [{"expect": "A", "result": "pass", "observed": "fine"}, {"expect": "B", "result": "weird"}], "now": "Opening B"}).to_string()), T2);
-        assert_eq!(p.checks[0], LiveCheck { expect: "A".into(), result: Some("pass".into()), active: None, observed: Some("fine".into()), at: Some(T1.into()) });
+        assert_eq!(p.checks[0], LiveCheck { expect: "A".into(), result: Some("pass".into()), active: None, observed: Some("fine".into()), at: Some(T1.into()), started: None, focus: None });
         assert_eq!(p.checks[1], check("B", None), "an unknown result counts as not done");
         assert_eq!(p.now.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["Reading the diff", "Opening B"], "the same sentence twice is one entry");
     }
@@ -519,7 +566,27 @@ mod tests {
     #[test]
     fn the_check_the_tester_marks_running_is_the_active_one() {
         let p = merge_tester(&empty_progress(), Some(r#"{"checks":[{"expect":"A","result":null},{"expect":"B","result":"running"}]}"#), T1);
-        assert_eq!(serde_json::to_value(&p.checks).unwrap(), json!([{"expect": "A", "result": null}, {"expect": "B", "result": null, "active": true}]));
+        assert_eq!(serde_json::to_value(&p.checks).unwrap(), json!([{"expect": "A", "result": null}, {"expect": "B", "result": null, "active": true, "started": T1}]));
+    }
+
+    #[test]
+    fn the_clip_of_the_change_runs_from_the_first_focus_check_to_the_last() {
+        let t = |m: u32, s: u32| format!("2026-11-26T07:{m:02}:{s:02}.000Z");
+        let mut p = start_stage(&empty_progress(), Stage::Read, &t(0, 0), None);
+        p.recording_at = Some(t(0, 0));
+        let plan = |a: &str, b: &str, c: &str| json!({"checks": [{"expect": "Sign in", "result": a}, {"expect": "Play the video", "result": b, "focus": true}, {"expect": "Pause button", "result": c, "focus": true}]}).to_string();
+        p = merge_tester(&p, Some(&plan("running", "", "")), &t(0, 30));
+        assert_eq!(change_window(&p, 2.0), None, "no focus check is done yet");
+        p = merge_tester(&p, Some(&plan("pass", "running", "")), &t(2, 0));
+        // The tester sets the last check straight to pass: it started when the one before it ended.
+        p = merge_tester(&p, Some(&plan("pass", "pass", "")), &t(3, 0));
+        p = merge_tester(&p, Some(&plan("pass", "pass", "pass")), &t(3, 40));
+        assert_eq!(p.checks[1].started.as_deref(), Some(t(2, 0).as_str()));
+        // 2:00 less 4 s lead and 2 s poll; 3:40 plus 3 s.
+        assert_eq!(change_window(&p, 2.0), Some((114.0, 109.0)));
+        assert_eq!(change_window(&Progress { recording_at: None, ..p.clone() }, 2.0), None, "no recording");
+        let unmarked = merge_tester(&p, Some(&plan("pass", "pass", "pass").replace(r#","focus":true"#, "")), &t(3, 50));
+        assert_eq!(change_window(&unmarked, 2.0), None, "no focus check");
     }
 
     #[test]

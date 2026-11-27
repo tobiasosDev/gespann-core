@@ -253,7 +253,7 @@ export interface Progress {
   at: Partial<Record<Stage, string>>;
   attempt: number;
   sandboxDone?: string;
-  checks: { expect: string; result: Check["result"] | null; active?: true; observed?: string; at?: string }[];
+  checks: { expect: string; result: Check["result"] | null; active?: true; observed?: string; at?: string; started?: string; focus?: true }[];
   now: { at: string; text: string }[];
 }
 

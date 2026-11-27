@@ -16,6 +16,10 @@ export interface LiveCheck {
   observed?: string;
   /** When the server first saw the result. */
   at?: string;
+  /** When the server first saw the tester on this check. */
+  started?: string;
+  /** A check of what the PR changes: the short video of the change covers it. */
+  focus?: true;
 }
 
 export interface Progress {
@@ -28,6 +32,8 @@ export interface Progress {
   checks: LiveCheck[];
   /** What the tester said it is doing, newest last, at most `TRAIL`. */
   now: { at: string; text: string }[];
+  /** When the recording of this attempt started. */
+  recordingAt?: string;
 }
 
 /** What the tester said it is doing: at most this many lines. */
