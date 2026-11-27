@@ -32,11 +32,12 @@ const IGNORED = /(?:^|\/)(?:tests?|__tests__|e2e|spec|fixtures|docs?)\/|\.(?:tes
 /** Settings of the flag system itself (`FEATURE_FLAGS`, `FEATURE_FLAG_REFRESH_MS`) and values that only look like flags. */
 const NOT_A_FLAG = /FLAGS|_FLAG_|_(?:MS|URL|KEY|TOKEN|SECRET|PATH|TIMEOUT|INTERVAL|TTL|SECONDS|DAYS)$/;
 
-function keysOf(line: string, file: string): string[] {
-  const keys: string[] = [];
-  for (const re of [CALL, INDEX]) for (const m of line.matchAll(re)) if (m[1]) keys.push(m[1]);
-  for (const m of line.matchAll(ENV)) if (m[1] && !NOT_A_FLAG.test(m[1])) keys.push(m[1]);
-  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push(m[1]);
+/** The keys on one line; `env` marks a name found only as an environment variable, not as a key the code asks for. */
+function keysOf(line: string, file: string): { key: string; env: boolean }[] {
+  const keys: { key: string; env: boolean }[] = [];
+  for (const re of [CALL, INDEX]) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
+  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
+  for (const m of line.matchAll(ENV)) if (m[1] && !NOT_A_FLAG.test(m[1]) && !keys.some((k) => k.key === m[1])) keys.push({ key: m[1], env: true });
   return keys;
 }
 
@@ -49,11 +50,10 @@ function canonical(key: string): string {
     .replace(/^(?:FEATURE|FF|FLAG|ENABLE)_/, "")
     .replace(/_(?:ENABLED|FLAG)$/, "");
 }
-const isEnv = (key: string) => /^[A-Z0-9_]+$/.test(key);
 
 /** The flag keys on added and deleted lines of a unified diff (`git diff base...head`). */
 export function flagChanges(diff: string): FlagChange[] {
-  const seen = new Map<string, { added: boolean; removed: boolean; files: Set<string> }>();
+  const seen = new Map<string, { added: boolean; removed: boolean; env: boolean; files: Set<string> }>();
   let file = "";
   // `---`/`+++` name the file only in a file's header: in a hunk they are a deleted `-- comment` or an added `++x`.
   let header = false;
@@ -71,8 +71,9 @@ export function flagChanges(diff: string): FlagChange[] {
     }
     const sign = line[0];
     if ((sign !== "+" && sign !== "-") || !file || file === "/dev/null" || IGNORED.test(file)) continue;
-    for (const key of keysOf(line.slice(1), file)) {
-      const e = seen.get(key) ?? { added: false, removed: false, files: new Set<string>() };
+    for (const { key, env } of keysOf(line.slice(1), file)) {
+      const e = seen.get(key) ?? { added: false, removed: false, env: true, files: new Set<string>() };
+      e.env &&= env;
       if (sign === "+") e.added = true;
       else e.removed = true;
       e.files.add(file);
@@ -90,11 +91,11 @@ export function flagChanges(diff: string): FlagChange[] {
     for (const f of e.files) g.files.add(f);
     groups.set(id, g);
   };
-  for (const [key, e] of seen) if (!isEnv(key)) add(key, key, e);
+  for (const [key, e] of seen) if (!e.env) add(key, key, e);
   for (const [key, e] of seen) {
-    if (!isEnv(key)) continue;
+    if (!e.env) continue;
     // After a rename the variable belongs to the key the code asks for now.
-    const owners = [...seen].filter(([k]) => !isEnv(k) && canonical(k) === canonical(key));
+    const owners = [...seen].filter(([k, o]) => !o.env && canonical(k) === canonical(key));
     const owner = (owners.find(([, o]) => o.added) ?? owners[0])?.[0];
     add(owner ?? key, key, e);
   }
