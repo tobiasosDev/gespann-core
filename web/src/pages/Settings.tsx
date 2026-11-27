@@ -1,5 +1,5 @@
 import { Copy, ExternalLink, Loader2, Plus } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { type AgentProvider, ago, api, type Boxes, type CodexModel, type KeyAgent, type OpenRouterModel, type Settings, type SettingsSection, type Tokens } from "../api.ts";
 import { ModuleSection } from "../components/ModuleSection.tsx";
 import { Block, Connected, Radio, Rows, SettingsPane } from "../components/settings.tsx";
@@ -150,10 +150,33 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
   const [modelError, setModelError] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState<string | null>(null);
+  // A row pick shows at once and saves in order, so quick arrow presses end on the last pick.
+  const [picked, setPicked] = useState<string | null>(null);
   const known = c.models.some((m) => m.id === c.model);
-  const isCustom = customOpen || (!!c.model && !known);
+  const isCustom = customOpen || (picked === null && !!c.model && !known);
   const customValue = customDraft ?? (c.model && !known ? c.model : "");
   const recommended = c.models.find((m) => m.recommended);
+  const saves = useRef({ tail: Promise.resolve() as Promise<unknown>, n: 0 });
+  const selected = picked ?? c.model ?? "";
+  const pick = (id: string) => {
+    setCustomOpen(false);
+    setCustomDraft(null);
+    setModelError(null);
+    setPicked(id);
+    const n = ++saves.current.n;
+    const last = () => n === saves.current.n;
+    saves.current.tail = saves.current.tail
+      .then(() => api("/settings/codex/model", { model: id }))
+      .then(
+        () => undefined,
+        (err: Error) => last() && setModelError(err.message),
+      )
+      .then(async () => {
+        if (!last()) return;
+        await reload();
+        if (last()) setPicked(null);
+      });
+  };
   const saveModel = async (next: string) => {
     if (await run(() => api("/settings/codex/model", { model: next }), setModelError)) {
       if (!next || c.models.some((m) => m.id === next)) setCustomOpen(false);
@@ -208,12 +231,8 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
             {c.models.map((m) => (
               <ModelRow
                 key={m.id}
-                on={!isCustom && c.model === m.id}
-                onPick={() => {
-                  setCustomOpen(false);
-                  setCustomDraft(null);
-                  if (c.model !== m.id || isCustom) void saveModel(m.id);
-                }}
+                on={!isCustom && selected === m.id}
+                onPick={() => pick(m.id)}
                 name={m.name}
                 tag={m.recommended ? "recommended" : undefined}
                 facts={modelFacts(m, recommended)}
@@ -221,12 +240,8 @@ function CodexSettings({ d, reload }: { d: Settings; reload: () => Promise<void>
               />
             ))}
             <ModelRow
-              on={!isCustom && !c.model}
-              onPick={() => {
-                setCustomOpen(false);
-                setCustomDraft(null);
-                if (c.model || isCustom) void saveModel("");
-              }}
+              on={!isCustom && !selected}
+              onPick={() => pick("")}
               name="Codex default"
             />
             {isCustom ? (
