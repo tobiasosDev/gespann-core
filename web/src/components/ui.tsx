@@ -50,11 +50,11 @@ export function Card({ className, ...p }: ComponentProps<"div">) {
   return <div className={cn("rounded-lg border border-border bg-card", className)} {...p} />;
 }
 
-export function CardHeader({ title, description, descriptionClassName, action }: { title: ReactNode; description?: ReactNode; descriptionClassName?: string; action?: ReactNode }) {
+export function CardHeader({ title, description, descriptionClassName, action, className }: { title: ReactNode; description?: ReactNode; descriptionClassName?: string; action?: ReactNode; className?: string }) {
   return (
     // An action that asks for the full width (w-full) wraps under the text on phones; a small one, such as a badge, stays beside it.
-    <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-border px-4 py-3">
-      <div className="min-w-0 flex-1">
+    <div className={cn("flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-border px-4 py-3", className)}>
+      <div className="flex-1">
         <h2 className="text-body font-semibold">{title}</h2>
         {description && <p className={cn("mt-0.5 text-body text-muted-foreground", descriptionClassName)}>{description}</p>}
       </div>
