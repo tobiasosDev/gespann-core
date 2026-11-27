@@ -145,7 +145,7 @@ async function cmdVerify(root: string, args: Args) {
   const sub = args._[1];
   if (sub === "prepare") {
     const ctx = runContext(root, args, true);
-    const p = await prepare(ctx, loadRecipe(ctx.recipeFile), sizes(args));
+    const p = await prepare(ctx, loadRecipe(ctx.recipeFile), sizes(args), str(args, "keys"));
     say(JSON.stringify({ ...p, run: ctx.run, work: ctx.work, out: ctx.out }));
     if (!p.ok) process.exitCode = 1;
     return;
@@ -181,7 +181,7 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
   recipe trigger --base b [--labels a,b] [--file f] < changed-files
                                          exit 0 when the PR runs, 1 when it does not
 
-  verify prepare [--recipe f] [--pr n --head sha --base sha] [--sizes phone-s,desktop]
+  verify prepare [--recipe f] [--pr n --head sha --base sha] [--sizes phone-s,desktop] [--keys f]
                                          bring the copy up; prints {"ok","url","mirror","run","work","out"}
                                          (two sizes or more also start the mirror)
   verify finish [--run id] [--wait s]    wait for alongside checks, judge verdict.json, tear down

@@ -175,7 +175,7 @@ const TOOLS: Tool[] = [
     name: "get_run",
     title: "Get run",
     description:
-      "Status, verdict, summary, every check (expected, observed, result, proof files, suggested fix), per linked GitHub issue whether its goal was met or missed, and the issues to act on. Give run_id, or repo and pr for the newest run of that pull request.",
+      "Status, verdict, summary, every check (expected, observed, result, proof files, suggested fix), per linked GitHub issue whether its goal was met or missed, which outside services ran as fakes (access: real false) or with the project's key, and the issues to act on. Give run_id, or repo and pr for the newest run of that pull request.",
     inputSchema: {
       type: "object",
       properties: { run_id: { type: "integer" }, repo: { type: "string", description: "owner/repo or project id" }, pr: { type: "integer", minimum: 1 } },
@@ -195,6 +195,8 @@ const TOOLS: Tool[] = [
         issues: issuesOf(run, judged),
         checks: (judged?.verdict?.checks ?? []).map((c, i) => ({ n: i + 1, ...c })),
         goals: judged?.verdict?.goals ?? [],
+        // Outside services the copy faked or reached with the project's key (docs/access.md).
+        ...(judged?.access?.length ? { access: judged.access } : {}),
         proof: judged?.verdict?.proof ?? [],
         files: files.map((f) => ({ name: f, kind: kindOf(f), url: fileUrl(d, run, f) })),
         ...(run.media_cleared ? { media_deleted: `${run.media_cleared}: screenshots and recording were deleted after the PR closed` } : {}),

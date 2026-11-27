@@ -495,7 +495,12 @@ pub fn combine(first: &Value, second: &Value) -> Option<(Value, Vec<String>)> {
     let s2 = v2["summary"].as_str().unwrap_or("");
     let after = format!("After the copy was fixed, the second test ended {}{}", second["outcome"].as_str().unwrap_or(""), if s2.is_empty() { ".".into() } else { format!(": {s2}") });
     verdict["summary"] = [v1["summary"].as_str().unwrap_or(""), &after].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(" ").into();
-    Some((serde_json::json!({ "verdict": verdict, "outcome": "FAIL", "problems": [] }), carried))
+    let mut judged = serde_json::json!({ "verdict": verdict, "outcome": "FAIL", "problems": [] });
+    // The second test ran on the fixed copy: its outside services (faked or real) are the ones that stand.
+    if let Some(access) = second.get("access").filter(|a| a.is_array()) {
+        judged["access"] = access.clone();
+    }
+    Some((judged, carried))
 }
 
 #[cfg(test)]
@@ -698,6 +703,11 @@ mod tests {
         assert_eq!(j["verdict"]["goals"][0]["result"], "missed");
         assert_eq!(j["verdict"]["proof"], json!(["paired.png", "report.png", "first-report-error.png"]));
         assert_eq!(j["verdict"]["summary"], "fail After the copy was fixed, the second test ended PASS: pass");
+        assert!(j.get("access").is_none(), "no outside services, no access list");
+        // The fake the fix added is what the result names.
+        let mut faked = passed.clone();
+        faked["access"] = json!([{"name": "ZOTERO_KEY", "about": "Zotero account", "real": false, "why": "no key stored"}]);
+        assert_eq!(combine(&first, &faked).unwrap().0["access"][0]["name"], "ZOTERO_KEY");
         // A second FAIL, or a first test that was only blocked, is reported as the second test found it.
         let mut failed_again = passed.clone();
         failed_again["outcome"] = json!("FAIL");

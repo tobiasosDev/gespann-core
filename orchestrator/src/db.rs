@@ -180,6 +180,9 @@ create index if not exists jobs_status on jobs(status, id);
 create table if not exists slots (
   id integer primary key, project_id integer not null references projects(id), sandbox_id text not null,
   job_id integer, bundle integer not null default 0);
+create table if not exists project_access (
+  project_id integer not null references projects(id), name text not null,
+  sealed text not null, hint text not null, updated text not null, primary key (project_id, name));
 ";
 
 /// The orchestrator's own tables.
@@ -390,6 +393,19 @@ impl Db {
                 Ok(AgentRow { provider, model: r.get::<_, Option<String>>(col)?.filter(|m| !m.is_empty()), context, auth })
             })
             .optional()
+        })
+    }
+    /// The project's sealed keys for its outside services (docs/access.md), by variable name. Empty
+    /// while the UI has not made the table yet.
+    pub fn access_keys(&self, project_id: i64) -> Result<Vec<(String, String)>> {
+        self.with(|c| {
+            let mut st = match c.prepare("select name, sealed from project_access where project_id = ? order by name") {
+                Ok(st) => st,
+                Err(e) if e.to_string().contains("no such table") => return Ok(vec![]),
+                Err(e) => return Err(e),
+            };
+            let rows = st.query_map([project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            rows.collect()
         })
     }
     /// The owner's sealed key for `provider`; None for Codex, whose sign-in is `codex_auth`.

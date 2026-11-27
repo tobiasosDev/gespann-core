@@ -33,9 +33,29 @@ export interface Recipe {
   seeds: Seed[];
   /** Repo-relative file appended to the generic tester prompt. */
   prompt?: string;
+  /** Outside services the copy fakes; a key stored for one makes PRs that change its files use the real one. */
+  access: Access[];
   /** Always runs at the end, after env.down, even when an earlier step failed. */
   cleanup: Step[];
 }
+
+/**
+ * An outside service (a provider account, a Mac with Xcode) the copy stands in for with a fake. The
+ * scripts use the real service when the variable `name` is set and the fake otherwise. gespann sets it
+ * only when the project stored a key for it and the PR changes a file matching `paths`, the code that
+ * talks to the service; every other PR runs against the fake (docs/access.md).
+ */
+export interface Access {
+  /** The environment variable that carries the key: `MAC_PROVIDER_TOKEN`. */
+  name: string;
+  /** The service in a few words, as the run page and the Setup page name it: "Mac sandbox provider". */
+  about: string;
+  /** Repo-relative globs of the code that talks to the service. */
+  paths: string[];
+}
+
+/** An access name: an environment variable of upper-case letters, digits and `_`, not one of gespann's own. */
+export const ACCESS_NAME_RE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 export interface Trigger {
   /** PR base branches. Empty: any. */
@@ -218,7 +238,7 @@ export function parseRecipe(text: string): Recipe {
     throw new RecipeError([`not valid YAML: ${(err as Error).message}`]);
   }
   if (!isObj(raw)) throw new RecipeError(["the recipe must be a mapping"]);
-  const top = new Reader(raw, "", problems).fields(["version", "trigger", "timeout", "mode", "setup", "services", "flags", "env", "replay", "alongside", "login", "seeds", "prompt", "cleanup"]);
+  const top = new Reader(raw, "", problems).fields(["version", "trigger", "timeout", "mode", "setup", "services", "flags", "env", "replay", "alongside", "login", "seeds", "prompt", "access", "cleanup"]);
 
   if (raw.version !== 1) problems.push("version: must be 1");
   // `mode` is read no more: whether a FAIL blocks the merge is the project's merge gate, switched on
@@ -259,8 +279,18 @@ export function parseRecipe(text: string): Recipe {
     env,
     alongside,
     seeds,
+    access: top.list("access").map((a) => {
+      a.fields(["name", "about", "paths"]);
+      const name = a.str("name", true);
+      if (name && (!ACCESS_NAME_RE.test(name) || name.startsWith("GESPANN_"))) problems.push(`${a.path("name")}: an environment variable in upper case (A-Z, 0-9, _), not starting with GESPANN_`);
+      const paths = a.strings("paths");
+      if (!paths.length) problems.push(`${a.path("paths")}: needs the files of the code that talks to the service, or no PR would get the key`);
+      return { name, about: a.str("about", true), paths };
+    }),
     cleanup: top.list("cleanup").map((s) => step(s)),
   };
+  const access = recipe.access.map((a) => a.name).filter(Boolean);
+  for (const n of new Set(access.filter((n, i) => access.indexOf(n) !== i))) problems.push(`access "${n}" is listed twice`);
 
   const f = top.obj("flags")?.fields(["run", "admin", "switch"]);
   if (f) {

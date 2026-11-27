@@ -129,10 +129,11 @@ Every command runs with `sh -c` in the repo root. These variables are set:
 | `login` | | `{user, password, path?, note?}`: an account that exists only on the copy. Never a real credential. |
 | `seeds[]` | | `{name, run, about}`: data states the tester may load |
 | `prompt` | | repo-relative file appended to the generic tester prompt: domain knowledge, fixtures, what to ignore |
+| `access[]` | | `{name, about, paths}`: an outside service the copy fakes. `name` is the environment variable that carries the key (upper case, not `GESPANN_…`), `about` names the service, `paths` are the globs of the code that talks to it. The scripts use the real service when the variable is set; gespann sets it only when the project stored a key and the PR changes a file in `paths`. See [access.md](access.md). |
 | `cleanup[]` | | `{name, run}`, always run |
 
 Unknown fields are errors, so a typo never drops a setting silently.
 
 ## What stays out of a recipe
 
-Secrets. Commands get credentials from the CI environment or a secret manager at run time, never from the recipe.
+Secrets. Commands get credentials from the CI environment or a secret manager at run time, never from the recipe. On app.gespann.app a project stores keys for its outside services on its Setup page ([access.md](access.md)).

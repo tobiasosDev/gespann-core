@@ -9,7 +9,7 @@ import { html } from "hono/html";
 import { triggered } from "../verify/plan.ts";
 import { parseProgress } from "../verify/progress.ts";
 import { DEFAULT_CHECKS } from "../verify/prompt.ts";
-import { parseRecipe } from "../verify/recipe.ts";
+import { ACCESS_NAME_RE, parseRecipe, type Access } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
 import { ALERT_KINDS, ALERT_MAX_AFTER, alertRules, confirmMail, readConfirmToken } from "./alerts.ts";
@@ -548,6 +548,28 @@ export function createApp(d: AppDeps): Hono<Env> {
     return c.json({ id });
   });
 
+  /**
+   * The project's outside services (docs/access.md): each the recipe fakes, with whether a key is stored,
+   * plus keys stored for a service the recipe no longer lists. Never a key.
+   */
+  const accessOf = (p: Project) => {
+    let listed: Access[] = [];
+    try {
+      listed = p.recipe ? parseRecipe(p.recipe).access : [];
+    } catch {
+      // an unreadable recipe lists none
+    }
+    const stored = new Map(db.accessKeys(p.id).map((k) => [k.name, k]));
+    const key = (name: string) => {
+      const k = stored.get(name);
+      return k ? { hint: k.hint, updated: k.updated } : null;
+    };
+    return [
+      ...listed.map((a) => ({ name: a.name, about: a.about, paths: a.paths, listed: true, key: key(a.name) })),
+      ...[...stored.values()].filter((k) => !listed.some((a) => a.name === k.name)).map((k) => ({ name: k.name, about: "", paths: [] as string[], listed: false, key: key(k.name) })),
+    ];
+  };
+
   app.get("/api/projects/:id", (c) => {
     const p = project(c);
     const { codex_login: _unused, codex: _old, ...rest } = p;
@@ -572,6 +594,7 @@ export function createApp(d: AppDeps): Hono<Env> {
       /** The instance runs macOS sandboxes (the orchestrator says so); without them a macOS project's jobs wait. */
       macos_available: servesMacos(orchestratorState(db)),
       proof: existsSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png")),
+      access: accessOf(p),
       // clip: the run has change.mp4, the part of its recording that shows what the PR changes.
       runs: db.runs(p.id).map((r) => ({ ...r, waitingForChecks: ciWait.has(r.id), clip: (JSON.parse(r.files) as string[]).includes("change.mp4") })),
       closed: db.closedPrs(p.id),
@@ -621,6 +644,28 @@ export function createApp(d: AppDeps): Hono<Env> {
     // The recipe was written for the other platform: the next setup starts over in a sandbox of the new one.
     if (!db.switchPlatform(p.id, platform)) throw new HttpError(409, "wait until the project's jobs have ended, then switch");
     rmSync(join(config.dataDir, "projects", String(p.id), "setup-proof.png"), { force: true });
+    return c.json({ ok: true });
+  });
+
+  // A key for one outside service: kept sealed, shown never again; only the owner, whose runs use it, sets it.
+  app.post("/api/projects/:id/access/:name", async (c) => {
+    const p = project(c);
+    if (p.owner_id !== me(c).id) throw new HttpError(403, "only the project's owner stores keys");
+    const name = c.req.param("name");
+    if (!ACCESS_NAME_RE.test(name) || name.startsWith("GESPANN_")) throw new HttpError(400, "name: an environment variable in upper case (A-Z, 0-9, _)");
+    const body = await c.req.json<{ key?: unknown }>();
+    const key = typeof body.key === "string" ? body.key.trim() : "";
+    if (!key) throw new HttpError(400, "key: paste the key");
+    if (key.length > 16_000) throw new HttpError(400, "key: at most 16000 characters");
+    const hint = key.length >= 16 ? `…${key.slice(-4)}` : "…";
+    db.setAccessKey(p.id, name, seal(config.sessionSecret, key), hint);
+    return c.json({ ok: true, hint });
+  });
+
+  app.post("/api/projects/:id/access/:name/remove", (c) => {
+    const p = project(c);
+    if (p.owner_id !== me(c).id) throw new HttpError(403, "only the project's owner removes keys");
+    db.deleteAccessKey(p.id, c.req.param("name"));
     return c.json({ ok: true });
   });
 
