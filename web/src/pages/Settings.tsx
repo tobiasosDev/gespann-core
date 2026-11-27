@@ -238,16 +238,20 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
   );
 }
 
-/** The picker's line for a model: benchmark accuracy and cost, or its price next to the recommended model. */
-function modelLabel(m: CodexModel, recommended: CodexModel | undefined): string {
-  const name = `${m.name}${m.recommended ? " (recommended)" : ""}`;
-  if (m.bench) return `${name} — ${m.bench.right}/${m.bench.of} right · ≈${m.bench.credits < 1 ? m.bench.credits.toFixed(2) : m.bench.credits.toFixed(1)} credits per PR`;
-  if (!recommended) return `${name} — not benchmarked`;
+/** A model's benchmark accuracy and cost, or its price next to the recommended model. */
+function modelFacts(m: CodexModel, recommended: CodexModel | undefined): string {
+  if (m.bench) return `${m.bench.right}/${m.bench.of} right · ≈${m.bench.credits < 1 ? m.bench.credits.toFixed(2) : m.bench.credits.toFixed(1)} credits per PR`;
+  if (!recommended) return "not benchmarked";
   const r = recommended.rates;
   const ratios = [m.rates.input / r.input, m.rates.cached / r.cached, m.rates.output / r.output].map((x) => Math.round(x));
   const lo = Math.min(...ratios);
   const hi = Math.max(...ratios);
-  return `${name} — not benchmarked · ${lo === hi ? lo : `${lo}–${hi}`}× the token price of ${recommended.name}`;
+  return `not benchmarked · ${lo === hi ? lo : `${lo}–${hi}`}× the token price of ${recommended.name}`;
+}
+
+/** The picker's line for a model. */
+function modelLabel(m: CodexModel, recommended: CodexModel | undefined): string {
+  return `${m.name}${m.recommended ? " (recommended)" : ""} — ${modelFacts(m, recommended)}`;
 }
 
 export function SettingsPage() {
@@ -356,7 +360,7 @@ export function SettingsPage() {
             </label>
             <Select
               id="codex-model"
-              className="max-w-lg"
+              className="w-auto max-w-full"
               disabled={busy}
               value={selectValue}
               onChange={(e) => {
@@ -417,6 +421,7 @@ export function SettingsPage() {
               )}
             </form>
           )}
+          {selected && <p className="text-small text-muted-foreground sm:hidden">{modelFacts(selected, recommended)}</p>}
           {modelError && <p className="text-body text-bad">{modelError}</p>}
           {selected?.note && <p className="text-body text-warn">{selected.note}</p>}
           {recommended && !isCustom && selected?.id !== recommended.id && (
