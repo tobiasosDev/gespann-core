@@ -129,6 +129,14 @@ test("a flag only in a flag folder's registry is found, and a renamed key stays 
 +if (isFeatureEnabled("new-cart")) go();
 `;
   assert.deepEqual(flagChanges(upper).map((f) => [f.key, f.kind]), [["NEW_CART", "removed"], ["new-cart", "added"]], "an upper-case key the code asks for is a key, not an environment variable");
+  const registryRename = `diff --git a/lib/flags/registry.ts b/lib/flags/registry.ts
+--- a/lib/flags/registry.ts
++++ b/lib/flags/registry.ts
+@@ -1 +1 @@
+-  { key: "NEW_CART", default: false },
++  { key: "new-cart", default: false },
+`;
+  assert.deepEqual(flagChanges(registryRename).map((f) => [f.key, f.kind]), [["NEW_CART", "removed"], ["new-cart", "added"]], "an explicit registry key is a key in any case");
   // No cap: a tenth flag reaches the tester like the first.
   const many = Array.from({ length: 10 }, (_, i) => `+isFeatureEnabled("flag-${i}")`).join("\n");
   assert.equal(flagChanges(`diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,10 @@\n${many}\n`).length, 10);

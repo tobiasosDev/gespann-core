@@ -24,7 +24,9 @@ const INDEX = /\b(?:Flipper|Feature|Features|Flags)\s*\[\s*[:"']([A-Za-z][\w.-]*
 /** Environment flags: FEATURE_X, FF_X, ENABLE_X (with a framework's public prefix), X_ENABLED. */
 const ENV = /\b((?:NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)?(?:FEATURE|FF|FLAG|ENABLE)_[A-Z0-9_]*[A-Z0-9]|[A-Z][A-Z0-9_]*_(?:ENABLED|FLAG))\b/g;
 /** In a flag registry file: a quoted key with a separator (`"new-checkout": {`, `key: "new_checkout"`). */
-const REGISTRY = [/["'`]([a-z0-9]+(?:[-_.][a-z0-9]+)+)["'`]\s*:/g, /\b(?:key|flag|name|id)\s*[:=]\s*["'`]([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+)["'`]/g];
+const REGISTRY = [/["'`]([a-z0-9]+(?:[-_.][a-z0-9]+)+)["'`]\s*:/g, /\b(?:key|flag|id)\s*[:=]\s*["'`]([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+)["'`]/g];
+/** In a registry, `name: "X"` is a key, unless it is upper case: then it names the flag's variable (`env: { name: "NEW_CART_ENABLED" }`). */
+const REGISTRY_NAME = /\bname\s*[:=]\s*["'`]([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+)["'`]/g;
 /** A flag registry: a file named for flags (`flags.ts`, `features.yml`) or a file in a flag folder (`lib/feature-flags/registry.ts`). */
 const REGISTRY_FILE = /(?:^|\/)[^/]*(?:flag|feature|toggle)[^/]*$|(?:^|\/)[^/]*(?:flag|toggle)[^/]*\/[^/]+$/i;
 /** Tests flip flags all the time; docs and lockfiles only mention them. */
@@ -36,8 +38,10 @@ const NOT_A_FLAG = /FLAGS|_FLAG_|_(?:MS|URL|KEY|TOKEN|SECRET|PATH|TIMEOUT|INTERV
 function keysOf(line: string, file: string): { key: string; env: boolean }[] {
   const keys: { key: string; env: boolean }[] = [];
   for (const re of [CALL, INDEX]) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
-  // A registry names a flag's variable too (`env: { name: "NEW_CART_ENABLED" }`): an upper-case name there is the variable.
-  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: /^[A-Z0-9_]+$/.test(m[1]) });
+  if (REGISTRY_FILE.test(file)) {
+    for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push({ key: m[1], env: false });
+    for (const m of line.matchAll(REGISTRY_NAME)) if (m[1]) keys.push({ key: m[1], env: /^[A-Z0-9_]+$/.test(m[1]) });
+  }
   for (const m of line.matchAll(ENV)) if (m[1] && !NOT_A_FLAG.test(m[1]) && !keys.some((k) => k.key === m[1])) keys.push({ key: m[1], env: true });
   return keys;
 }
