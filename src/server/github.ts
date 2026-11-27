@@ -4,6 +4,12 @@ import type { GithubApp } from "./config.ts";
 const API = "https://api.github.com";
 const HEADERS = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "gespann" };
 
+/** A user's GitHub token. `refresh` is null when the app's user tokens do not expire. */
+export interface UserToken {
+  access: string;
+  refresh: string | null;
+}
+
 export class GithubError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -170,15 +176,31 @@ export class Github {
     return u.toString();
   }
 
-  async exchangeCode(code: string, redirectUri: string): Promise<string> {
+  async exchangeCode(code: string, redirectUri: string): Promise<UserToken> {
+    return this.userToken({ code, redirect_uri: redirectUri });
+  }
+
+  /** A new user token for a refresh token. GitHub accepts each refresh token once. */
+  async refreshUserToken(refresh: string): Promise<UserToken> {
+    return this.userToken({ grant_type: "refresh_token", refresh_token: refresh });
+  }
+
+  private async userToken(grant: Record<string, string>): Promise<UserToken> {
     const res = await this.fetchImpl("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json", "User-Agent": "gespann" },
-      body: JSON.stringify({ client_id: this.app.clientId, client_secret: this.app.clientSecret, code, redirect_uri: redirectUri }),
+      body: JSON.stringify({ client_id: this.app.clientId, client_secret: this.app.clientSecret, ...grant }),
     });
-    const r = (await res.json()) as { access_token?: string; error_description?: string };
-    if (!r.access_token) throw new GithubError(400, r.error_description ?? "no access token");
-    return r.access_token;
+    // GitHub answers a refused code or refresh token with 200 and `error`; other statuses are outages.
+    const body: unknown = await res.json().catch(() => null);
+    const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+    const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+    if (!res.ok) throw new GithubError(res.status, text(r.error_description) ?? "token endpoint failed");
+    if (text(r.error)) throw new GithubError(400, text(r.error_description) ?? text(r.error) ?? "");
+    // An unreadable or incomplete answer is an outage too, not a refusal.
+    const access = text(r.access_token);
+    if (!access || (r.refresh_token !== undefined && !text(r.refresh_token))) throw new GithubError(502, "no usable token in GitHub's answer");
+    return { access, refresh: text(r.refresh_token) };
   }
 
   async user(userToken: string): Promise<{ id: number; login: string; name: string | null; avatar_url: string; email?: string | null }> {

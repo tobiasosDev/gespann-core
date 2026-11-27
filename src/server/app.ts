@@ -19,11 +19,12 @@ import { appManifest, convertManifest, Github, type PullRequest, verifySignature
 import { capFor, type ServerModule } from "./extension.ts";
 import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
-import { afterSignIn, mountOAuth } from "./oauth.ts";
+import { mountOAuth } from "./oauth.ts";
 import { AGENT_MODEL_RE, AgentKeyError, checkAgentKey, isKeyAgent, KEY_AGENT_INFO, KEY_AGENTS } from "./agentkeys.ts";
 import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal, suggestModels } from "./openrouter.ts";
 import { type Mailer, validEmail } from "./mail.ts";
 import { recordPrState } from "./pulls.ts";
+import { afterGithub, landingAfterSignIn, linkTag, mountSignIn, signInMethods, syncRepos } from "./signin.ts";
 
 /**
  * Codex models offered in Settings; users may also keep Codex's default or enter a custom model slug.
@@ -143,6 +144,7 @@ export function createApp(d: AppDeps): Hono<Env> {
   // number is the one of the provider that serves them.
   const hostSize = (login: string): number | null => hostSizeFor(orchestratorState(db), login);
   const f = d.fetch ?? fetch;
+  const methods = signInMethods(d.module?.signIn);
   // OpenRouter's model list changes rarely; asked at most once an hour. Losing it on a restart is harmless.
   let models: { at: number; list: OpenRouterModel[] } | null = null;
   const openRouterModels = async (): Promise<OpenRouterModel[]> => {
@@ -259,7 +261,8 @@ export function createApp(d: AppDeps): Hono<Env> {
     if (d.githubReady()) installUrl = d.github().installUrl();
     // An instance that sends mail asks a user without an address for one, once, right after sign-in.
     const askEmail = !!u && !!d.mailer?.sends && !u.email && !u.email_pending;
-    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [], askEmail });
+    const signIn = d.githubReady() ? methods.map((m) => ({ id: m.id, label: m.label })) : [];
+    return c.json({ user: u ? { login: u.login, avatar: u.avatar } : null, githubReady: d.githubReady(), installUrl, links: u ? (d.module?.links ?? []) : [], askEmail, signIn });
   });
 
   app.post("/api/logout", (c) => {
@@ -656,33 +659,39 @@ export function createApp(d: AppDeps): Hono<Env> {
     return c.json({ runId });
   });
 
+  const signedIn = (c: Context<Env>, userId: number) => {
+    const sid = randomBytes(32).toString("hex");
+    db.createSession(sid, userId, SESSION_DAYS);
+    setCookie(c, "gs", sid, { httpOnly: true, secure, sameSite: "Lax", path: "/", maxAge: SESSION_DAYS * 86400 });
+    return c.redirect(landingAfterSignIn(c, db, userId));
+  };
+
   // GitHub sign-in.
+  // `?link=1`: the "Connect GitHub" step after another sign-in; only such a sign-in links it, and only
+  // the pending sign-in it started for.
   app.get("/auth/github", (c) => {
     const state = randomBytes(16).toString("hex");
-    setCookie(c, "gs_oauth", state, { httpOnly: true, secure, sameSite: "Lax", path: "/auth", maxAge: 600 });
+    const tag = c.req.query("link") ? linkTag(c, config) : null;
+    setCookie(c, "gs_oauth", tag ? `${state}.${tag}` : state, { httpOnly: true, secure, sameSite: "Lax", path: "/auth", maxAge: 600 });
     return c.redirect(d.github().authorizeUrl(`${config.baseUrl}/auth/github/callback`, state));
   });
   app.get("/auth/github/callback", async (c) => {
-    const state = getCookie(c, "gs_oauth");
+    const [state, tag] = (getCookie(c, "gs_oauth") ?? "").split(".");
     if (!state || c.req.query("state") !== state) return c.redirect("/auth/github");
     deleteCookie(c, "gs_oauth", { path: "/auth" });
     const gh = d.github();
     const token = await gh.exchangeCode(c.req.query("code") ?? "", `${config.baseUrl}/auth/github/callback`);
-    const u = await gh.user(token);
+    const u = await gh.user(token.access);
     if (!allowed(u.login)) return c.redirect("/?closed=1");
     const user = db.upsertUser({ github_id: u.id, login: u.login, name: u.name, avatar: u.avatar_url });
-    const email = await gh.verifiedEmail(token, u.email);
+    const email = await gh.verifiedEmail(token.access, u.email);
     if (email) db.offerEmail(user.id, email, "github");
-    const repos = [];
-    for (const i of await gh.userInstallations(token)) {
-      for (const r of await gh.userRepos(token, i.id)) repos.push({ repo_id: r.id, installation_id: i.id, account: i.account, full_name: r.full_name, private: r.private, default_branch: r.default_branch });
-    }
-    db.setRepos(user.id, repos);
-    const sid = randomBytes(32).toString("hex");
-    db.createSession(sid, user.id, SESSION_DAYS);
-    setCookie(c, "gs", sid, { httpOnly: true, secure, sameSite: "Lax", path: "/", maxAge: 7 * 86400 });
-    return c.redirect(afterSignIn(c) ?? (db.projects(user.id).length ? "/projects" : "/projects/new"));
+    await syncRepos(db, gh, token.access, user.id);
+    afterGithub(c, { config, db, methods }, user.id, token, tag);
+    return signedIn(c, user.id);
   });
+  // Other ways to sign in, from the server module.
+  mountSignIn(app, { config, db, github: d.github, githubReady: d.githubReady, methods, allowed, signedIn });
 
   // GitHub App creation for this instance (manifest flow), guarded by ADMIN_TOKEN.
   app.get("/setup", (c) => {

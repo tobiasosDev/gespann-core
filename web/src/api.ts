@@ -8,6 +8,8 @@ export interface Me {
   links?: { label: string; href: string }[];
   /** The instance sends mail and has no address for this user: ask for one. */
   askEmail?: boolean;
+  /** Other ways to sign in, from a server module of this instance: `/auth/with/<id>`. */
+  signIn?: { id: string; label: string }[];
 }
 
 /** One kind of mail in Settings → Mail, with the user's choice. */

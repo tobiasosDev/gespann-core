@@ -214,6 +214,9 @@ create table if not exists alert_rules (
 create table if not exists alert_streaks (
   project_id integer not null references projects(id), category text not null,
   count integer not null default 0, mailed integer not null default 0, primary key (project_id, category));
+create table if not exists identities (
+  provider text not null, subject text not null, user_id integer not null references users(id),
+  email text, created text not null, primary key (provider, subject));
 `;
 
 /**
@@ -306,6 +309,7 @@ export class Db {
       ["email", "text"],
       ["email_source", "text"],
       ["email_pending", "text"],
+      ["github_token", "text"],
     ] as const) {
       if (cols.has(name)) continue;
       try {
@@ -500,6 +504,37 @@ export class Db {
 
   deleteSession(id: string): void {
     this.run("delete from sessions where id = ?", id);
+  }
+
+  /** The user a module's sign-in (provider, subject) is linked to. */
+  identityUser(provider: string, subject: string): User | undefined {
+    return this.one<User>("select u.* from identities i join users u on u.id = i.user_id where i.provider = ? and i.subject = ?", provider, subject);
+  }
+
+  /** Links a module's sign-in to a user; a later link of the same sign-in replaces it. */
+  linkIdentity(provider: string, subject: string, userId: number, email: string | null): void {
+    this.run(
+      "insert into identities (provider, subject, user_id, email, created) values (?, ?, ?, ?, ?) on conflict(provider, subject) do update set user_id = excluded.user_id, email = excluded.email",
+      provider,
+      subject,
+      userId,
+      email,
+      now(),
+    );
+  }
+
+  /** The user's GitHub token, sealed; kept only on instances with other sign-ins, to re-read repositories. */
+  githubToken(userId: number): string | null {
+    return this.one<{ github_token: string | null }>("select github_token from users where id = ?", userId)?.github_token ?? null;
+  }
+
+  setGithubToken(userId: number, sealed: string | null): void {
+    this.run("update users set github_token = ? where id = ?", sealed, userId);
+  }
+
+  /** Replaces the GitHub token only if it is still `from`; false when another sign-in changed it. */
+  swapGithubToken(userId: number, from: string, to: string | null): boolean {
+    return Number(this.sql.prepare("update users set github_token = ? where id = ? and github_token = ?").run(to, userId, from).changes) > 0;
   }
 
   /** The repositories this user can access through the app, as GitHub reported at sign-in. */
