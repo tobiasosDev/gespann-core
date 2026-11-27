@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::boxes::{agent_for, codex_exec, ensure_repo, ensure_sandbox, git, last_json, long, recipe_check, save_bundle, stop_sandbox, with_env, write_prompt, Sbx};
+use super::boxes::{agent_for, agent_exec, ensure_repo, ensure_sandbox, git, last_json, long, recipe_check, save_bundle, stop_sandbox, with_env, write_prompt, Sbx};
 use super::{cut, tail, Cx};
 use crate::codex::with_agent;
 use crate::db::{opt_text, text, Project};
@@ -69,20 +69,21 @@ async fn run_setup(cx: &Cx<'_>, p: &Project, pre: &str, slot: &mut Option<Sbx>) 
             write_prompt(cx, b, "setup", &input, &prompt_file).await
         })
         .await?;
-    cx.note(&k("log.codex"), "Codex prepares the environment (this can take a while on the first build)").await;
-    let cancelled = || cx.stopped();
     let agent = agent_for(cx, p).await?;
-    let command = codex_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), &agent, "high");
+    let name = agent.provider.agent_name();
+    cx.note(&k("log.codex"), &format!("{name} prepares the environment (this can take a while on the first build)")).await;
+    let cancelled = || cx.stopped();
+    let command = agent_exec(b, &prompt_file, &format!("{}/setup-last.txt", b.gespann), &format!("{}/setup.jsonl", b.gespann), &agent, "high");
     let codex_key = k("codex");
     let r = with_agent(cx.ctx, &cx.jr, &k("signin"), p.owner_id, &b.id, &agent, || long(cx, b, &codex_key, &command, Duration::from_secs(120 * 60), &cancelled)).await?;
     let last = sb.read_file(&b.id, &format!("{}/setup-last.txt", b.gespann)).await?.unwrap_or_default();
     if !last.is_empty() {
-        cx.log(&format!("Codex: {}", cut(&last, 4000)));
+        cx.log(&format!("{name}: {}", cut(&last, 4000)));
     }
     if r.exit_code != Some(0) {
-        bail!("{}", if r.timed_out { "setup took longer than 2 hours".to_string() } else { format!("codex exited {}: {}", super::boxes::js_code(r.exit_code), tail(&r.tail, 800)) });
+        bail!("{}", if r.timed_out { "setup took longer than 2 hours".to_string() } else { format!("{name} exited {}: {}", super::boxes::js_code(r.exit_code), tail(&r.tail, 800)) });
     }
-    let recipe = sb.read_file(&b.id, &b.recipe).await?.filter(|r| !r.is_empty()).ok_or_else(|| anyhow!("Codex wrote no {}", b.recipe))?;
+    let recipe = sb.read_file(&b.id, &b.recipe).await?.filter(|r| !r.is_empty()).ok_or_else(|| anyhow!("{name} wrote no {}", b.recipe))?;
     recipe_check(cx, b, &b.recipe).await?;
     let notes = sb.read_file(&b.id, &format!("{}/NOTES.md", b.project)).await?;
     let checks = sb.read_file(&b.id, &format!("{}/CHECKS.md", b.project)).await?.unwrap_or_default().trim().to_string();

@@ -9,6 +9,8 @@ use rusqlite::types::Value;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use crate::codex::Provider;
+
 /// `new Date().toISOString()`: `2026-11-26T09:39:51.049Z`.
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
@@ -107,15 +109,18 @@ pub fn int(n: i64) -> Value {
 }
 
 /// SQL over `users`: the owner's agent can run on the provider they chose (`AGENT_READY` in src/server/db.ts).
-pub const AGENT_READY: &str = "(case when agent = 'openrouter' then openrouter_key is not null and openrouter_model is not null else codex_state = 'connected' end)";
+pub const AGENT_READY: &str = "(case agent when 'openrouter' then openrouter_key is not null and openrouter_model is not null when 'claude' then claude_key is not null when 'copilot' then copilot_key is not null when 'grok' then grok_key is not null else codex_state = 'connected' end)";
 
-/// The owner's agent provider from Settings. The OpenRouter key stays sealed (`codex::open`).
+/// The users columns of Claude Code, Copilot and Grok: sealed key, its label, the chosen model.
+pub const AGENT_COLUMNS: [&str; 9] = ["claude_key text", "claude_label text", "claude_model text", "copilot_key text", "copilot_label text", "copilot_model text", "grok_key text", "grok_label text", "grok_model text"];
+
+/// The owner's agent provider from Settings, with that provider's model (Codex: the Codex model) and,
+/// for OpenRouter, the model's context size. Keys stay in the database (`Db::agent_key`).
 #[derive(Debug, Clone, Default)]
 pub struct AgentRow {
-    pub openrouter: bool,
-    pub openrouter_key: Option<String>,
-    pub openrouter_model: Option<String>,
-    pub openrouter_context: Option<i64>,
+    pub provider: Provider,
+    pub model: Option<String>,
+    pub context: Option<i64>,
 }
 
 /// The UI's tables as `src/server/db.ts` makes them (SCHEMA plus the columns added later), for tests.
@@ -126,7 +131,8 @@ create table if not exists users (
   name text, avatar text, created text not null,
   codex_state text not null default 'none', codex_login text, codex_auth text, codex_account text, codex_model text,
   repos_synced text, max_jobs integer, job_cap integer,
-  agent text not null default 'codex', openrouter_key text, openrouter_label text, openrouter_model text, openrouter_context integer);
+  agent text not null default 'codex', openrouter_key text, openrouter_label text, openrouter_model text, openrouter_context integer,
+  claude_key text, claude_label text, claude_model text, copilot_key text, copilot_label text, copilot_model text, grok_key text, grok_label text, grok_model text);
 create table if not exists projects (
   id integer primary key, owner_id integer not null references users(id), installation_id integer not null,
   repo text not null unique, repo_id integer not null, default_branch text not null,
@@ -265,7 +271,7 @@ fn ensure_own(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         }
     }
     // The UI adds these users columns too; an orchestrator that opens the file first must not fail on them.
-    for col in ["job_cap integer", "codex_model text", "agent text not null default 'codex'", "openrouter_key text", "openrouter_label text", "openrouter_model text", "openrouter_context integer"] {
+    for col in ["job_cap integer", "codex_model text", "agent text not null default 'codex'", "openrouter_key text", "openrouter_label text", "openrouter_model text", "openrouter_context integer"].into_iter().chain(AGENT_COLUMNS) {
         if let Err(e) = conn.execute_batch(&format!("alter table users add column {col}")) {
             if !e.to_string().contains("duplicate column") {
                 return Err(e);
@@ -346,16 +352,31 @@ impl Db {
     /// The provider the owner chose for their agent, with what it needs (`AGENT_READY` decides the same).
     pub fn agent(&self, user_id: i64) -> Result<Option<AgentRow>> {
         self.with(|c| {
-            c.query_row("select agent, openrouter_key, openrouter_model, openrouter_context from users where id = ?", [user_id], |r| {
-                Ok(AgentRow {
-                    openrouter: r.get::<_, Option<String>>(0)?.as_deref() == Some("openrouter"),
-                    openrouter_key: r.get(1)?,
-                    openrouter_model: r.get::<_, Option<String>>(2)?.filter(|m| !m.is_empty()),
-                    openrouter_context: r.get(3)?,
-                })
+            c.query_row("select agent, codex_model, openrouter_model, openrouter_context, claude_model, copilot_model, grok_model from users where id = ?", [user_id], |r| {
+                let provider = Provider::parse(r.get::<_, Option<String>>(0)?.as_deref());
+                let col = match provider {
+                    Provider::Codex => 1,
+                    Provider::Openrouter => 2,
+                    Provider::Claude => 4,
+                    Provider::Copilot => 5,
+                    Provider::Grok => 6,
+                };
+                let context = if provider == Provider::Openrouter { r.get(3)? } else { None };
+                Ok(AgentRow { provider, model: r.get::<_, Option<String>>(col)?.filter(|m| !m.is_empty()), context })
             })
             .optional()
         })
+    }
+    /// The owner's sealed key for `provider`; None for Codex, whose sign-in is `codex_auth`.
+    pub fn agent_key(&self, user_id: i64, provider: Provider) -> Result<Option<String>> {
+        let col = match provider {
+            Provider::Codex => return Ok(None),
+            Provider::Openrouter => "openrouter_key",
+            Provider::Claude => "claude_key",
+            Provider::Copilot => "copilot_key",
+            Provider::Grok => "grok_key",
+        };
+        Ok(self.with(|c| c.query_row(&format!("select {col} from users where id = ?"), [user_id], |r| r.get::<_, Option<String>>(0)).optional())?.flatten())
     }
     /// Sets `codex_state`, `codex_login`, `codex_auth`, `codex_account` as given.
     pub fn set_codex(&self, user_id: i64, fields: Fields) -> Result<()> {
@@ -917,10 +938,29 @@ mod tests {
         assert_eq!(db.next_job().unwrap().map(|j| j.id), None, "no model yet");
         db.set_codex(u, &[("openrouter_model", text("anthropic/claude-x")), ("openrouter_context", int(200_000))]).unwrap();
         let row = db.agent(u).unwrap().unwrap();
-        assert!(row.openrouter);
-        assert_eq!((row.openrouter_key.as_deref(), row.openrouter_model.as_deref(), row.openrouter_context), (Some("sealed"), Some("anthropic/claude-x"), Some(200_000)));
+        assert_eq!(row.provider, Provider::Openrouter);
+        assert_eq!((row.model.as_deref(), row.context), (Some("anthropic/claude-x"), Some(200_000)));
+        assert_eq!(db.agent_key(u, Provider::Openrouter).unwrap().as_deref(), Some("sealed"));
         db.auto_setup(u).unwrap();
         assert_eq!(db.next_job().unwrap().map(|j| j.project_id), Some(a));
+    }
+
+    #[test]
+    fn auto_setup_with_claude_copilot_or_grok_needs_only_the_key() {
+        for (agent, col) in [("claude", "claude_key"), ("copilot", "copilot_key"), ("grok", "grok_key")] {
+            let db = Db::memory().unwrap();
+            let (u, a, _) = owner(&db, 1, "t");
+            db.set_codex(u, &[("agent", text(agent)), ("codex_state", text("connected"))]).unwrap();
+            db.auto_setup(u).unwrap();
+            assert_eq!(db.next_job().unwrap().map(|j| j.id), None, "{agent}: a Codex sign-in is not its key");
+            db.set_codex(u, &[(col, text("sealed"))]).unwrap();
+            let row = db.agent(u).unwrap().unwrap();
+            assert_eq!((row.provider, row.model), (Provider::parse(Some(agent)), None), "no model: the CLI's default");
+            assert_eq!(db.agent_key(u, row.provider).unwrap().as_deref(), Some("sealed"));
+            assert_eq!(db.agent_key(u, Provider::Openrouter).unwrap(), None, "each provider has its own key");
+            db.auto_setup(u).unwrap();
+            assert_eq!(db.next_job().unwrap().map(|j| j.project_id), Some(a), "{agent}");
+        }
     }
 
     #[test]

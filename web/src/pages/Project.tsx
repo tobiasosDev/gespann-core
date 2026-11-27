@@ -67,6 +67,7 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
   const suggestJob = p.jobs.find((j) => j.kind === "suggest");
   const suggesting = suggestJob?.status === "queued" || suggestJob?.status === "running";
   const openrouter = p.agent === "openrouter";
+  const keyAgent = p.agent === "claude" ? "Claude Code" : p.agent === "copilot" ? "GitHub Copilot" : p.agent === "grok" ? "Grok" : null;
   const codex: StepState = p.agent_ready ? "done" : !openrouter && p.codex === "pending" ? "running" : "todo";
   const ownerModel = openrouter ? p.openrouter_model : p.codex_model;
   const crit: StepState = "done";
@@ -98,12 +99,16 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           title="Agent"
           state={codex}
           summary={
-            codex === "done"
+            codex === "done" && keyAgent
+              ? `Runs in ${keyAgent} on ${p.own ? "your" : "the project owner's"} key${p.agent_model ? ` · model ${p.agent_model}` : ""}.`
+              : codex === "done"
               ? openrouter
                 ? `Runs on ${p.own ? "your" : "the project owner's"} OpenRouter key · model ${p.openrouter_model ?? "?"}.`
                 : `Runs on ${p.own ? "your" : "the project owner's"} ChatGPT plan${p.codex_account ? ` (${p.codex_account})` : ""}${p.codex_model ? ` · model ${p.codex_model}` : ""}.`
               : p.own
-                ? openrouter
+                ? keyAgent
+                  ? `Add your ${keyAgent} key once in Settings. It is used for all your projects.`
+                  : openrouter
                   ? "Add your OpenRouter key and pick a model once in Settings. They are used for all your projects."
                   : "Connect your ChatGPT plan or an OpenRouter key once in Settings. It is used for all your projects."
                 : "The project owner has not connected an agent yet."

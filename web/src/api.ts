@@ -43,8 +43,21 @@ export interface CodexModel {
   note?: string;
 }
 
-/** Who runs the model behind the tester: the user's ChatGPT plan, or OpenRouter with their own key. */
-export type AgentProvider = "codex" | "openrouter";
+/** Who runs the tester: Codex on the user's ChatGPT plan or OpenRouter key, or Claude Code, Copilot or Grok on their key. */
+export type KeyAgentId = "claude" | "copilot" | "grok";
+export type AgentProvider = "codex" | "openrouter" | KeyAgentId;
+
+/** Claude Code, Copilot or Grok in Settings: what to ask for, and the user's connection (never the key). */
+export interface KeyAgent {
+  id: KeyAgentId;
+  name: string;
+  keyHint: string;
+  keyUrl: string;
+  models: string[];
+  connected: boolean;
+  label: string | null;
+  model: string | null;
+}
 
 /** A model the OpenRouter picker offers; the field takes any other OpenRouter id too. */
 export interface OpenRouterModel {
@@ -59,6 +72,7 @@ export interface OpenRouterModel {
 export interface Settings {
   agent: AgentProvider;
   openrouter: { connected: boolean; label: string | null; model: string | null };
+  keyAgents: KeyAgent[];
   codex: {
     state: CodexState;
     account: string | null;
@@ -164,6 +178,8 @@ export interface ProjectDetail extends ProjectRow {
   agent: AgentProvider;
   agent_ready: boolean;
   openrouter_model: string | null;
+  /** The owner's model for Claude Code, Copilot or Grok; null: the CLI's default. */
+  agent_model: string | null;
   own: boolean;
   criteria: string;
   default_checks: string;

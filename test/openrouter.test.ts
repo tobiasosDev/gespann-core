@@ -91,7 +91,7 @@ test("API: OpenRouter key, model and provider; setup starts once the agent is re
   assert.equal(s0.agent, "codex");
   assert.deepEqual(s0.openrouter, { connected: false, label: null, model: null });
 
-  assert.equal((await post("/settings/agent", { agent: "claude" })).status, 400);
+  assert.equal((await post("/settings/agent", { agent: "gemini" })).status, 400);
   assert.equal((await post("/settings/agent", { agent: "openrouter" })).status, 200);
   assert.equal((await post(`/projects/${p}/setup`, {})).status, 409, "no key yet");
 

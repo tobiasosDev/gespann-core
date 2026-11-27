@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_fake::Fake;
-use gespann_orchestrator::codex::{open, seal, with_agent, with_codex, Agent, Provider};
+use gespann_orchestrator::codex::{give_back, open, seal, with_agent, with_codex, Agent, Provider};
 use gespann_orchestrator::config::Config;
 use gespann_orchestrator::db::{now, text, Db};
 use gespann_orchestrator::journal::Journal;
@@ -209,4 +209,40 @@ async fn with_agent_on_openrouter_puts_the_key_in_the_sandbox_only_while_the_ste
     let err = with_agent(&c, &Journal::new(c.db.clone(), 10), "x", u, "box", &agent, || async { anyhow::bail!("codex failed") as anyhow::Result<()> }).await.unwrap_err();
     assert_eq!(err.to_string(), "codex failed");
     assert_eq!(sb.file(file), None);
+}
+
+#[tokio::test]
+async fn with_agent_on_claude_copilot_or_grok_puts_that_key_in_the_sandbox_only_while_the_step_runs() {
+    for (provider, agent, col, key, missing) in [
+        (Provider::Claude, "claude", "claude_key", "sk-ant-oat01-secret", "Add your Anthropic API key or Claude token in Settings first"),
+        (Provider::Copilot, "copilot", "copilot_key", "github_pat_secret", "Add your GitHub token for Copilot in Settings first"),
+        (Provider::Grok, "grok", "grok_key", "xai-secret", "Add your xAI API key in Settings first"),
+    ] {
+        let sb = Arc::new(Fake::default());
+        let c = ctx(sb.clone(), "http://127.0.0.1:1", None);
+        let (u, _) = user(&c.db);
+        // No model: the CLI's default model, which needs no choice in Settings.
+        let a = Agent { provider, model: None, context: None };
+        let j = Journal::new(c.db.clone(), 9);
+        // An OpenRouter key is not this agent's key.
+        c.db.set_codex(u, &[("agent", text(agent)), ("openrouter_key", text(seal(SECRET, "sk-or-v1-other")))]).unwrap();
+        let err = with_agent(&c, &j, "a1.tester", u, "box", &a, || async { Ok(()) }).await.unwrap_err();
+        assert!(err.to_string().starts_with(missing), "{agent}: {err}");
+        c.db.set_codex(u, &[(col, text(seal(SECRET, key)))]).unwrap();
+        let file = "/home/user/.gespann-agent-key";
+        with_agent(&c, &j, "a1.tester", u, "box", &a, || async {
+            assert_eq!(sb.file(file).as_deref(), Some(key), "{agent}: the key is in the sandbox while the step starts");
+            assert_eq!(sb.file("/home/user/.gespann-openrouter-key"), None);
+            assert_eq!(sb.file("/home/user/.codex/auth.json"), None, "no Codex sign-in");
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(sb.file(file), None, "{agent}: removed after the step");
+        assert!(sb.execs.lock().unwrap().iter().all(|e| !e.contains(key)), "{agent}: the key never appears in a command");
+        // give_back (a cancelled run taken over mid-test) removes it too.
+        sb.files.lock().unwrap().insert(file.to_string(), key.to_string());
+        give_back(&c, &Journal::new(c.db.clone(), 12), u, "box").await.unwrap();
+        assert_eq!(sb.file(file), None, "{agent}: give_back removes the key");
+    }
 }

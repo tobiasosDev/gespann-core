@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use serde_json::json;
 
-use super::boxes::{agent_for, codex_exec, ensure_repo, ensure_sandbox, git, js_code, long, stop_sandbox, write_prompt, Sbx};
+use super::boxes::{agent_for, agent_exec, ensure_repo, ensure_sandbox, git, js_code, long, stop_sandbox, write_prompt, Sbx};
 use super::{cut, never, tail, Cx};
 use crate::codex::with_agent;
 use crate::db::{text, Project};
@@ -39,9 +39,10 @@ async fn run_suggest(cx: &Cx<'_>, p: &Project, b: &Sbx) -> Result<()> {
             write_prompt(cx, b, "suggest", &input, &prompt_file).await
         })
         .await?;
-    cx.note("suggest.log.codex", "Codex reads the repository and proposes checks").await;
     let agent = agent_for(cx, p).await?;
-    let command = codex_exec(b, &prompt_file, &format!("{}/suggest-last.txt", b.gespann), &format!("{}/suggest.jsonl", b.gespann), &agent, "medium");
+    let name = agent.provider.agent_name();
+    cx.note("suggest.log.codex", &format!("{name} reads the repository and proposes checks")).await;
+    let command = agent_exec(b, &prompt_file, &format!("{}/suggest-last.txt", b.gespann), &format!("{}/suggest.jsonl", b.gespann), &agent, "medium");
     let r = with_agent(cx.ctx, &cx.jr, "suggest.signin", p.owner_id, &b.id, &agent, || long(cx, b, "suggest.codex", &command, Duration::from_secs(20 * 60), &never)).await?;
     let text_of = match sb.read_file(&b.id, &out).await? {
         Some(t) => Some(t),
@@ -49,7 +50,7 @@ async fn run_suggest(cx: &Cx<'_>, p: &Project, b: &Sbx) -> Result<()> {
     };
     let suggestion = text_of.unwrap_or_default().trim().to_string();
     if suggestion.is_empty() {
-        bail!("{}", if r.timed_out { "Codex took longer than 20 minutes".to_string() } else { format!("Codex proposed nothing (exit {}): {}", js_code(r.exit_code), tail(&r.tail, 500)) });
+        bail!("{}", if r.timed_out { format!("{name} took longer than 20 minutes") } else { format!("{name} proposed nothing (exit {}): {}", js_code(r.exit_code), tail(&r.tail, 500)) });
     }
     cx.ctx.db.update_project(p.id, &[("suggestion", text(cut(&suggestion, 8000)))])?;
     cx.log("suggestion ready");

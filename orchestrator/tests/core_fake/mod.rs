@@ -72,6 +72,9 @@ impl Sandboxes for Fake {
         if command.contains("~/.gespann-openrouter-key") {
             self.files.lock().unwrap().remove("/home/user/.gespann-openrouter-key");
         }
+        if command.contains("~/.gespann-agent-key") {
+            self.files.lock().unwrap().remove("/home/user/.gespann-agent-key");
+        }
         if let Some(path) = command.strip_prefix("rm -f '").and_then(|p| p.strip_suffix('\'')) {
             self.files.lock().unwrap().remove(path);
         }

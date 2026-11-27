@@ -8,6 +8,7 @@ import type { Agent } from "./adapters/types.ts";
 import { runHook } from "./hook.ts";
 import { hooksInstalled, installHooks, uninstallHooks } from "./install.ts";
 import { gitOk, repoRoot } from "./util.ts";
+import { isTesterAgent, runAgent, TESTER_AGENTS } from "./verify/agents.ts";
 import { renderPlan, triggered } from "./verify/plan.ts";
 import { PROMPT_KINDS, type PromptKind, promptFor } from "./verify/prompt.ts";
 import { loadRecipe, RECIPE_PATH, recipeLine } from "./verify/recipe.ts";
@@ -191,6 +192,9 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
   mirror --url u --sizes phone-s,desktop [--notes f] [--out f] [--port n]
                                          show the copy at every size side by side; what you do in
                                          one size happens in all (until stopped)
+  agent <claude|copilot|grok> --prompt f --last f --log f --key-file f [--model m] [--effort e]
+                                         run one agent step with a tester agent other than Codex
+                                         (used by the orchestrator)
   shot <file.png>                        save a screenshot of the desktop (for the tester)
   serve                                  run the gespann web service (see docs/self-host.md)
 
@@ -209,6 +213,20 @@ export async function main(argv: string[]): Promise<void> {
   if (cmd === "serve") return (await import("./server/main.ts")).serve();
   if (cmd === "mirror") return cmdMirror(args);
   if (cmd === "verify" && (args._[1] === "recipe" || args._[1] === "prompt")) return cmdVerifyTool(args);
+  if (cmd === "agent") {
+    const agent = need(args._[1], `agent (${TESTER_AGENTS.join(", ")})`);
+    if (!isTesterAgent(agent)) throw new Error(`unknown agent "${agent}" (${TESTER_AGENTS.join(", ")})`);
+    process.exitCode = await runAgent({
+      agent,
+      model: str(args, "model"),
+      effort: str(args, "effort"),
+      promptFile: need(str(args, "prompt"), "--prompt"),
+      lastFile: need(str(args, "last"), "--last"),
+      logFile: need(str(args, "log"), "--log"),
+      keyFile: need(str(args, "key-file"), "--key-file"),
+    });
+    return;
+  }
   const root = repoRoot(process.cwd());
   switch (cmd) {
     case "init":

@@ -37,13 +37,73 @@ use crate::sandbox::{run_long, CreateOpts, Purpose, Sandboxes, WaitOpts};
 use crate::Ctx;
 
 /// Who runs the model for a job's Codex steps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     /// The owner's ChatGPT plan (`codex login`).
+    #[default]
     Codex,
     /// OpenRouter with the owner's own API key.
     Openrouter,
+    /// Claude Code with the owner's Anthropic API key or Claude subscription token (`claude setup-token`).
+    Claude,
+    /// GitHub Copilot CLI with the owner's GitHub token that may use Copilot.
+    Copilot,
+    /// Grok CLI with the owner's xAI API key.
+    Grok,
+}
+
+impl Provider {
+    /// The provider as Settings stores it in `users.agent`; anything unknown is Codex.
+    pub fn parse(s: Option<&str>) -> Provider {
+        match s {
+            Some("openrouter") => Provider::Openrouter,
+            Some("claude") => Provider::Claude,
+            Some("copilot") => Provider::Copilot,
+            Some("grok") => Provider::Grok,
+            _ => Provider::Codex,
+        }
+    }
+
+    /// The name of the tester agent in job logs.
+    pub fn agent_name(self) -> &'static str {
+        match self {
+            Provider::Codex | Provider::Openrouter => "Codex",
+            Provider::Claude => "Claude Code",
+            Provider::Copilot => "Copilot",
+            Provider::Grok => "Grok",
+        }
+    }
+
+    /// Its own CLI, run through `gespann agent <cli>`; None: Codex runs it.
+    pub fn cli(self) -> Option<&'static str> {
+        match self {
+            Provider::Claude => Some("claude"),
+            Provider::Copilot => Some("copilot"),
+            Provider::Grok => Some("grok"),
+            Provider::Codex | Provider::Openrouter => None,
+        }
+    }
+
+    /// Where the owner's key lies in the sandbox's home while a step runs; None for the Codex sign-in.
+    pub fn key_file(self) -> Option<&'static str> {
+        match self {
+            Provider::Codex => None,
+            Provider::Openrouter => Some(OPENROUTER_KEY_FILE),
+            Provider::Claude | Provider::Copilot | Provider::Grok => Some(AGENT_KEY_FILE),
+        }
+    }
+
+    /// What Settings asks for when the key is missing.
+    fn missing_key(self) -> &'static str {
+        match self {
+            Provider::Openrouter => "Add your OpenRouter key in Settings first: the agent runs on your OpenRouter key.",
+            Provider::Claude => "Add your Anthropic API key or Claude token in Settings first: the tester runs in Claude Code on it.",
+            Provider::Copilot => "Add your GitHub token for Copilot in Settings first: the tester runs in the Copilot CLI on it.",
+            Provider::Grok => "Add your xAI API key in Settings first: the tester runs in the Grok CLI on it.",
+            Provider::Codex => "Connect Codex in Settings first: the tester runs on your ChatGPT plan.",
+        }
+    }
 }
 
 /// The agent of a job, decided once when the job first needs it (the journal keeps it for a takeover).
@@ -59,6 +119,9 @@ pub struct Agent {
 
 /// Where the OpenRouter key lies in the sandbox's home while a Codex step runs.
 pub const OPENROUTER_KEY_FILE: &str = ".gespann-openrouter-key";
+/// Where the key of Claude Code, Copilot or Grok lies while their step starts; `gespann agent` deletes it
+/// before the agent runs.
+pub const AGENT_KEY_FILE: &str = ".gespann-agent-key";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 impl Agent {
@@ -89,13 +152,15 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
-    match agent.provider {
-        Provider::Codex => with_codex(ctx, j, key, owner_id, sandbox_id, f).await,
-        Provider::Openrouter => with_openrouter(ctx, j, key, owner_id, sandbox_id, agent, f).await,
+    match agent.provider.key_file() {
+        None => with_codex(ctx, j, key, owner_id, sandbox_id, f).await,
+        Some(key_file) => with_key(ctx, j, key, owner_id, sandbox_id, agent, key_file, f).await,
     }
 }
 
-async fn with_openrouter<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, f: F) -> Result<T>
+/// The owner's key (OpenRouter, Anthropic, GitHub or xAI) in the sandbox for the start of the step.
+#[allow(clippy::too_many_arguments)]
+async fn with_key<T, F, Fut>(ctx: &Ctx, j: &Journal, key: &str, owner_id: i64, sandbox_id: &str, agent: &Agent, key_file: &str, f: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -105,18 +170,20 @@ where
     if j.step_done(&done)? {
         return f().await;
     }
-    if agent.model.as_deref().unwrap_or("").is_empty() {
+    if agent.provider == Provider::Openrouter && agent.model.as_deref().unwrap_or("").is_empty() {
         bail!("Choose an OpenRouter model in Settings first: the agent runs on your OpenRouter key.");
     }
-    let sealed = ctx.db.agent(owner_id)?.and_then(|a| a.openrouter_key).ok_or_else(|| anyhow!("Add your OpenRouter key in Settings first: the agent runs on your OpenRouter key."))?;
-    let api_key = open(&ctx.cfg.session_secret, &sealed)?;
     let sandboxes = ctx.sandboxes_for(owner_id)?;
     let sb = sandboxes.as_ref();
-    let file = format!("{}/{OPENROUTER_KEY_FILE}", sb.home(sandbox_id));
+    let file = format!("{}/{key_file}", sb.home(sandbox_id));
     // Written once per step under the journal: the step's command deletes it when it starts, and a
     // takeover attaches to that command instead of writing the key again.
     let outcome = async {
         j.step(&format!("{key}.key"), || async {
+            // The key of the provider this job decided on, even when the owner switched since. Read only
+            // here: a takeover attaches to the running step even after the owner removed the key.
+            let sealed = ctx.db.agent_key(owner_id, agent.provider)?.ok_or_else(|| anyhow!("{}", agent.provider.missing_key()))?;
+            let api_key = open(&ctx.cfg.session_secret, &sealed)?;
             sb.exec(sandbox_id, &format!("umask 077 && : > {}", q(&file)), 30).await?;
             sb.write_file(sandbox_id, &file, api_key.as_bytes()).await?;
             Ok(true)
@@ -310,7 +377,7 @@ pub async fn give_back(ctx: &Ctx, j: &Journal, owner_id: i64, sandbox_id: &str) 
     if let Some(now) = sb.read_file(sandbox_id, &auth_file(sb, sandbox_id)).await? {
         keep_logged(ctx, owner_id, &now);
     }
-    let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE}"), 30).await?;
+    let rm = sb.exec(sandbox_id, &format!("rm -f ~/.codex/auth.json ~/{OPENROUTER_KEY_FILE} ~/{AGENT_KEY_FILE}"), 30).await?;
     if rm.exit_code != Some(0) {
         anyhow::bail!("could not remove the agent's sign-in from the sandbox: {}", rm.stderr.trim());
     }
