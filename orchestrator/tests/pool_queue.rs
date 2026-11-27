@@ -178,3 +178,37 @@ async fn macos_projects_go_to_the_macos_provider_and_wait_without_one() {
     stop.cancel();
     tokio::time::timeout(Duration::from_secs(5), task).await.expect("drains").unwrap();
 }
+
+#[tokio::test]
+async fn an_unreachable_mac_service_leaves_the_linux_provider_running() {
+    // A service that answers /info with 404, as an app without the macOS service does.
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hosted/macos-sandboxes", l.local_addr().unwrap());
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut s, _)) = l.accept().await {
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 9\r\nconnection: close\r\n\r\nnot found").await;
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let token = "m".repeat(32);
+    let cfg = Config::from(|k| {
+        let v = match k {
+            "SANDBOX_PROVIDER" => "ssh".to_string(),
+            "SSH_HOST" => "ci@linux".to_string(),
+            "SANDBOX_PROVIDER_MACOS" => "remote".to_string(),
+            "MACOS_SANDBOX_REMOTE_URL" => url.clone(),
+            "MACOS_SANDBOX_REMOTE_TOKEN" => token.clone(),
+            "MAX_PARALLEL_JOBS" => "2".to_string(),
+            "DATA_DIR" => dir.path().to_string_lossy().into_owned(),
+            _ => return None,
+        };
+        Some(v)
+    })
+    .unwrap();
+    let pool = tokio::time::timeout(Duration::from_secs(20), Pool::from_config(&cfg)).await.expect("no long wait").expect("the Linux provider still starts");
+    assert!(pool.serves(Platform::Linux));
+    assert!(!pool.serves(Platform::Macos));
+}

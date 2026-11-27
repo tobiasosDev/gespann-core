@@ -69,9 +69,17 @@ impl Pool {
         }
         let spec = cfg.macos.provider.as_str();
         if !spec.is_empty() {
-            let sb = from_spec(cfg, Platform::Macos, spec).await?.ok_or_else(|| anyhow!("no macOS sandbox provider {spec}"))?;
-            let parallel = parallel_jobs(cfg.macos.max_parallel, sb.as_ref()).await;
-            providers.push(Provider { spec: spec.to_string(), platform: Platform::Macos, sb, parallel, logins: Vec::new(), default: true });
+            // Macs are an extra: when their provider cannot be reached at startup (a service not deployed
+            // yet, a vendor outage), web projects still run and macOS projects wait until the next start.
+            match from_spec(cfg, Platform::Macos, spec).await {
+                Ok(Some(sb)) => {
+                    let parallel = parallel_jobs(cfg.macos.max_parallel, sb.as_ref()).await;
+                    providers.push(Provider { spec: spec.to_string(), platform: Platform::Macos, sb, parallel, logins: Vec::new(), default: true });
+                }
+                Ok(None) => return Err(anyhow!("no macOS sandbox provider {spec}")),
+                Err(e) if !providers.is_empty() => crate::log("error", &format!("macOS sandboxes ({spec}) are unavailable, macOS projects wait until the orchestrator starts again: {e:#}")),
+                Err(e) => return Err(e),
+            }
         }
         Ok(Pool { providers })
     }
