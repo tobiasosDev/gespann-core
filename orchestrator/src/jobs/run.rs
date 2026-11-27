@@ -668,7 +668,7 @@ struct Collected {
 async fn collect(cx: &Cx<'_>, b: &Sbx, run: &Run, out: &str, dedupe: bool) -> Result<Collected> {
     let sb = cx.sb();
     // Names and sizes with POSIX tools only: a Mac's BSD find has no -printf.
-    let ls = sb.exec(&b.id, &format!("cd {} 2>/dev/null && {LIST_FILES}", q(out)), 30).await?;
+    let ls = sb.exec(&b.id, &list_command(out), 30).await?;
     let (small, big) = by_size(&ls.stdout, MAX_FILE);
     for (name, size) in big {
         let mb = size as f64 / 1024f64.powi(2);
@@ -719,7 +719,14 @@ async fn drop_proof(cx: &Cx<'_>, b: &Sbx, run: &Run) -> Result<()> {
 }
 
 /// Prints `<size> <name>` for each file of the current directory, on Linux and macOS alike.
-const LIST_FILES: &str = r#"for f in * .[!.]*; do [ -f "$f" ] && printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done; true"#;
+/// Symbolic links are skipped: the tester could point one at a file outside the proof directory.
+const LIST_FILES: &str = r#"for f in * .[!.]*; do [ -f "$f" ] && [ ! -L "$f" ] && printf '%s %s\n' "$(wc -c < "$f" | tr -d ' ')" "$f"; done; true"#;
+
+/// Lists `dir` with `LIST_FILES`. Grouped: a directory that cannot be entered fails the listing, so the
+/// collection does not count as complete.
+fn list_command(dir: &str) -> String {
+    format!("cd {} 2>/dev/null && {{ {LIST_FILES}; }}", q(dir))
+}
 
 /// `LIST_FILES` output split into names up to `max` bytes and (name, size) of bigger files.
 fn by_size(listing: &str, max: u64) -> (Vec<String>, Vec<(String, u64)>) {
@@ -747,7 +754,7 @@ fn web_viewports(p: &Project) -> String {
 
 #[cfg(test)]
 mod listing_tests {
-    use super::{by_size, LIST_FILES};
+    use super::{by_size, list_command};
 
     #[test]
     fn files_are_listed_with_their_sizes_without_gnu_find() {
@@ -756,13 +763,16 @@ mod listing_tests {
         std::fs::write(dir.path().join("verdict.json"), b"{}").unwrap();
         std::fs::write(dir.path().join("big.mp4"), vec![0u8; 2048]).unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
-        let out = std::process::Command::new("bash").arg("-c").arg(LIST_FILES).current_dir(dir.path()).output().unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", dir.path().join("hosts.png")).unwrap();
+        let out = std::process::Command::new("bash").arg("-c").arg(list_command(&dir.path().to_string_lossy())).output().unwrap();
         assert!(out.status.success());
         let (mut small, big) = by_size(&String::from_utf8_lossy(&out.stdout), 1024);
         small.sort();
         assert_eq!(small, ["a.png", "verdict.json"]);
         assert_eq!(big, [("big.mp4".to_string(), 2048)]);
         assert_eq!(by_size("", 10), (vec![], vec![]), "an empty directory");
+        let missing = std::process::Command::new("bash").arg("-c").arg(list_command("/nonexistent-gespann-dir")).output().unwrap();
+        assert!(!missing.status.success(), "a directory that is not there fails the listing");
     }
 }
 
