@@ -104,9 +104,15 @@ test("API: a signed-in user sees own projects through every step, not others'", 
   assert.ok(Array.isArray(settings0.codex.models) && settings0.codex.models.some((m: { id: string }) => m.id === "gpt-6.2-sol"));
   assert.deepEqual(
     settings0.codex.models.filter((m: { recommended?: boolean }) => m.recommended).map((m: { id: string }) => m.id),
-    ["gpt-6.2-sol"],
-    "exactly one model is recommended, the benchmark winner in docs/models.md",
+    ["gpt-6.1-terra"],
+    "exactly one model is recommended: the cheapest that judged every benchmark PR right (docs/models.md)",
   );
+  type M = { id: string; recommended?: boolean; rates: { output: number }; bench?: { right: number; of: number; credits: number } };
+  const models = settings0.codex.models as M[];
+  const best = models.find((m) => m.recommended)!;
+  const flawless = models.filter((m) => m.bench && m.bench.right === m.bench.of);
+  assert.equal(Math.min(...flawless.map((m) => m.bench!.credits)), best.bench!.credits, "no flawless model is cheaper than the recommended one");
+  assert.ok(models.every((m) => m.rates.output > 0), "every model has OpenAI's rates for the picker");
   assert.equal((await post("/settings/codex/model", { model: "bad model!" })).status, 400);
   assert.equal((await post("/settings/codex/model", { model: "gpt-6.2-astra" })).status, 200);
   assert.equal((await (await get("/settings")).json()).codex.model, "gpt-6.2-astra");
