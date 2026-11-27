@@ -119,7 +119,8 @@ test("the last message is the agent's final answer, as codex exec -o writes it",
 
   const plain = new LastMessage("grok");
   plain.line("Error: not authenticated");
-  assert.equal(plain.text, "Error: not authenticated", "no event at all: what it printed");
+  assert.equal(plain.text, "", "an error is no answer: it would become the suggested checks");
+  assert.equal(plain.printed, "Error: not authenticated", "it goes into the failed step's output instead");
 });
 
 test("gespann agent: the key file is gone before the agent starts, and the agent gets the key and the browser", async () => {
@@ -140,7 +141,7 @@ key_file_left=no; [ -e ${JSON.stringify(keyFile)} ] && key_file_left=yes
 echo '{"type":"system","subtype":"init"}'
 echo "{\\"type\\":\\"result\\",\\"result\\":\\"token=$CLAUDE_CODE_OAUTH_TOKEN api=\${ANTHROPIC_API_KEY:-none} file=$key_file_left\\"}"
 echo "progress on stderr" >&2
-exit 3
+exit \${FAKE_EXIT:-0}
 `,
   );
   chmodSync(join(bin, "claude"), 0o755);
@@ -150,13 +151,21 @@ exit 3
   Object.assign(process.env, { HOME: home, PATH: `${bin}:${process.env.PATH}`, CODEX_HOME: join(home, ".codex"), DISPLAY: ":77" });
   try {
     const code = await runAgent({ agent: "claude", model: "claude-sonnet-5-5", effort: "medium", promptFile, lastFile: join(dir, "last.txt"), logFile: join(dir, "claude.jsonl"), keyFile });
-    assert.equal(code, 3, "the agent's exit code");
+    assert.equal(code, 0, "the agent's exit code");
+    assert.equal(readFileSync(join(dir, "last.txt"), "utf8"), "token=sk-ant-oat01-secret-token-0123456789abcdef api=none file=no");
+    // A failed step leaves no answer, as codex exec -o does.
+    writeFileSync(keyFile, "sk-ant-oat01-secret-token-0123456789abcdef\n");
+    process.env.FAKE_EXIT = "3";
+    assert.equal(await runAgent({ agent: "claude", promptFile, lastFile: join(dir, "last.txt"), logFile: join(dir, "claude2.jsonl"), keyFile }), 3);
+    assert.equal(readFileSync(join(dir, "last.txt"), "utf8"), "");
+    delete process.env.FAKE_EXIT;
+    writeFileSync(keyFile, "sk-ant-oat01-secret-token-0123456789abcdef\n");
+    await runAgent({ agent: "claude", model: "claude-sonnet-5-5", effort: "medium", promptFile, lastFile: join(dir, "last.txt"), logFile: join(dir, "claude.jsonl"), keyFile });
   } finally {
     for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k];
       else process.env[k] = v;
   }
   assert.equal(existsSync(keyFile), false);
-  assert.equal(readFileSync(join(dir, "last.txt"), "utf8"), "token=sk-ant-oat01-secret-token-0123456789abcdef api=none file=no");
   assert.equal(readFileSync(join(dir, "stdin.txt"), "utf8"), "Test PR 7.");
   const args = readFileSync(join(dir, "args.txt"), "utf8").split("\n");
   const mcp = JSON.parse(readFileSync(args[args.indexOf("--mcp-config") + 1] as string, "utf8"));

@@ -160,7 +160,7 @@ export function launch(agent: TesterAgent, o: LaunchOpts): Launch {
     };
   }
   if (agent === "copilot") {
-    const prompt = o.prompt.length <= MAX_ARG ? o.prompt : `Your task is in the file ${o.promptFile}. Read all of it first, then do exactly what it says.`;
+    const prompt = Buffer.byteLength(o.prompt, "utf8") <= MAX_ARG ? o.prompt : `Your task is in the file ${o.promptFile}. Read all of it first, then do exactly what it says.`;
     return {
       bin: "copilot",
       args: [
@@ -222,7 +222,7 @@ export class LastMessage {
       }
     }
     if (!ev) {
-      // Kept short: only a fallback when the agent printed no event at all.
+      // Kept short: what the agent printed besides its events, for the error of a failed step.
       this.plain.push(l);
       if (this.plain.length > 200) this.plain.shift();
       return;
@@ -248,10 +248,15 @@ export class LastMessage {
         const d = JSON.parse(this.doc.join("\n")) as { text?: unknown };
         if (typeof d.text === "string") return d.text;
       } catch {
-        // Not one JSON document: fall back to what it printed.
+        // Not one JSON document: no answer.
       }
     }
-    return this.last || this.plain.join("\n").trim();
+    return this.last;
+  }
+
+  /** The end of what the agent printed besides its events: why a failed step failed. */
+  get printed(): string {
+    return this.plain.slice(-20).join("\n").trim();
   }
 }
 
@@ -348,6 +353,8 @@ export async function runAgent(r: AgentRun): Promise<number> {
   process.off("SIGTERM", onTerm);
   process.off("SIGINT", onInt);
   await new Promise<void>((resolve) => log.end(resolve));
-  writeFileSync(r.lastFile, last.text);
+  // Like `codex exec -o`: an answer only from a step that finished; a failed one says why in the step's output.
+  writeFileSync(r.lastFile, code === 0 ? last.text : "");
+  if (code !== 0) say(`${l.bin} exited ${code}${last.printed ? `: ${last.printed.slice(-1500)}` : ""}`);
   return code;
 }

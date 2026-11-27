@@ -173,9 +173,6 @@ where
     if agent.provider == Provider::Openrouter && agent.model.as_deref().unwrap_or("").is_empty() {
         bail!("Choose an OpenRouter model in Settings first: the agent runs on your OpenRouter key.");
     }
-    // The key of the provider this job decided on, even when the owner switched since.
-    let sealed = ctx.db.agent_key(owner_id, agent.provider)?.ok_or_else(|| anyhow!("{}", agent.provider.missing_key()))?;
-    let api_key = open(&ctx.cfg.session_secret, &sealed)?;
     let sandboxes = ctx.sandboxes_for(owner_id)?;
     let sb = sandboxes.as_ref();
     let file = format!("{}/{key_file}", sb.home(sandbox_id));
@@ -183,6 +180,10 @@ where
     // takeover attaches to that command instead of writing the key again.
     let outcome = async {
         j.step(&format!("{key}.key"), || async {
+            // The key of the provider this job decided on, even when the owner switched since. Read only
+            // here: a takeover attaches to the running step even after the owner removed the key.
+            let sealed = ctx.db.agent_key(owner_id, agent.provider)?.ok_or_else(|| anyhow!("{}", agent.provider.missing_key()))?;
+            let api_key = open(&ctx.cfg.session_secret, &sealed)?;
             sb.exec(sandbox_id, &format!("umask 077 && : > {}", q(&file)), 30).await?;
             sb.write_file(sandbox_id, &file, api_key.as_bytes()).await?;
             Ok(true)
