@@ -231,6 +231,7 @@ function PhoneRow({ run, group, usual, commit }: { run: RunRow; group: PrGroup<R
           named && `#${run.pr}`,
           commit && `commit ${run.head.slice(0, 7)}`,
           runs && `${plural(runs.length, "run")}: ${history.map((r) => PHONE[result(r)].word).join(", then ")}`,
+          run.clip && "has a video of just the change",
           group?.closed,
           res === "running" ? `running for ${duration(run.started, null)}${usual ? `, usually about ${Math.max(1, Math.round(usual / 60))} min` : ""}` : when,
           wait,
@@ -244,6 +245,7 @@ function PhoneRow({ run, group, usual, commit }: { run: RunRow; group: PrGroup<R
           <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-small whitespace-nowrap text-muted-foreground">
             <span className={cn("font-medium", done ? "text-muted-foreground" : look.text)}>{look.word}</span>
             {named && <span className="tabular-nums">#{run.pr}</span>}
+            {run.clip && <Clapperboard aria-hidden="true" className="size-3.5" />}
             {/* Two live runs of one PR: the commit tells the two pushes apart. */}
             {commit && <Mono>{run.head.slice(0, 7)}</Mono>}
             {/* Earlier runs as small squares, oldest first, so a fail that later passed stays visible. */}
