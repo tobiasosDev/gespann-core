@@ -49,7 +49,7 @@ function flagRules(t: TesterInput, site: string): string[] {
   const found = t.flags ?? [];
   const f = t.recipe.flags;
   const ways = [
-    ...(f?.switch ? [`with \`GESPANN_FLAG=<key> GESPANN_FLAG_STATE=off GESPANN_WORK=${t.work} bash -c ${JSON.stringify(f.switch)}\` run in the repo checkout (\`on\` to switch it on), which returns once the copy runs in that state`] : []),
+    ...(f?.switch ? [`with \`gespann verify flag <key> off --work ${t.work}\` (\`on\` to switch it on), which returns once the copy runs in that state`] : []),
     ...(f?.admin ? [`on the page ${new URL(f.admin, site).toString()}`] : []),
   ];
   const lines = [

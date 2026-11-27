@@ -94,7 +94,7 @@ The tester confirms each one from the code and tests a real flag on the same cop
 1. **Off**, before it is ever switched on, so nothing the new feature writes exists yet: the app behaves exactly as on the base branch. Anything a user can notice is a failed check: with the flag off, the PR must not affect any user.
 2. **On**: the change works.
 
-It switches the flag with `flags.switch`, on the `flags.admin` page, or the way the app does it. When it cannot, the checks of that state are blocked and gespann's repair adds a `switch` command to the recipe. `verdict.json` then holds one `flags` entry per flag (`{"flag","tested":true,"how"}`, or `{"flag","tested":false,"why"}` for a flag that is none, never reaches a user or is removed), and those checks carry `"flag"` and `"state"`. A found flag without an entry, or a tested one without a check off and on, rejects the verdict.
+It switches the flag with `flags.switch` (it calls `gespann verify flag <key> on|off --work <work dir>`, which runs the command in the recipe's environment), on the `flags.admin` page, or the way the app does it. When it cannot, the checks of that state are blocked and gespann's repair adds a `switch` command to the recipe. `verdict.json` then holds one `flags` entry per flag (`{"flag","tested":true,"how"}`, or `{"flag","tested":false,"why"}` for a flag that is none, never reaches a user or is removed), and those checks carry `"flag"` and `"state"`. A found flag without an entry, or a tested one without a check off and on, rejects the verdict.
 
 ## Commands
 

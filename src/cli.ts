@@ -12,7 +12,7 @@ import { renderPlan, triggered } from "./verify/plan.ts";
 import { PROMPT_KINDS, type PromptKind, promptFor } from "./verify/prompt.ts";
 import { loadRecipe, RECIPE_PATH, recipeLine } from "./verify/recipe.ts";
 import { startMirror } from "./verify/mirror.ts";
-import { finish, prepare, type RunContext, screenshot } from "./verify/run.ts";
+import { contextOf, finish, prepare, type RunContext, screenshot, switchFlag } from "./verify/run.ts";
 import { VIEWPORTS, viewportsOf } from "./verify/viewports.ts";
 
 const VERSION = "0.3.0";
@@ -157,7 +157,17 @@ async function cmdVerify(root: string, args: Args) {
     if (f.outcome === "FAIL") process.exitCode = 1;
     return;
   }
-  throw new Error("usage: gespann verify prepare|finish|recipe|prompt [--recipe f] [--pr n --head sha --base sha] [--run id]");
+  if (sub === "flag") {
+    const [key, state] = [args._[2], args._[3]];
+    if (!key || (state !== "on" && state !== "off")) throw new Error("usage: gespann verify flag <key> on|off --work <work dir>");
+    const ctx = contextOf(need(str(args, "work"), "--work"));
+    const f = switchFlag(ctx, loadRecipe(ctx.recipeFile), key, state);
+    if (f.output) process.stdout.write(f.output);
+    say(f.ok ? `flag ${key} is ${state} on the copy` : `could not switch flag ${key} ${state}`);
+    if (!f.ok) process.exitCode = 1;
+    return;
+  }
+  throw new Error("usage: gespann verify prepare|finish|flag|recipe|prompt [--recipe f] [--pr n --head sha --base sha] [--run id]");
 }
 
 const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude Code, Codex)
@@ -175,6 +185,7 @@ const HELP = `gespann ${VERSION}: acceptance testing for coding agents (Claude C
                                          (two sizes or more also start the mirror)
   verify finish [--run id] [--wait s]    wait for alongside checks, judge verdict.json, tear down
   verify recipe --recipe f               check a recipe; prints {"ok","timeout","prompt"} or {"ok":false,"error"}
+  verify flag <key> on|off --work dir    switch one feature flag on the running copy (for the tester)
   verify prompt <tester|setup|repair|suggest> --input f.json
                                          print an agent prompt (used by the orchestrator)
   mirror --url u --sizes phone-s,desktop [--notes f] [--out f] [--port n]

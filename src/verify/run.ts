@@ -167,6 +167,8 @@ async function mirrorUp(ctx: RunContext, state: State, url: string, viewports: V
 export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] = []): Promise<Prepared> {
   mkdirSync(ctx.work, { recursive: true });
   mkdirSync(ctx.out, { recursive: true });
+  // `gespann verify flag` runs recipe commands for this run later, from the work dir alone.
+  writeFileSync(join(ctx.work, "context.json"), `${JSON.stringify(ctx)}\n`);
   const deadline = Date.now() + r.timeout * 60_000;
   const left = () => Math.max(1000, deadline - Date.now());
   const state: State = { services: [], alongside: [] };
@@ -274,6 +276,28 @@ function issueRefs(ctx: RunContext): string[] {
   } catch {
     return [];
   }
+}
+
+/** The run a work dir belongs to, as `prepare` left it there. */
+export function contextOf(work: string): RunContext {
+  const file = join(work, "context.json");
+  if (!existsSync(file)) throw new Error(`${work} is no work dir of a prepared run`);
+  return JSON.parse(readFileSync(file, "utf8")) as RunContext;
+}
+
+/**
+ * Switches one feature flag on the running copy with the recipe's `flags.switch`, in the recipe's
+ * environment plus GESPANN_FLAG and GESPANN_FLAG_STATE. The tester calls it as `gespann verify flag`.
+ */
+export function switchFlag(ctx: RunContext, r: Recipe, key: string, state: "on" | "off"): { ok: boolean; output: string } {
+  if (!r.flags?.switch) return { ok: false, output: "the recipe has no flags.switch" };
+  log(ctx, `▶ flag ${key} ${state}`);
+  const res = spawnSync("bash", ["-c", r.flags.switch], { cwd: ctx.root, env: { ...env(ctx), GESPANN_FLAG: key, GESPANN_FLAG_STATE: state }, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 });
+  const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  if (output) appendFileSync(logFile(ctx), output);
+  const ok = res.status === 0;
+  log(ctx, `${ok ? "✓" : "✗"} flag ${key} ${state}${ok ? "" : ` (exit ${res.status ?? res.signal ?? res.error?.message})`}`);
+  return { ok, output };
 }
 
 /** The feature flags found in the PR's diff (`flag-changes.json` in the work dir, written with the tester's prompt). */

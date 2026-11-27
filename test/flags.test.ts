@@ -99,6 +99,33 @@ diff --git a/src/config.ts b/src/config.ts
   assert.deepEqual(flagChanges(""), []);
 });
 
+test("a flag only in a flag folder's registry is found, and a renamed key stays two flags", () => {
+  const registryOnly = `diff --git a/apps/web/lib/feature-flags/registry.ts b/apps/web/lib/feature-flags/registry.ts
+--- a/apps/web/lib/feature-flags/registry.ts
++++ b/apps/web/lib/feature-flags/registry.ts
+@@ -88,0 +89 @@
++  "quiet-mode": { default: false },
+`;
+  assert.deepEqual(flagChanges(registryOnly), [{ key: "quiet-mode", kind: "added", files: ["apps/web/lib/feature-flags/registry.ts"] }]);
+  const renamed = `diff --git a/app/cart.ts b/app/cart.ts
+--- a/app/cart.ts
++++ b/app/cart.ts
+@@ -1 +1 @@
+-if (isFeatureEnabled("new_checkout")) go();
++if (isFeatureEnabled("new-checkout") && process.env.NEW_CHECKOUT_ENABLED) go();
+`;
+  assert.deepEqual(
+    flagChanges(renamed).map((f) => [f.key, f.kind, f.aliases ?? []]),
+    [
+      ["new_checkout", "removed", []],
+      ["new-checkout", "added", ["NEW_CHECKOUT_ENABLED"]],
+    ],
+  );
+  // No cap: a tenth flag reaches the tester like the first.
+  const many = Array.from({ length: 10 }, (_, i) => `+isFeatureEnabled("flag-${i}")`).join("\n");
+  assert.equal(flagChanges(`diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -0,0 +1,10 @@\n${many}\n`).length, 10);
+});
+
 const recipe = parseRecipe('version: 1\ntrigger: { paths: ["**"] }\nflags:\n  run: node flags.js\n  admin: /admin/flags\n  switch: ./flag.sh\nenv:\n  up: "true"\n  down: "true"\n  url: http://localhost:1\n');
 const input = { repo: "acme/shop", pr: 4, head: "h", base: "b", url: "http://localhost:1", out: "/o", work: "/w", criteria: "", recipe };
 
@@ -109,8 +136,7 @@ test("the tester tests a found flag off first, against the base, then on, and na
   assert.match(p, /twice, off first/);
   assert.match(p, /Off, before you switch it on for the first time.*behave exactly as on b\./);
   assert.match(p, /with the flag off the PR must not affect any user/);
-  assert.match(p, /GESPANN_FLAG=<key> GESPANN_FLAG_STATE=off GESPANN_WORK=\/w bash -c "\.\/flag\.sh"/);
-  assert.match(p, /Switch the flag with `GESPANN_FLAG=<key> .* in the repo checkout \(`on` to switch it on\), which returns once the copy runs in that state, or on the page http:\/\/localhost:1\/admin\/flags\./);
+  assert.match(p, /Switch the flag with `gespann verify flag <key> off --work \/w` \(`on` to switch it on\), which returns once the copy runs in that state, or on the page http:\/\/localhost:1\/admin\/flags\./);
   assert.match(p, /"flags" has one entry per feature flag the PR touches \(at least async-source-upload\)/);
   const none = testerPrompt({ ...input, recipe: parseRecipe('version: 1\ntrigger: { paths: ["**"] }\nenv:\n  up: "true"\n  down: "true"\n  url: http://localhost:1\n') });
   assert.match(none, /gespann found none in the diff/);

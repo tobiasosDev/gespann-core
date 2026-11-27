@@ -25,12 +25,10 @@ const INDEX = /\b(?:Flipper|Feature|Features|Flags)\s*\[\s*[:"']([A-Za-z][\w.-]*
 const ENV = /\b((?:NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)?(?:FEATURE|FF|FLAG|ENABLE)_[A-Z0-9_]*[A-Z0-9]|[A-Z][A-Z0-9_]*_(?:ENABLED|FLAG))\b/g;
 /** In a flag registry file: a quoted key with a separator (`"new-checkout": {`, `key: "new_checkout"`). */
 const REGISTRY = [/["'`]([a-z0-9]+(?:[-_.][a-z0-9]+)+)["'`]\s*:/g, /\b(?:key|flag|name|id)\s*[:=]\s*["'`]([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+)["'`]/g];
-const REGISTRY_FILE = /(?:^|\/)[^/]*(?:flag|feature|toggle)[^/]*$/i;
+/** A flag registry: a file named for flags (`flags.ts`, `features.yml`) or a file in a flag folder (`lib/feature-flags/registry.ts`). */
+const REGISTRY_FILE = /(?:^|\/)[^/]*(?:flag|feature|toggle)[^/]*$|(?:^|\/)[^/]*(?:flag|toggle)[^/]*\/[^/]+$/i;
 /** Tests flip flags all the time; docs and lockfiles only mention them. */
 const IGNORED = /(?:^|\/)(?:tests?|__tests__|e2e|spec|fixtures|docs?)\/|\.(?:test|spec)\.\w+$|_test\.\w+$|\.(?:md|mdx|lock|snap)$|(?:^|\/)(?:package-lock\.json|CHANGELOG[^/]*)$/i;
-/** More than this many candidates means the diff renames or generates code wholesale; the first ones still go to the tester. */
-const MAX = 8;
-
 /** Settings of the flag system itself (`FEATURE_FLAGS`, `FEATURE_FLAG_REFRESH_MS`) and values that only look like flags. */
 const NOT_A_FLAG = /FLAGS|_FLAG_|_(?:MS|URL|KEY|TOKEN|SECRET|PATH|TIMEOUT|INTERVAL|TTL|SECONDS|DAYS)$/;
 
@@ -81,19 +79,27 @@ export function flagChanges(diff: string): FlagChange[] {
       seen.set(key, e);
     }
   }
-  // A key and its environment variable are one flag, named by the key the code asks for.
+  // A key and its environment variable are one flag, named by the key the code asks for. Two keys stay
+  // two flags, even when they differ only in spelling: a renamed flag is a new one.
   const groups = new Map<string, { names: string[]; added: boolean; removed: boolean; files: Set<string> }>();
-  for (const [key, e] of seen) {
-    const g = groups.get(canonical(key)) ?? { names: [], added: false, removed: false, files: new Set<string>() };
+  const add = (id: string, key: string, e: { added: boolean; removed: boolean; files: Set<string> }) => {
+    const g = groups.get(id) ?? { names: [], added: false, removed: false, files: new Set<string>() };
     g.names.push(key);
     g.added ||= e.added;
     g.removed ||= e.removed;
     for (const f of e.files) g.files.add(f);
-    groups.set(canonical(key), g);
+    groups.set(id, g);
+  };
+  for (const [key, e] of seen) if (!isEnv(key)) add(key, key, e);
+  for (const [key, e] of seen) {
+    if (!isEnv(key)) continue;
+    // After a rename the variable belongs to the key the code asks for now.
+    const owners = [...seen].filter(([k]) => !isEnv(k) && canonical(k) === canonical(key));
+    const owner = (owners.find(([, o]) => o.added) ?? owners[0])?.[0];
+    add(owner ?? key, key, e);
   }
-  return [...groups.values()].slice(0, MAX).map((g) => {
-    const key = g.names.find((n) => !isEnv(n)) ?? g.names[0] ?? "";
-    const aliases = g.names.filter((n) => n !== key);
+  return [...groups.values()].map((g) => {
+    const [key = "", ...aliases] = g.names;
     return { key, ...(aliases.length ? { aliases } : {}), kind: g.added && g.removed ? "changed" : g.added ? "added" : "removed", files: [...g.files].sort() };
   });
 }
