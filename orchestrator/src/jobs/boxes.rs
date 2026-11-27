@@ -149,26 +149,45 @@ pub(crate) async fn agent_for(cx: &Cx<'_>, p: &Project) -> Result<Agent> {
     cx.jr
         .step("agent", || async {
             let row = cx.ctx.db.agent(p.owner_id)?.unwrap_or_default();
-            let codex_model = if row.openrouter { None } else { cx.ctx.db.codex_model(p.owner_id)? };
-            Ok(pick_agent(&row, p.model.as_deref(), codex_model))
+            Ok(pick_agent(&row, p.model.as_deref()))
         })
         .await
 }
 
-fn pick_agent(row: &AgentRow, project_model: Option<&str>, codex_model: Option<String>) -> Agent {
+fn pick_agent(row: &AgentRow, project_model: Option<&str>) -> Agent {
     // OpenRouter ids name the vendor (`vendor/model`), Codex's never do: a project's model set for
-    // the other provider is left out rather than sent where it does not exist.
-    let own = project_model.filter(|m| !m.is_empty() && m.contains('/') == row.openrouter).map(str::to_string);
-    if row.openrouter {
-        // The context size belongs to the owner's model; a project's own model goes without it.
-        let context = if own.is_some() { None } else { row.openrouter_context };
-        Agent { provider: Provider::Openrouter, model: own.or(row.openrouter_model.clone()), context }
-    } else {
-        Agent { provider: Provider::Codex, model: own.or(codex_model), context: None }
-    }
+    // the other provider is left out rather than sent where it does not exist. Claude Code, Copilot and
+    // Grok take the owner's model for them only: a project's model names a Codex or OpenRouter one.
+    let own = match row.provider {
+        Provider::Codex | Provider::Openrouter => project_model.filter(|m| !m.is_empty() && m.contains('/') == (row.provider == Provider::Openrouter)).map(str::to_string),
+        _ => None,
+    };
+    // The context size belongs to the owner's model; a project's own model goes without it.
+    let context = if own.is_some() { None } else { row.context };
+    Agent { provider: row.provider, model: own.or(row.model.clone()), context }
 }
 
-pub(crate) fn codex_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, agent: &Agent, effort: &str) -> String {
+/// The command of one agent step: Codex (`codex exec`, on the ChatGPT plan or OpenRouter) or another
+/// tester agent through `gespann agent`. Each writes its last message to `last_file` and its output to
+/// `jsonl_file`. `effort` is Codex's reasoning effort; Claude Code and Grok take the same levels.
+pub(crate) fn agent_exec(b: &Sbx, prompt_file: &str, last_file: &str, jsonl_file: &str, agent: &Agent, effort: &str) -> String {
+    if let Some(cli) = agent.provider.cli() {
+        let model = agent.model.as_deref().filter(|m| !m.is_empty()).map(|m| format!(" --model {}", q(m))).unwrap_or_default();
+        // Copilot's levels depend on the model, and a level its model lacks fails the run.
+        let effort = if agent.provider == Provider::Copilot { String::new() } else { format!(" --effort {effort}") };
+        let key = format!(r#""$HOME/{}""#, crate::codex::AGENT_KEY_FILE);
+        return with_env(
+            b,
+            &format!(
+                // What gespann itself says (installing the CLI, a missing key) stays in the step's output.
+                "cd {} && gespann agent {cli} --prompt {} --last {} --log {} --key-file {key}{model}{effort} 2>&1",
+                b.repo,
+                q(prompt_file),
+                q(last_file),
+                q(jsonl_file)
+            ),
+        );
+    }
     let (env, m) = agent.codex_args();
     with_env(
         b,
@@ -382,24 +401,42 @@ mod tests {
 
     #[test]
     fn a_projects_model_counts_only_for_its_own_provider() {
-        let or = AgentRow { openrouter: true, openrouter_key: None, openrouter_model: Some("anthropic/claude-x".into()), openrouter_context: Some(200_000) };
-        assert_eq!(pick_agent(&or, Some("gpt-6.2-sol"), None), Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) });
-        assert_eq!(pick_agent(&or, Some("openai/gpt-x"), None), Agent { provider: Provider::Openrouter, model: Some("openai/gpt-x".into()), context: None });
-        let codex = AgentRow::default();
-        assert_eq!(pick_agent(&codex, Some("openai/gpt-x"), Some("gpt-6.2-astra".into())).model.as_deref(), Some("gpt-6.2-astra"));
-        assert_eq!(pick_agent(&codex, Some("gpt-6.2-sol"), Some("gpt-6.2-astra".into())).model.as_deref(), Some("gpt-6.2-sol"));
-        assert_eq!(pick_agent(&codex, Some(""), None).model, None);
+        let or = AgentRow { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) };
+        assert_eq!(pick_agent(&or, Some("gpt-6.2-sol")), Agent { provider: Provider::Openrouter, model: Some("anthropic/claude-x".into()), context: Some(200_000) });
+        assert_eq!(pick_agent(&or, Some("openai/gpt-x")), Agent { provider: Provider::Openrouter, model: Some("openai/gpt-x".into()), context: None });
+        let codex = AgentRow { model: Some("gpt-6.2-astra".into()), ..AgentRow::default() };
+        assert_eq!(pick_agent(&codex, Some("openai/gpt-x")).model.as_deref(), Some("gpt-6.2-astra"));
+        assert_eq!(pick_agent(&codex, Some("gpt-6.2-sol")).model.as_deref(), Some("gpt-6.2-sol"));
+        assert_eq!(pick_agent(&AgentRow::default(), Some("")).model, None);
+        let claude = AgentRow { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None };
+        assert_eq!(pick_agent(&claude, Some("gpt-6.2-sol")), Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None });
+        assert_eq!(pick_agent(&AgentRow { provider: Provider::Grok, ..AgentRow::default() }, Some("openai/gpt-x")).model, None);
     }
 
     #[test]
-    fn codex_exec_passes_requested_reasoning_effort() {
+    fn agent_exec_passes_requested_reasoning_effort() {
         let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
         let codex = |model: Option<&str>| Agent { provider: Provider::Codex, model: model.map(str::to_string), context: None };
-        assert!(codex_exec(&b, "/p", "/l", "/j", &codex(None), "medium").contains("&& codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -c model_reasoning_effort=medium"));
-        assert!(codex_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
+        assert!(agent_exec(&b, "/p", "/l", "/j", &codex(None), "medium").contains("&& codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -c model_reasoning_effort=medium"));
+        assert!(agent_exec(&b, "/p", "/l", "/j", &codex(Some("gpt-5")), "high").contains("-m 'gpt-5' -c model_reasoning_effort=high"));
         let or = Agent { provider: Provider::Openrouter, model: Some("x/y".into()), context: None };
-        let c = codex_exec(&b, "/p", "/l", "/j", &or, "high");
+        let c = agent_exec(&b, "/p", "/l", "/j", &or, "high");
         assert!(c.contains(r#"&& test -n "$_k" && OPENROUTER_API_KEY="$_k" codex exec "#), "{c}");
         assert!(c.contains("-m 'x/y' -c model_provider=openrouter -c 'model_providers.openrouter="), "{c}");
+    }
+
+    #[test]
+    fn other_tester_agents_run_through_gespann_agent() {
+        let b = Sbx { id: "b".into(), slot: Slot::default(), repo: "/r".into(), gespann: "/g".into(), project: "/g/project".into(), recipe: "/g/project/verify.yml".into(), core: "/g/core".into() };
+        let claude = Agent { provider: Provider::Claude, model: Some("claude-sonnet-5-5".into()), context: None };
+        assert_eq!(
+            agent_exec(&b, "/p", "/l", "/j", &claude, "medium"),
+            r#". /g/env.sh 2>/dev/null; cd /r && gespann agent claude --prompt '/p' --last '/l' --log '/j' --key-file "$HOME/.gespann-agent-key" --model 'claude-sonnet-5-5' --effort medium 2>&1"#
+        );
+        let copilot = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Copilot, model: None, context: None }, "high");
+        assert!(copilot.contains("gespann agent copilot --prompt '/p' --last '/l' --log '/j' --key-file \"$HOME/.gespann-agent-key\" 2>&1"), "no model, no effort: {copilot}");
+        let grok = agent_exec(&b, "/p", "/l", "/j", &Agent { provider: Provider::Grok, model: Some("grok-build".into()), context: None }, "high");
+        assert!(grok.contains("gespann agent grok ") && grok.contains("--model 'grok-build' --effort high"), "{grok}");
+        assert!(!grok.contains("codex"), "{grok}");
     }
 }

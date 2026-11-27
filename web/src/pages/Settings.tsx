@@ -1,6 +1,6 @@
 import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { type AgentProvider, ago, api, type CodexModel, type OpenRouterModel, type Settings, type Tokens } from "../api.ts";
+import { type AgentProvider, ago, api, type CodexModel, type KeyAgent, type OpenRouterModel, type Settings, type Tokens } from "../api.ts";
 import { ModuleSections } from "../components/ModuleSections.tsx";
 import { useResource } from "../live.ts";
 import { Badge, Button, Card, CardHeader, Input, LinkButton, Log, Mono, Select } from "../components/ui.tsx";
@@ -117,11 +117,14 @@ function AgentChoice({ agent, onChange, busy }: { agent: AgentProvider; onChange
   const options: { id: AgentProvider; title: string; text: string }[] = [
     { id: "codex", title: "ChatGPT plan", text: "Codex on your Plus, Pro or Team plan. No extra model bill." },
     { id: "openrouter", title: "OpenRouter", text: "Codex on any OpenRouter model with your own API key. OpenRouter bills you per token." },
+    { id: "claude", title: "Claude Code", text: "Claude Code on your Anthropic API key or your Claude Pro or Max plan." },
+    { id: "copilot", title: "GitHub Copilot", text: "The Copilot CLI on your GitHub account's Copilot plan." },
+    { id: "grok", title: "Grok", text: "The Grok CLI on your xAI API key. xAI bills you per token." },
   ];
   return (
     <Card>
-      <CardHeader title="Agent" description="The tester, the environment setup and the fixes all run in Codex. Choose who runs its model; it applies to all your projects." />
-      <div role="radiogroup" aria-label="Agent provider" className="grid gap-3 px-4 py-4 sm:grid-cols-2">
+      <CardHeader title="Agent" description="The tester, the environment setup and the fixes all run in this agent. Choose one; it applies to all your projects." />
+      <div role="radiogroup" aria-label="Agent provider" className="grid gap-3 px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
         {options.map((o) => (
           <button
             key={o.id}
@@ -304,6 +307,95 @@ function OpenRouterCard({ data, reload }: { data: Settings; reload: () => Promis
   );
 }
 
+/** Claude Code, Copilot or Grok: the user's own key and, optionally, a model. */
+function KeyAgentCard({ a, reload }: { a: KeyAgent; reload: () => Promise<void> }) {
+  const [key, setKey] = useState("");
+  const [modelDraft, setModelDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const model = modelDraft ?? a.model ?? "";
+  const base = `/settings/agents/${a.id}`;
+  const run = async (fn: () => Promise<unknown>, setError: (e: string | null) => void) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+      await reload();
+    }
+  };
+  return (
+    <Card className="mt-6">
+      <CardHeader
+        title={a.name}
+        description={`The tester runs in ${a.name} on your own key, for all your projects. gespann keeps the key encrypted and puts it into a project's sandbox only while a job runs.`}
+        action={a.connected ? <Badge tone="ok">ready</Badge> : <Badge>not connected</Badge>}
+      />
+      <div className="space-y-3 px-4 py-4">
+        {a.connected ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Check className="size-4 text-ok" />
+            <Mono>{a.label ?? `${a.name} key`}</Mono>
+            <Button size="sm" variant="danger" className="ml-auto" disabled={busy} onClick={() => void run(() => api(`${base}/logout`, {}), setKeyError)}>
+              Remove key
+            </Button>
+          </div>
+        ) : (
+          <>
+            <p className="text-body text-muted-foreground">Paste {a.keyHint}.</p>
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (await run(() => api(`${base}/key`, { key: key.trim() }), setKeyError)) setKey("");
+              }}
+            >
+              <Input type="password" aria-label={`${a.name} key`} autoComplete="off" className="max-w-sm font-mono" value={key} onChange={(e) => setKey(e.target.value)} />
+              <Button type="submit" size="sm" disabled={busy || !key.trim()}>
+                {busy ? <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> : null} Connect
+              </Button>
+              <LinkButton href={a.keyUrl} target="_blank" rel="noreferrer" size="sm" variant="ghost">
+                Get a key <ExternalLink className="size-3.5" />
+              </LinkButton>
+            </form>
+          </>
+        )}
+        {keyError && <p className="text-body text-bad">{keyError}</p>}
+      </div>
+      <div className="space-y-2 border-t border-border px-4 py-4">
+        <form
+          className="flex flex-wrap items-center gap-3"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (await run(() => api(`${base}/model`, { model: model.trim() }), setModelError)) setModelDraft(null);
+          }}
+        >
+          <label htmlFor={`${a.id}-model`} className="text-body font-medium">
+            Model
+          </label>
+          <Input id={`${a.id}-model`} list={`${a.id}-models`} className="max-w-sm font-mono" placeholder={`${a.name}'s default`} value={model} onChange={(e) => setModelDraft(e.target.value)} maxLength={100} />
+          <datalist id={`${a.id}-models`}>
+            {a.models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <Button type="submit" size="sm" disabled={busy || model.trim() === (a.model ?? "")}>
+            Save
+          </Button>
+        </form>
+        {modelError && <p className="text-body text-bad">{modelError}</p>}
+        <p className="text-small text-muted-foreground">Optional. Empty uses {a.name}'s default model. The tester needs a model that calls tools and reads screenshots.</p>
+      </div>
+    </Card>
+  );
+}
+
 /** A model's benchmark accuracy and cost, or its price next to the recommended model. */
 function modelFacts(m: CodexModel, recommended: CodexModel | undefined): string {
   if (m.bench) return `${m.bench.right}/${m.bench.of} right · ≈${m.bench.credits < 1 ? m.bench.credits.toFixed(2) : m.bench.credits.toFixed(1)} credits per PR`;
@@ -363,7 +455,9 @@ export function SettingsPage() {
       <h1 className="mb-4 text-title font-semibold">Settings</h1>
       <ModuleSections />
       <AgentChoice agent={data.agent} busy={busy} onChange={(agent) => void act("/settings/agent", { agent })} />
-      {data.agent === "openrouter" ? (
+      {data.keyAgents.some((a) => a.id === data.agent) ? (
+        data.keyAgents.filter((a) => a.id === data.agent).map((a) => <KeyAgentCard key={a.id} a={a} reload={reload} />)
+      ) : data.agent === "openrouter" ? (
         <OpenRouterCard data={data} reload={reload} />
       ) : (
       <Card className="mt-6">

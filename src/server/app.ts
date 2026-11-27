@@ -12,13 +12,14 @@ import { DEFAULT_CHECKS } from "../verify/prompt.ts";
 import { parseRecipe } from "../verify/recipe.ts";
 import { viewportsOf, VIEWPORTS } from "../verify/viewports.ts";
 import type { Config, GithubApp } from "./config.ts";
-import type { Db, Project, User } from "./db.ts";
+import { AGENT_PROVIDERS, type Db, type Project, type User } from "./db.ts";
 import { APPROVE, applyGate, approve, approvedCheck, GATE_LABEL, gated, MAY_APPROVE, refreshComment, releaseAll, skipClosedRuns, withPrLock } from "./gate.ts";
 import { appManifest, convertManifest, Github, type PullRequest, verifySignature } from "./github.ts";
 import { capFor, type ServerModule } from "./extension.ts";
 import { hostSizeFor, mountInternal, orchestratorPresent, orchestratorState, unservedBy } from "./internal.ts";
 import { mcpRespond, type Viewer } from "./mcp.ts";
 import { afterSignIn, mountOAuth } from "./oauth.ts";
+import { AGENT_MODEL_RE, AgentKeyError, checkAgentKey, isKeyAgent, KEY_AGENT_INFO, KEY_AGENTS } from "./agentkeys.ts";
 import { checkKey, type Fetch, listModels, OPENROUTER_MODEL_RE, OpenRouterError, type OpenRouterModel, seal, suggestModels } from "./openrouter.ts";
 import { recordPrState } from "./pulls.ts";
 
@@ -268,6 +269,7 @@ export function createApp(d: AppDeps): Hono<Env> {
     return c.json({
       agent: agent?.agent ?? "codex",
       openrouter: { connected: !!agent?.openrouter, label: agent?.openrouter_label ?? null, model: agent?.openrouter_model ?? null },
+      keyAgents: KEY_AGENTS.map((a) => ({ ...KEY_AGENT_INFO[a], ...(agent?.[a] ?? { connected: false, label: null, model: null }) })),
       codex: {
         state: codex?.codex_state ?? "none",
         account: codex?.codex_account ?? null,
@@ -316,8 +318,9 @@ export function createApp(d: AppDeps): Hono<Env> {
   // Which provider runs the agent of the user's projects. Both stay connected; switching back is one click.
   app.post("/api/settings/agent", async (c) => {
     const body = await c.req.json<{ agent?: unknown }>();
-    if (body.agent !== "codex" && body.agent !== "openrouter") throw new HttpError(400, "agent: codex or openrouter");
-    db.setAgent(me(c).id, { agent: body.agent });
+    const agent = AGENT_PROVIDERS.find((p) => p === body.agent);
+    if (!agent) throw new HttpError(400, `agent: ${AGENT_PROVIDERS.join(", ")}`);
+    db.setAgent(me(c).id, { agent });
     db.autoSetup(me(c).id);
     return c.json({ ok: true });
   });
@@ -362,6 +365,40 @@ export function createApp(d: AppDeps): Hono<Env> {
     const context = model ? ((await openRouterModels().catch(() => [])).find((m) => m.id === model)?.context ?? null) : null;
     db.setAgent(me(c).id, { openrouter_model: model || null, openrouter_context: context });
     db.autoSetup(me(c).id);
+    return c.json({ ok: true, model: model || null });
+  });
+
+  // Claude Code, Copilot and Grok: the user's own key, checked with its provider once, then kept sealed.
+  app.post("/api/settings/agents/:agent/key", async (c) => {
+    const agent = c.req.param("agent");
+    if (!isKeyAgent(agent)) throw new HttpError(404, "no such agent");
+    const body = await c.req.json<{ key?: unknown }>();
+    let checked: { key: string; label: string };
+    try {
+      checked = await checkAgentKey(agent, typeof body.key === "string" ? body.key : "", f);
+    } catch (err) {
+      if (err instanceof AgentKeyError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+    db.setKeyAgent(me(c).id, agent, { key: seal(config.sessionSecret, checked.key), label: checked.label });
+    db.autoSetup(me(c).id);
+    return c.json({ ok: true, label: checked.label });
+  });
+
+  app.post("/api/settings/agents/:agent/logout", (c) => {
+    const agent = c.req.param("agent");
+    if (!isKeyAgent(agent)) throw new HttpError(404, "no such agent");
+    db.setKeyAgent(me(c).id, agent, { key: null, label: null });
+    return c.json({ ok: true });
+  });
+
+  app.post("/api/settings/agents/:agent/model", async (c) => {
+    const agent = c.req.param("agent");
+    if (!isKeyAgent(agent)) throw new HttpError(404, "no such agent");
+    const body = await c.req.json<{ model?: unknown }>();
+    const model = typeof body.model === "string" ? body.model.trim() : "";
+    if (model && !AGENT_MODEL_RE.test(model)) throw new HttpError(400, "model: a model id such as claude-sonnet-5-5");
+    db.setKeyAgent(me(c).id, agent, { model: model || null });
     return c.json({ ok: true, model: model || null });
   });
 
@@ -450,6 +487,8 @@ export function createApp(d: AppDeps): Hono<Env> {
       agent: agent?.agent ?? "codex",
       agent_ready: agent?.ready ?? false,
       openrouter_model: agent?.openrouter_model ?? null,
+      /** The model of Claude Code, Copilot or Grok when the owner runs one of them; null: the CLI's default. */
+      agent_model: agent && isKeyAgent(agent.agent) ? agent[agent.agent].model : null,
       own: p.owner_id === me(c).id,
       default_checks: DEFAULT_CHECKS,
       viewports: viewportsOf(p.viewports).map((v) => v.id),

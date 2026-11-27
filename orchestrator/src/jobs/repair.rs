@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
-use super::boxes::{agent_for, codex_exec, js_code, long, recipe_check, save_bundle, write_prompt, Sbx};
+use super::boxes::{agent_for, agent_exec, js_code, long, recipe_check, save_bundle, write_prompt, Sbx};
 use super::setup::{check_copy, tear_down};
 use super::{cut, tail, Cx};
 use crate::codex::with_agent;
@@ -87,16 +87,17 @@ async fn fix(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gaps: &[Value], backu
             write_prompt(cx, b, "repair", &input, prompt_file).await
         })
         .await?;
-    cx.note("repair.log.codex", "Codex fixes the copy").await;
-    let cancelled = || cx.stopped();
     let agent = agent_for(cx, p).await?;
-    let command = codex_exec(b, prompt_file, last_file, &format!("{}/repair.jsonl", b.gespann), &agent, "high");
+    let name = agent.provider.agent_name();
+    cx.note("repair.log.codex", &format!("{name} fixes the copy")).await;
+    let cancelled = || cx.stopped();
+    let command = agent_exec(b, prompt_file, last_file, &format!("{}/repair.jsonl", b.gespann), &agent, "high");
     let r = with_agent(cx.ctx, &cx.jr, "repair.signin", p.owner_id, &b.id, &agent, || long(cx, b, "repair.codex", &command, Duration::from_secs(60 * 60), &cancelled)).await?;
     // Codex may have left its own copy up; it may also have touched the checkout.
     tear_down(cx, b, "repair.teardown", None).await?;
     let last = sb.read_file(&b.id, last_file).await?.unwrap_or_default().trim().to_string();
     if !last.is_empty() {
-        cx.log(&format!("Codex: {}", cut(&last, 2000)));
+        cx.log(&format!("{name}: {}", cut(&last, 2000)));
     }
     if cx.stopped() {
         bail!("cancelled");
@@ -105,7 +106,7 @@ async fn fix(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gaps: &[Value], backu
         bail!("the copy cannot provide it");
     }
     if r.exit_code != Some(0) {
-        bail!("{}", if r.timed_out { "the fix took longer than an hour".to_string() } else { format!("codex exited {}: {}", js_code(r.exit_code), tail(&r.tail, 500)) });
+        bail!("{}", if r.timed_out { "the fix took longer than an hour".to_string() } else { format!("{name} exited {}: {}", js_code(r.exit_code), tail(&r.tail, 500)) });
     }
     let recipe = sb.read_file(&b.id, &b.recipe).await?.unwrap_or_default();
     recipe_check(cx, b, &b.recipe).await?;
