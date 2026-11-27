@@ -124,6 +124,15 @@ test("the last message is the agent's final answer, as codex exec -o writes it",
   plain.note("401: invalid x-api-key");
   assert.equal(plain.text, "");
   assert.match(plain.printed, /401: invalid x-api-key$/, "stderr counts for the error too");
+
+  // A failed step names the error, not the progress message before it.
+  const failed = new LastMessage("copilot");
+  failed.line('{"type":"assistant.message","data":{"content":"I will inspect the tests"}}');
+  failed.note("Error: rate limit exceeded");
+  assert.equal(failed.failure, "Error: rate limit exceeded");
+  const claudeError = new LastMessage("claude");
+  claudeError.line('{"type":"result","is_error":true,"result":"Invalid API key"}');
+  assert.equal(claudeError.failure, "Invalid API key", "without other output: the error result");
 });
 
 test("gespann agent: the key file is gone before the agent starts, and the agent gets the key and the browser", async () => {

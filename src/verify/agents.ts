@@ -261,6 +261,14 @@ export class LastMessage {
     if (this.plain.length > 200) this.plain.shift();
   }
 
+  /**
+   * Why a failed step failed: what the agent printed besides its events (a rate limit on stderr) first,
+   * since its last message may be progress; else that message (Claude Code's error result).
+   */
+  get failure(): string {
+    return (this.printed || this.text).trim();
+  }
+
   /** The end of what the agent printed besides its events: why a failed step failed. */
   get printed(): string {
     return this.plain.slice(-20).join("\n").trim();
@@ -366,8 +374,7 @@ export async function runAgent(r: AgentRun): Promise<number> {
   await new Promise<void>((resolve) => log.end(resolve));
   // Like `codex exec -o`: an answer only from a step that finished; a failed one says why in the step's output.
   writeFileSync(r.lastFile, code === 0 ? last.text : "");
-  // Its last message (Claude Code's error result) or else what it printed besides its events.
-  const why = (last.text || last.printed).trim();
+  const why = last.failure;
   if (code !== 0) say(`${l.bin} exited ${code}${why ? `: ${why.slice(-1500)}` : ""}`);
   return code;
 }
