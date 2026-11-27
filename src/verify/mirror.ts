@@ -399,7 +399,7 @@ const CLIENT = String.raw`
       id: el.id || "",
       testid: el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy") || "",
       name: el.getAttribute("name") || "",
-      type: el.getAttribute("type") || "",
+      type: el.tagName === "INPUT" ? el.type : el.getAttribute("type") || "",
       href: el.getAttribute("href") || "",
       role: el.getAttribute("role") || "",
       aria: el.getAttribute("aria-label") || "",
@@ -417,8 +417,11 @@ const CLIENT = String.raw`
     return true;
   }
 
+  // How well an element matches a description; -1 when it is another field (another type, name or id).
   function same(el, d) {
-    if (el.tagName !== d.tag) return 0;
+    if (el.tagName !== d.tag) return -1;
+    if ((el.tagName === "INPUT" ? el.type : el.getAttribute("type") || "") !== d.type) return -1;
+    if ((d.name && el.getAttribute("name") && el.getAttribute("name") !== d.name) || (d.id && el.id && el.id !== d.id)) return -1;
     var score = 0;
     if (d.testid && (el.getAttribute("data-testid") || el.getAttribute("data-test") || el.getAttribute("data-cy")) === d.testid) score += 8;
     if (d.id && el.id === d.id) score += 6;
@@ -427,7 +430,6 @@ const CLIENT = String.raw`
     if (d.aria && el.getAttribute("aria-label") === d.aria) score += 3;
     if (d.placeholder && el.getAttribute("placeholder") === d.placeholder) score += 3;
     if (d.role && el.getAttribute("role") === d.role) score += 1;
-    if (d.type && el.getAttribute("type") !== d.type) return 0;
     if (d.text && says(el) === d.text) score += 3;
     return score;
   }
@@ -447,7 +449,7 @@ const CLIENT = String.raw`
   function find(f, d) {
     var doc = f.el.contentDocument, win = f.el.contentWindow;
     var p = byPath(doc, d);
-    if (p && p.tagName === d.tag && shown(p, win) && (!d.text || same(p, d) >= 3 || !says(p))) return { el: p };
+    if (p && shown(p, win) && same(p, d) >= 0 && (!d.text || same(p, d) >= 3 || !says(p))) return { el: p };
     var best = null, top = 0, hidden = false;
     var all = doc.getElementsByTagName(d.tag);
     for (var i = 0; i < all.length; i++) {
@@ -573,7 +575,10 @@ const CLIENT = String.raw`
       var t = actionable(e.target);
       if (!t) return;
       // A click on a label also clicks its control: the label's click, repeated, does that in the other sizes too.
-      if (lastClick.el && lastClick.el.tagName === "LABEL" && lastClick.el.control === t && Date.now() - lastClick.at < 100) return;
+      if (lastClick.el && lastClick.el.tagName === "LABEL" && lastClick.el.control === t && Date.now() - lastClick.at < 100) {
+        lastClick.el = t;
+        return;
+      }
       lastClick = { at: Date.now(), el: t };
       var d = describe(t);
       setTimeout(function () { each(function (g) { click(g, d); }); }, 0);
