@@ -127,8 +127,12 @@ export function renderComment(c: CommentInput): string {
   if (passed.length) lines.push("", `<details><summary>✅ ${passed.length} passed ${passed.length === 1 ? "check" : "checks"}</summary>`, "", ...table(passed), "", "</details>");
 
   // GitHub plays no video from another site, so the recording is a link, above the screenshots.
-  const video = c.files.find((f) => /\.(mp4|webm)$/i.test(f));
-  if (video) lines.push("", `🎬 **[Watch the recording](${c.fileUrl(video)})** of the tester's screen`);
+  // change.mp4 is the part of the recording that shows what the PR changes; it leads when there is one.
+  const videos = c.files.filter((f) => /\.(mp4|webm)$/i.test(f));
+  const clip = videos.find((f) => f === "change.mp4");
+  const whole = videos.find((f) => f !== "change.mp4");
+  if (clip) lines.push("", `🎬 **[Watch the change](${c.fileUrl(clip)})** in the tester's recording${whole ? ` · [whole test](${c.fileUrl(whole)})` : ""}`);
+  else if (whole) lines.push("", `🎬 **[Watch the recording](${c.fileUrl(whole)})** of the tester's screen`);
 
   const shown = [...new Set([...checks.flatMap((x) => x.proof ?? []), ...(v?.goals ?? []).flatMap((g) => g.proof ?? []), ...(v?.proof ?? [])])].filter((f) => IMAGE.test(f) && c.files.includes(f));
   if (shown.length) {
