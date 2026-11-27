@@ -72,7 +72,8 @@ export function Run({ id }: { id: number }) {
       {video ? (
         <div className="p-4">
           {/* Asks the browser to buffer the whole recording up front (7 minutes are about 1.5 MB): with only the
-              metadata it fetches each spot on a seek, and keyframes are up to 50 s apart, so scrubbing stalls. */}
+              metadata it fetches each spot on a seek. Smooth scrubbing also needs the keyframe every 5 s that
+              finish_recording_script (orchestrator/src/sandbox/scripts.rs) gives the recording. */}
           <video controls playsInline preload="auto" src={src(video)} poster={shots[0]?.src} className="max-h-[70vh] w-full rounded-md border border-border bg-black object-contain" />
         </div>
       ) : (
