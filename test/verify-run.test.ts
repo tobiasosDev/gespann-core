@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseRecipe } from "../src/verify/recipe.ts";
-import { expand, finish, prepare, readEnvFile, type RunContext } from "../src/verify/run.ts";
+import { contextOf, expand, finish, prepare, readEnvFile, switchFlag, type RunContext } from "../src/verify/run.ts";
 import { judge } from "../src/verify/verdict.ts";
 import { testerPrompt } from "../src/verify/prompt.ts";
 
@@ -49,6 +49,30 @@ test("prepare brings the copy up, passes values through GESPANN_ENV, finish tear
   assert.deepEqual(f.alongside, [{ name: "golden", exit: 0, required: true }]);
   assert.equal(readFileSync(join(c.work, "order"), "utf8"), "up\ndown\ncleanup\n");
   assert.ok(existsSync(join(c.work, "result.json")));
+});
+
+test("finish holds the verdict to the feature flags found in the diff", async () => {
+  const c = ctx();
+  const r = parseRecipe(RECIPE);
+  assert.ok((await prepare(c, r)).ok);
+  writeFileSync(join(c.work, "flag-changes.json"), JSON.stringify([{ key: "new-cart", kind: "added", files: ["app.ts"] }]));
+  writeFileSync(join(c.out, "home.png"), Buffer.from("89504e470d0a1a0a0000000d", "hex"));
+  writeFileSync(join(c.out, "verdict.json"), JSON.stringify({ verdict: "PASS", summary: "ok", checks: [{ expect: "e", observed: "o", result: "pass", proof: ["home.png"] }], proof: ["home.png"] }));
+  const f = await finish(c, r, 10_000);
+  assert.equal(f.outcome, "FAIL");
+  assert.ok(f.judged.problems.includes("no entry for the feature flag new-cart found in the diff"));
+});
+
+test("the tester switches a flag with the recipe's command, in the run's environment, from the work dir alone", async () => {
+  const c = ctx();
+  const r = parseRecipe(RECIPE.replace(`flags: { run: 'echo "flag-a: on"' }`, `flags:\n  run: 'echo "flag-a: on"'\n  switch: 'echo "$GESPANN_FLAG=$GESPANN_FLAG_STATE $PORT $GESPANN_PROJECT" > "$GESPANN_WORK/flag.txt"'`));
+  assert.ok((await prepare(c, r)).ok);
+  const again = contextOf(c.work);
+  assert.deepEqual(again, c);
+  assert.equal(switchFlag(again, r, "new-cart", "off").ok, true);
+  assert.equal(readFileSync(join(c.work, "flag.txt"), "utf8"), `new-cart=off 4321 ${c.root}\n`);
+  assert.equal(switchFlag(again, parseRecipe(RECIPE), "new-cart", "on").ok, false, "no switch command in the recipe");
+  await finish(c, r, 10_000);
 });
 
 test("a failing setup step tears down and reports, without env.down for a copy never started", async () => {

@@ -570,6 +570,8 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
                 "work": format!("{dir}/work"),
                 "criteria": current.criteria,
                 "recipeFile": b.recipe,
+                // The PR merged onto its base: the prompt reads the feature flags its diff touches from there.
+                "repoDir": b.repo,
                 "addendum": addendum,
                 "issues": issues,
                 "viewports": viewports,

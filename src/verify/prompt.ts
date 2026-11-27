@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { FLAG_CHANGES, flagChangesIn, type FlagChange } from "./flags.ts";
 import { loadRecipe, type Recipe } from "./recipe.ts";
 import { mirrorCanvas } from "./mirror.ts";
 import type { Viewport } from "./viewports.ts";
@@ -11,7 +14,7 @@ export const DEFAULT_CHECKS = `Sign in with the test account lands on the main p
 The main flow users come for works end to end with the seeded data.
 What the PR changes works as the diff intends, for a normal user, and for an admin when it touches admin pages.
 One neighbouring flow the change could break still works.
-When the change adds or changes a feature flag, the app works with the flag on and off.`;
+When the change adds or changes a feature flag, the app with the flag off behaves as before the PR, and with it on the change works.`;
 
 export interface TesterInput {
   repo: string;
@@ -34,6 +37,38 @@ export interface TesterInput {
   viewports?: Viewport[];
   /** The mirror page showing the copy at every size at once (two sizes or more); see mirror.ts. */
   mirror?: string;
+  /** Feature flags found in the PR's diff (flags.ts); the tester confirms and tests each. */
+  flags?: FlagChange[];
+}
+
+/**
+ * A flag the PR touches is tested on the same copy twice, off first: with it off no user may notice
+ * the PR, with it on the change has to work. Candidates come from the diff; the tester confirms them.
+ */
+function flagRules(t: TesterInput, site: string): string[] {
+  const found = t.flags ?? [];
+  const f = t.recipe.flags;
+  const ways = [
+    ...(f?.switch ? [`with \`gespann verify flag <key> off --work ${t.work}\` (\`on\` to switch it on), which returns once the copy runs in that state`] : []),
+    ...(f?.admin ? [`on the page ${new URL(f.admin, site).toString()}`] : []),
+  ];
+  const lines = [
+    "Feature flags the PR touches:",
+    ...(found.length
+      ? [
+          `gespann found these in the diff (also in ${t.work}/${FLAG_CHANGES}). Confirm each from the code: is it a feature flag that switches behaviour a user can see?`,
+          ...found.map((c) => `- ${c.key}: ${c.kind === "added" ? "on new lines" : c.kind === "removed" ? "only on deleted lines" : "on new and deleted lines"}, in ${c.files.join(", ")}`),
+          "A flag you find in the diff yourself that is missing here counts the same.",
+        ]
+      : ["gespann found none in the diff. If you find one in the diff anyway (a flag SDK call, a flag in the app's flag list, an environment flag), it counts as below."]),
+    "Test each confirmed flag on this copy twice, off first:",
+    `- Off, before you switch it on for the first time, so nothing the new feature writes exists yet: the app must behave exactly as on ${t.base}. Check the screens and flows the flag guards against the base code (\`git show ${t.base}:<file>\`): the old behaviour, nothing of the new feature visible, no new errors. Anything a user can notice is a failed check: with the flag off the PR must not affect any user.`,
+    "- On: the change works as the diff intends, plus the neighbouring flow it could break.",
+    `Switch the flag ${ways.length ? ways.join(", or ") : "the way the app does it (its admin page, its flag settings)"}. When you cannot switch it on the copy, the checks of the state you cannot reach are blocked, with \`fix\` saying what the copy needs, e.g. "a flags.switch command in the recipe that switches <key> on the copy".`,
+    'Each of these checks carries "flag" (the key) and "state" ("off" or "on"), and its expect starts with the flag and state, e.g. "[<key> off] ...". A flag that is no feature flag, never reaches a user, or that the PR removes gets "tested": false and "why"; test what the PR leaves instead like any other change.',
+    "",
+  ];
+  return lines;
 }
 
 /** The generic tester prompt. Project knowledge comes from the criteria, the recipe and its addendum. */
@@ -58,11 +93,7 @@ export function testerPrompt(t: TesterInput): string {
     const where = r.login.path ? ` at ${new URL(r.login.path, site).toString()}` : "";
     parts.push(`Sign in through the normal login page${where} with ${r.login.user} / ${r.login.password}. This account exists only on the copy.${r.login.note ? ` ${r.login.note}` : ""}`);
   }
-  if (r.flags) {
-    parts.push(
-      `${t.work}/flags.md says which feature flags the copy runs. Judge the app in that state.${r.flags.admin ? ` When the change adds or changes a flag, also switch it at ${new URL(r.flags.admin, site).toString()} and test both states.` : ""}`,
-    );
-  }
+  if (r.flags) parts.push(`${t.work}/flags.md says which feature flags the copy runs. Judge the app in that state, apart from the flags the PR touches (below).`);
   if (r.seeds.length) {
     parts.push("You may load these data states into the copy before a check, by running the command in the repo checkout:");
     for (const s of r.seeds) parts.push(`- ${s.name}: ${s.about} (\`${s.run}\`)`);
@@ -80,6 +111,7 @@ export function testerPrompt(t: TesterInput): string {
     "What the team wants checked on every PR:",
     t.criteria.trim() || DEFAULT_CHECKS,
     "",
+    ...flagRules(t, site),
     "Steps:",
     `1. Read the PR text in ${t.work}/pr.md${issues.length ? `, ${t.work}/issues.md,` : ""} and the change with \`git diff ${t.base}...${t.head}\` in one command. Decide which behaviour a user can observe. If nothing observable changed (CI, tests, tooling, docs only), write the verdict SKIP and stop after step 5.`,
     ...(issues.length
@@ -104,7 +136,8 @@ export function testerPrompt(t: TesterInput): string {
         : []),
     `4. Save one screenshot per check with \`gespann shot ${t.out}/<short-name>.png\`, at the moment that proves its result, with the changed part in view.${mirror ? " It shows the mirror with every size; scroll first so the part that proves the result is in view. When a size needs a step of its own, save that moment too." : sizes.length > 1 ? " Each check gets one screenshot per size, the size in the name (e.g. `checkout-small-phone.png`)." : ""} No screenshots of steps in between. Never save the same screen twice: when two checks end on the same screen (the same dialog with another option selected counts as the same screen), both name the same file in proof. A reviewer reads every picture, so fewer and clearer is better.`,
     `5. Write ${t.out}/verdict.json, exactly this shape:`,
-    `   {"verdict":"PASS"|"FAIL"|"BLOCKED"|"SKIP","summary":"one or two sentences","checks":[{"expect":"...","observed":"...","result":"pass"|"fail"|"blocked","proof":["file.png"],"fix":"only for blocked checks, see below","pre_existing":"only for failed checks that behave the same on the base, see below"}],${issues.length ? '"goals":[{"issue":"#12","goal":"what the issue asks for, one sentence","observed":"what the PR achieves of it","result":"met"|"missed"|"blocked","proof":["file.png"]}],' : ""}"proof":["file names in ${t.out}"]}`,
+    `   {"verdict":"PASS"|"FAIL"|"BLOCKED"|"SKIP","summary":"one or two sentences","checks":[{"expect":"...","observed":"...","result":"pass"|"fail"|"blocked","proof":["file.png"],"fix":"only for blocked checks, see below","pre_existing":"only for failed checks that behave the same on the base, see below","flag":"only for checks of a feature flag: its key","state":"off"|"on"}],${issues.length ? '"goals":[{"issue":"#12","goal":"what the issue asks for, one sentence","observed":"what the PR achieves of it","result":"met"|"missed"|"blocked","proof":["file.png"]}],' : ""}"flags":[{"flag":"key","tested":true,"how":"how you switched it"},{"flag":"key","tested":false,"why":"why not"}],"proof":["file names in ${t.out}"]}`,
+    `   "flags" has one entry per feature flag the PR touches${t.flags?.length ? ` (at least ${t.flags.map((f) => f.key).join(", ")})` : ""}; leave it out when it touches none.`,
     ...(issues.length
       ? [
           `   One goal per issue (${issues.join(", ")}), judged against the issue's description. met: what the issue asks for works in the copy. missed: it does not, or the PR does only part of it, or it does something else; say in observed what is missing. blocked: the copy cannot show it (same rule as a blocked check). A missed goal is a FAIL even when every check passed; PASS needs every goal met.`,
@@ -144,6 +177,7 @@ Write these files into ${s.projectDir} (not into the repository):
 
 1. ${s.projectDir}/verify.yml, a gespann recipe. Read the format reference in ${s.projectDir}/../core/docs/recipe.md. Every command runs with bash in the repo checkout; scripts you write live in ${s.projectDir} and are called as "$GESPANN_PROJECT/<script>". If the repo already has .gespann/verify.yml, start from it.
 2. The scripts the recipe calls: build or pull images, start the app with its database and workers as close to production as possible (production build, production settings), including every site the repo deploys that users pass through (landing page, app, admin), so links between them work on the copy, seed one login account for the tester, and replace external providers (payment, mail, LLM, OCR, storage) with local fakes so nothing reaches a real service and no real secret is needed. Skip edge cases; the copy has to start reliably, not cover everything. Builds must be fast for every PR: Docker builds keep a BuildKit cache between runs, so keep \`--mount=type=cache\` for package managers and compilers; a rebuild then redoes only the steps whose inputs changed.
+   If the app has feature flags, add \`flags\` to the recipe: \`run\` prints which flags the copy runs, \`admin\` the page where an admin switches them (if the app has one), and \`switch\`: a command that switches one flag on the running copy, given GESPANN_FLAG (its key) and GESPANN_FLAG_STATE (on or off), restarting what reads the flag. The tester tests every flag a PR touches off and on with it.
 3. ${s.projectDir}/NOTES.md: what the copy contains, what is faked, the login, which flows cannot work on the copy and why. The tester reads it.
 4. ${s.projectDir}/CHECKS.md: the checks above made concrete for this app, one per line, 4 to 8 lines, in plain words a tester can follow (name the real pages and flows, e.g. "Upload a DOCX on /upload, the result page lists the citations"). Only flows that work on the copy.
 
@@ -206,9 +240,13 @@ export type PromptKind = (typeof PROMPT_KINDS)[number];
 export function promptFor(kind: PromptKind, input: Record<string, unknown>): string {
   switch (kind) {
     case "tester": {
-      const { recipeFile, ...rest } = input as Omit<TesterInput, "recipe"> & { recipeFile: string };
+      const { recipeFile, repoDir, ...rest } = input as Omit<TesterInput, "recipe"> & { recipeFile: string; repoDir?: string };
       if (typeof recipeFile !== "string" || !recipeFile) throw new Error("tester input needs recipeFile");
-      return testerPrompt({ ...rest, recipe: loadRecipe(recipeFile) });
+      // The checkout holds the PR merged onto its base: the flags it touches are read from there.
+      const flags = rest.flags ?? (repoDir ? flagChangesIn(repoDir, rest.base, rest.head) : []);
+      if (repoDir) mkdirSync(rest.work, { recursive: true });
+      if (repoDir) writeFileSync(join(rest.work, FLAG_CHANGES), `${JSON.stringify(flags, null, 2)}\n`);
+      return testerPrompt({ ...rest, flags, recipe: loadRecipe(recipeFile) });
     }
     case "setup":
       return setupPrompt(input as unknown as SetupInput);

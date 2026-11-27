@@ -15,6 +15,24 @@ export interface Check {
    * is then already on the base branch, not caused by the PR, and does not count against it.
    */
   pre_existing?: string;
+  /** For a check of a feature flag the PR touches: the flag's key, and the state the copy ran it in. */
+  flag?: string;
+  state?: FlagState;
+}
+
+export type FlagState = "off" | "on";
+
+/**
+ * A feature flag the PR touches, as the tester judged it. Tested: checks ran with the flag off
+ * (the app behaves as on the base branch) and on (the change works). Not tested: why not.
+ */
+export interface FlagVerdict {
+  flag: string;
+  tested: boolean;
+  /** How the tester switched it (admin page, recipe command). */
+  how?: string;
+  /** Why it was not tested: not a feature flag, removed by the PR, never reaches a user. */
+  why?: string;
 }
 
 /** A failed check whose behaviour is the same on the base branch: shown, but not the PR's fault. */
@@ -39,6 +57,8 @@ export interface Verdict {
   checks: Check[];
   /** One per issue the PR resolves; absent when it links none. */
   goals?: Goal[];
+  /** One per feature flag the PR touches; absent when it touches none. */
+  flags?: FlagVerdict[];
   proof: string[];
 }
 
@@ -54,15 +74,18 @@ const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const KINDS = new Set(["PASS", "FAIL", "BLOCKED", "SKIP"]);
 const RESULTS = new Set(["pass", "fail", "blocked"]);
 const GOALS = new Set(["met", "missed", "blocked"]);
+const STATES = new Set(["off", "on"]);
 const sameRef = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**
  * Validates `verdict.json`. A verdict that breaks its own rules (PASS without proof,
  * BLOCKED with a failed check, proof files that do not exist) counts as FAIL. `issues` are the
  * linked issues the tester was given: each needs a goal, and a missed goal fails the PR. A failed
- * check marked `pre_existing` behaves the same on the base branch: it never fails the PR.
+ * check marked `pre_existing` behaves the same on the base branch: it never fails the PR. `flags` are
+ * the feature flags found in the diff: each needs an entry, and a tested flag needs checks with it
+ * off and on.
  */
-export function judge(raw: string | null, proofExists: (file: string) => boolean, issues: string[] = []): Judged {
+export function judge(raw: string | null, proofExists: (file: string) => boolean, issues: string[] = [], flags: string[] = []): Judged {
   if (raw === null) return { verdict: null, outcome: "FAIL", problems: ["the tester wrote no verdict.json"] };
   let v: Record<string, unknown>;
   try {
@@ -87,8 +110,42 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
     const proof = Array.isArray(c.proof) ? c.proof.map(String) : undefined;
     const fix = result === "blocked" && typeof c.fix === "string" && c.fix.trim() ? c.fix.trim() : undefined;
     const base = result === "fail" && typeof c.pre_existing === "string" && c.pre_existing.trim() ? c.pre_existing.trim() : undefined;
-    checks.push({ expect: String(c.expect ?? ""), observed: String(c.observed ?? ""), result: result as CheckResult, ...(proof ? { proof } : {}), ...(fix ? { fix } : {}), ...(base ? { pre_existing: base } : {}) });
+    const flag = typeof c.flag === "string" && c.flag.trim() ? c.flag.trim() : undefined;
+    const state = c.state === undefined || c.state === null ? undefined : String(c.state);
+    if (state !== undefined && !STATES.has(state)) problems.push(`check state ${JSON.stringify(state)} is not off or on`);
+    if (!!flag !== (state !== undefined)) problems.push("a flag check needs both flag and state");
+    checks.push({
+      expect: String(c.expect ?? ""),
+      observed: String(c.observed ?? ""),
+      result: result as CheckResult,
+      ...(proof ? { proof } : {}),
+      ...(fix ? { fix } : {}),
+      ...(base ? { pre_existing: base } : {}),
+      ...(flag && state && STATES.has(state) ? { flag, state: state as FlagState } : {}),
+    });
   }
+  const flagged: FlagVerdict[] = [];
+  for (const e of Array.isArray(v.flags) ? (v.flags as unknown[]) : []) {
+    if (typeof e !== "object" || e === null) {
+      problems.push("a flag entry is not an object");
+      continue;
+    }
+    const f = e as Record<string, unknown>;
+    const how = typeof f.how === "string" && f.how.trim() ? f.how.trim() : undefined;
+    const why = typeof f.why === "string" && f.why.trim() ? f.why.trim() : undefined;
+    flagged.push({ flag: String(f.flag ?? "").trim(), tested: f.tested === true, ...(how ? { how } : {}), ...(why ? { why } : {}) });
+  }
+  for (const key of flags) {
+    const n = flagged.filter((f) => f.flag === key).length;
+    if (n !== 1) problems.push(n ? `flag ${key} judged ${n} times` : `no entry for the feature flag ${key} found in the diff`);
+  }
+  for (const f of flagged) {
+    if (!f.flag) problems.push("flag entry without the flag's key");
+    else if (f.tested) {
+      for (const st of ["off", "on"] as const) if (!checks.some((c) => c.flag === f.flag && c.state === st)) problems.push(`flag ${f.flag} tested without a check with it ${st}`);
+    } else if (!f.why) problems.push(`flag ${f.flag} not tested without saying why`);
+  }
+  for (const key of new Set(checks.flatMap((c) => (c.flag ? [c.flag] : [])))) if (!flagged.some((f) => f.flag === key && f.tested)) problems.push(`checks for the flag ${key}, which the verdict does not list as tested`);
   const goals: Goal[] = [];
   for (const e of Array.isArray(v.goals) ? (v.goals as unknown[]) : []) {
     if (typeof e !== "object" || e === null) {
@@ -112,7 +169,7 @@ export function judge(raw: string | null, proofExists: (file: string) => boolean
   // A FAIL whose only failures are already on the base branch is what the other checks make it; the verdict keeps what the tester wrote.
   let kind = written;
   if (written === "FAIL" && !missed && !checks.some(failed) && checks.some(preExisting)) kind = checks.some((c) => c.result === "blocked") || blockedGoal ? "BLOCKED" : "PASS";
-  const verdict: Verdict = { verdict: written as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), proof };
+  const verdict: Verdict = { verdict: written as VerdictKind, summary: String(v.summary ?? ""), checks, ...(goals.length ? { goals } : {}), ...(flagged.length ? { flags: flagged } : {}), proof };
 
   if (kind === "PASS") {
     if (!checks.length) problems.push("PASS without checks");

@@ -408,14 +408,37 @@ pub fn combine(first: &Value, second: &Value) -> Option<(Value, Vec<String>)> {
         e
     };
     let list = |v: &Value, key: &str| v.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
-    let failed: Vec<Value> = list(v1, "checks").iter().filter(|c| c["result"] == "fail").map(&mut moved).collect();
+    let first_checks = list(v1, "checks");
+    let second_checks = list(v2, "checks");
+    let flag_of = |c: &Value| c.get("flag").and_then(Value::as_str).map(String::from);
+    let has = |checks: &[Value], f: &str, st: &Value| checks.iter().any(|c| c["flag"].as_str() == Some(f) && c["state"] == *st);
+    // A flag that failed in the first test was tested; the state the second test left out comes along from the first.
+    let failed_flags: Vec<String> = first_checks.iter().filter(|c| c["result"] == "fail").filter_map(flag_of).collect();
+    let failed: Vec<Value> = first_checks
+        .iter()
+        .filter(|c| {
+            c["result"] == "fail"
+                || flag_of(c).is_some_and(|f| failed_flags.contains(&f) && !has(&second_checks, &f, &c["state"]) && !first_checks.iter().any(|o| o["result"] == "fail" && o["flag"] == c["flag"] && o["state"] == c["state"]))
+        })
+        .map(&mut moved)
+        .collect();
     let missed: Vec<Value> = list(v1, "goals").iter().filter(|g| g["result"] == "missed").map(&mut moved).collect();
     let same = |a: &Value, b: &Value| a.as_str().unwrap_or("").trim().to_lowercase() == b.as_str().unwrap_or("").trim().to_lowercase();
     let mut verdict = v2.clone();
     verdict["verdict"] = "FAIL".into();
-    let mut checks = list(v2, "checks");
+    let mut checks = second_checks.clone();
     checks.extend(failed);
     verdict["checks"] = Value::Array(checks);
+    if !failed_flags.is_empty() {
+        let mut flags = list(v2, "flags");
+        for f in failed_flags {
+            flags.retain(|e| e["flag"].as_str() != Some(f.as_str()) || e["tested"] == true);
+            if !flags.iter().any(|e| e["flag"].as_str() == Some(f.as_str())) {
+                flags.push(serde_json::json!({ "flag": f, "tested": true, "how": "in the first test" }));
+            }
+        }
+        verdict["flags"] = Value::Array(flags);
+    }
     if let Some(goals) = v2.get("goals").and_then(Value::as_array) {
         verdict["goals"] = goals.iter().map(|g| missed.iter().find(|m| same(&m["issue"], &g["issue"])).unwrap_or(g).clone()).collect();
     }
@@ -615,5 +638,29 @@ mod tests {
         let mut blocked = first.clone();
         blocked["outcome"] = json!("BLOCKED");
         assert!(combine(&blocked, &passed).is_none());
+    }
+
+    #[test]
+    fn a_flag_that_failed_off_in_the_first_test_stays_tested_after_the_copy_is_fixed() {
+        let first = json!({
+            "outcome": "FAIL", "problems": [],
+            "verdict": {"verdict": "FAIL", "summary": "fail", "proof": ["off.png"], "checks": [
+                {"expect": "[new-cart on] the new cart", "observed": "flag cannot be switched", "result": "blocked", "fix": "add flags.switch", "flag": "new-cart", "state": "on"},
+                {"expect": "[new-cart off] the old cart", "observed": "the cart button is gone", "result": "fail", "proof": ["off.png"], "flag": "new-cart", "state": "off"}
+            ], "flags": [{"flag": "new-cart", "tested": true, "how": "admin page"}]}
+        });
+        let untested = json!({
+            "outcome": "PASS", "problems": [],
+            "verdict": {"verdict": "PASS", "summary": "pass", "proof": ["cart.png"], "checks": [
+                {"expect": "the cart opens", "observed": "it does", "result": "pass", "proof": ["cart.png"]}
+            ], "flags": [{"flag": "new-cart", "tested": false, "why": "no user sees it"}, {"flag": "other", "tested": false, "why": "removed"}]}
+        });
+        let (j, _) = combine(&first, &untested).expect("the first test's failure is kept");
+        let states: Vec<(&str, &str)> = j["verdict"]["checks"].as_array().unwrap().iter().filter(|c| c["flag"] == "new-cart").map(|c| (c["state"].as_str().unwrap(), c["result"].as_str().unwrap())).collect();
+        assert_eq!(states, [("on", "blocked"), ("off", "fail")], "both states of the tested flag survive");
+        assert_eq!(j["verdict"]["flags"], json!([{"flag": "other", "tested": false, "why": "removed"}, {"flag": "new-cart", "tested": true, "how": "in the first test"}]));
+        let mut tested = untested.clone();
+        tested["verdict"]["flags"] = json!([{"flag": "new-cart", "tested": true, "how": "flags.switch"}]);
+        assert_eq!(combine(&first, &tested).unwrap().0["verdict"]["flags"], json!([{"flag": "new-cart", "tested": true, "how": "flags.switch"}]));
     }
 }

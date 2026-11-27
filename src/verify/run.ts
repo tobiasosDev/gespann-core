@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { FLAG_CHANGES } from "./flags.ts";
 import { judge, type Judged } from "./verdict.ts";
 import type { Recipe, Step } from "./recipe.ts";
 import type { Viewport } from "./viewports.ts";
@@ -166,6 +167,8 @@ async function mirrorUp(ctx: RunContext, state: State, url: string, viewports: V
 export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] = []): Promise<Prepared> {
   mkdirSync(ctx.work, { recursive: true });
   mkdirSync(ctx.out, { recursive: true });
+  // `gespann verify flag` runs recipe commands for this run later, from the work dir alone.
+  writeFileSync(join(ctx.work, "context.json"), `${JSON.stringify(ctx)}\n`);
   const deadline = Date.now() + r.timeout * 60_000;
   const left = () => Math.max(1000, deadline - Date.now());
   const state: State = { services: [], alongside: [] };
@@ -248,7 +251,7 @@ export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): 
       const text = existsSync(a.statusFile) ? readFileSync(a.statusFile, "utf8").trim() : "";
       return { name: a.name, exit: text === "" ? null : Number(text), required: a.required };
     });
-    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)), issueRefs(ctx));
+    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)), issueRefs(ctx), flagKeys(ctx));
   } finally {
     teardownErrors = await teardown(ctx, r);
   }
@@ -270,6 +273,40 @@ function issueRefs(ctx: RunContext): string[] {
   try {
     const list = JSON.parse(readFileSync(file, "utf8")) as { ref?: unknown }[];
     return Array.isArray(list) ? list.map((i) => String(i?.ref ?? "")).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The run a work dir belongs to, as `prepare` left it there. */
+export function contextOf(work: string): RunContext {
+  const file = join(work, "context.json");
+  if (!existsSync(file)) throw new Error(`${work} is no work dir of a prepared run`);
+  return JSON.parse(readFileSync(file, "utf8")) as RunContext;
+}
+
+/**
+ * Switches one feature flag on the running copy with the recipe's `flags.switch`, in the recipe's
+ * environment plus GESPANN_FLAG and GESPANN_FLAG_STATE. The tester calls it as `gespann verify flag`.
+ */
+export function switchFlag(ctx: RunContext, r: Recipe, key: string, state: "on" | "off"): { ok: boolean; output: string } {
+  if (!r.flags?.switch) return { ok: false, output: "the recipe has no flags.switch" };
+  log(ctx, `▶ flag ${key} ${state}`);
+  const res = spawnSync("bash", ["-c", r.flags.switch], { cwd: ctx.root, env: { ...env(ctx), GESPANN_FLAG: key, GESPANN_FLAG_STATE: state }, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 });
+  const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  if (output) appendFileSync(logFile(ctx), output);
+  const ok = res.status === 0;
+  log(ctx, `${ok ? "✓" : "✗"} flag ${key} ${state}${ok ? "" : ` (exit ${res.status ?? res.signal ?? res.error?.message})`}`);
+  return { ok, output };
+}
+
+/** The feature flags found in the PR's diff (`flag-changes.json` in the work dir, written with the tester's prompt). */
+function flagKeys(ctx: RunContext): string[] {
+  const file = join(ctx.work, FLAG_CHANGES);
+  if (!existsSync(file)) return [];
+  try {
+    const list = JSON.parse(readFileSync(file, "utf8")) as { key?: unknown }[];
+    return Array.isArray(list) ? list.map((f) => String(f?.key ?? "")).filter(Boolean) : [];
   } catch {
     return [];
   }
