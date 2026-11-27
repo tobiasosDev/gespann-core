@@ -41,7 +41,8 @@ function History({ runs }: { runs: RunRow[] }) {
 
 function Progress({ run, usual }: { run: RunRow; usual: number | null }) {
   if (run.status === "queued") return <span className="text-small text-muted-foreground sm:text-body">{run.waitingForChecks ? "Waiting for CI." : "Waiting for a sandbox."}</span>;
-  const elapsed = run.started ? (Date.now() - Date.parse(run.started)) / 1000 : 0;
+  // Never below zero, even when this device's clock trails the server's.
+  const elapsed = run.started ? Math.max(0, (Date.now() - Date.parse(run.started)) / 1000) : 0;
   return (
     <div className="min-w-0">
       {usual && (
@@ -49,8 +50,8 @@ function Progress({ run, usual }: { run: RunRow; usual: number | null }) {
           <div className="h-full rounded-full bg-info" style={{ width: `${Math.min(100, (elapsed / usual) * 100)}%` }} />
         </div>
       )}
-      <div className="mt-1.5 flex justify-between gap-3 text-small text-muted-foreground sm:text-body">
-        <Mono>{duration(run.started, null)}</Mono>
+      <div className="mt-1.5 flex flex-wrap justify-between gap-x-3 gap-y-0.5 text-small text-muted-foreground sm:text-body">
+        <Mono className="whitespace-nowrap">{duration(run.started, null)}</Mono>
         {usual && <span>{usual < 60 ? "usually under a minute" : `usually about ${Math.round(usual / 60)} min`}</span>}
       </div>
     </div>
@@ -182,42 +183,69 @@ const PHONE: Record<RunResult, { word: string; stripe: string; text: string }> =
   skip: { word: "Skipped", stripe: "bg-muted-foreground/70", text: "text-muted-foreground" },
   conflict: { word: "Merge conflict", stripe: "bg-muted-foreground/70", text: "text-muted-foreground" },
   // gespann broke off: not the PR's fault, but it needs a new test, so the stripe pulls more than grey and less than a FAIL.
-  error: { word: "Error", stripe: "bg-bad/50", text: "text-muted-foreground" },
+  error: { word: "Error", stripe: "bg-bad/70", text: "text-foreground" },
   running: { word: "Running", stripe: "bg-info", text: "text-info" },
   queued: { word: "Queued", stripe: "bg-muted-foreground/70", text: "text-muted-foreground" },
   cancelled: { word: "Cancelled", stripe: "bg-muted-foreground/70", text: "text-muted-foreground" },
 };
 const DOT: Record<RunResult, string> = { ...SQUARE, running: "bg-info", queued: "bg-muted-foreground/60", cancelled: "bg-muted-foreground/30" };
 
+/** "2", or "1, queued 1" when runs wait behind: a queued run is not running yet. */
+function runningCount(live: RunRow[]): string {
+  const queued = live.filter((r) => r.status === "queued").length;
+  const running = live.length - queued;
+  return queued === 0 ? String(running) : `${running}, queued ${queued}`;
+}
+
 /** Phones: what needs the developer comes first, what runs next, what is done last. */
 const PHONE_ORDER: PrState[] = ["attention", "error", "conflict", "running", "passing", "cancelled", "closed"];
 
-function PhoneRow({ run, group, usual }: { run: RunRow; group: PrGroup<RunRow> | undefined; usual: number | null }) {
+function PhoneRow({ run, group, usual, commit }: { run: RunRow; group: PrGroup<RunRow> | undefined; usual: number | null; commit?: boolean }) {
   const res = result(run);
   const look = PHONE[res];
   const done = !!group?.closed && res !== "running" && res !== "queued";
-  const title = run.title ?? `Pull request #${run.pr}`;
+  // The group keeps a title an earlier run knew, so prefer it.
+  const named = group?.title || run.title || null;
+  const title = named ?? `Pull request #${run.pr}`;
   const live = res === "running" || res === "queued";
   const when = ago(run.started ?? run.created);
   // Running rows skip the squares: the other live run of the PR is the row next to it.
   const runs = !live && group && group.runs.length > 1 ? group.runs : null;
+  // Oldest first, at most the last eight, so a long history never runs off the row.
+  const history = runs ? [...runs].reverse() : [];
+  const squares = history.slice(-8);
+  const wait = run.status === "queued" ? (run.waitingForChecks ? "waiting for CI" : "waiting for a sandbox") : null;
   return (
     <li>
       <Link
         to={`/runs/${run.id}`}
         className="relative flex min-h-14 items-center gap-3 py-3 pr-4 pl-5 focus-visible:-outline-offset-2 active:bg-accent"
-        aria-label={[title, look.word, run.title && `#${run.pr}`, runs && plural(runs.length, "run"), group?.closed, !live && when].filter(Boolean).join(", ")}
+        aria-label={[
+          title,
+          look.word,
+          named && `#${run.pr}`,
+          commit && `commit ${run.head.slice(0, 7)}`,
+          runs && `${plural(runs.length, "run")}: ${history.map((r) => PHONE[result(r)].word).join(", then ")}`,
+          group?.closed,
+          res === "running" ? `running for ${duration(run.started, null)}${usual ? `, usually about ${Math.max(1, Math.round(usual / 60))} min` : ""}` : when,
+          wait,
+        ]
+          .filter(Boolean)
+          .join(", ")}
       >
         <span aria-hidden="true" className={cn("absolute inset-y-3 left-0 w-1 rounded-r-full", look.stripe, done && "opacity-40")} />
         <div className="min-w-0 flex-1">
           <span className={cn("block leading-snug [overflow-wrap:anywhere]", done && "text-muted-foreground")}>{title}</span>
           <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-small whitespace-nowrap text-muted-foreground">
             <span className={cn("font-medium", done ? "text-muted-foreground" : look.text)}>{look.word}</span>
-            {run.title && <span className="tabular-nums">#{run.pr}</span>}
+            {named && <span className="tabular-nums">#{run.pr}</span>}
+            {/* Two live runs of one PR: the commit tells the two pushes apart. */}
+            {commit && <Mono>{run.head.slice(0, 7)}</Mono>}
             {/* Earlier runs as small squares, oldest first, so a fail that later passed stays visible. */}
             {runs && (
               <span className="flex items-center gap-1">
-                {[...runs].reverse().map((r) => (
+                {history.length > squares.length && <span className="mr-0.5">+{history.length - squares.length}</span>}
+                {squares.map((r) => (
                   <span key={r.id} className={cn("size-2 rounded-[2px]", DOT[result(r)])} />
                 ))}
               </span>
@@ -227,7 +255,8 @@ function PhoneRow({ run, group, usual }: { run: RunRow; group: PrGroup<RunRow> |
             {res !== "running" && <span className="ml-auto">{when}</span>}
           </span>
           {live && (
-            <div className="mt-2">
+            // The link's label already says this; the bar would only repeat it.
+            <div className="mt-2" aria-hidden="true">
               <Progress run={run} usual={usual} />
             </div>
           )}
@@ -252,12 +281,12 @@ function PhoneList({ groups, live, usual }: { groups: PrGroup<RunRow>[]; live: R
         if (shown.length === 0) return null;
         return (
           <section key={state} aria-label={TITLE[state]} className="border-t border-border first:border-t-0">
-            <h3 className="px-4 pt-3 pb-1 text-small font-medium text-muted-foreground">
-              {TITLE[state]} <span className="ml-1 tabular-nums">{shown.length}</span>
+            <h3 className="px-4 pt-4 pb-1.5 text-small font-semibold text-foreground/80">
+              {TITLE[state]} <span className="ml-1 font-normal text-muted-foreground tabular-nums">{state === "running" ? runningCount(live) : shown.length}</span>
             </h3>
             <ul className="divide-y divide-border">
               {shown.map(({ run, group }) => (
-                <PhoneRow key={run.id} run={run} group={group} usual={usual} />
+                <PhoneRow key={run.id} run={run} group={group} usual={usual} commit={state === "running" && live.filter((r) => r.pr === run.pr).length > 1} />
               ))}
             </ul>
           </section>
