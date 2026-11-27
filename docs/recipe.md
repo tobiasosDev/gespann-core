@@ -35,6 +35,7 @@ services:
 flags:
   run: node scripts/prod-flags.js     # stdout becomes the tester's flag sheet
   admin: /admin/flags
+  switch: node scripts/set-flag.js "$GESPANN_FLAG" "$GESPANN_FLAG_STATE"   # switches one flag on the running copy
 
 env:
   up: |
@@ -84,6 +85,17 @@ Then a run executes the recipe in this order. Steps marked *always* run even whe
 8. `verdict.json` is validated. When the PR resolves GitHub issues (`Fixes #12`, or linked in the PR sidebar), the server writes their title and description to `$GESPANN_WORK/issues.md` and their refs to `issues.json`; the tester then judges each issue's goal (`goals` in `verdict.json`: met, missed or blocked), and a missed goal fails the run
 9. *always:* `env.down`, the services stop, `cleanup` in order
 
+## Feature flags
+
+Before the tester starts, gespann reads the PR's diff for feature flags it adds, changes or removes: calls of the usual flag SDKs (PostHog, LaunchDarkly, Unleash, GrowthBook, Statsig, OpenFeature, Flipper, waffle) and of the common home-made helpers (`isFeatureEnabled("x")`), environment flags (`FEATURE_X`, `X_ENABLED`) and keys in a flag registry file. Tests and docs do not count. A key and its environment variable (`new-checkout`, `NEW_CHECKOUT_ENABLED`) are one flag. The list goes to the tester and to `$GESPANN_WORK/flag-changes.json`.
+
+The tester confirms each one from the code and tests a real flag on the same copy twice, off first:
+
+1. **Off**, before it is ever switched on, so nothing the new feature writes exists yet: the app behaves exactly as on the base branch. Anything a user can notice is a failed check: with the flag off, the PR must not affect any user.
+2. **On**: the change works.
+
+It switches the flag with `flags.switch`, on the `flags.admin` page, or the way the app does it. When it cannot, the checks of that state are blocked and gespann's repair adds a `switch` command to the recipe. `verdict.json` then holds one `flags` entry per flag (`{"flag","tested":true,"how"}`, or `{"flag","tested":false,"why"}` for a flag that is none, never reaches a user or is removed), and those checks carry `"flag"` and `"state"`. A found flag without an entry, or a tested one without a check off and on, rejects the verdict.
+
 ## Commands
 
 Every command runs with `sh -c` in the repo root. These variables are set:
@@ -110,7 +122,7 @@ Every command runs with `sh -c` in the repo root. These variables are set:
 | `timeout` | | minutes, default 25 |
 | `setup[]` | | `{name, run}` |
 | `services[]` | | `{name, run, ready?, readyTimeout?}`: background processes for the whole run. `ready` is polled every second until it exits 0 (default 60 s). |
-| `flags` | | `{run, admin?}`: `run` prints the flag state the tester judges against; `admin` is the page where it switches a flag to test both states |
+| `flags` | | `{run, admin?, switch?}`: `run` prints the flag state the tester judges against; `admin` is the page where it switches a flag; `switch` is a command that switches one flag on the running copy, with `GESPANN_FLAG` (the key) and `GESPANN_FLAG_STATE` (`on` or `off`), and exits 0 once the copy runs in that state. See [Feature flags](#feature-flags). |
 | `env` | yes | `{up, down, url}` |
 | `replay.misses` | | directory where your replay layer writes one file per request it had no recording for. A replay miss is never a failed check. |
 | `alongside[]` | | `{name, run, output?, required?}`: scripted checks beside the tester. `output` is a file in `GESPANN_WORK` the tester reads. With `required` (default true) a non-zero exit fails the run. |

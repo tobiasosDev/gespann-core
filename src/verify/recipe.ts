@@ -64,6 +64,12 @@ export interface Flags {
   run: string;
   /** Page where the tester switches a flag, to test both states. */
   admin?: string;
+  /**
+   * Command that switches one flag on the running copy, run in the repo checkout with GESPANN_FLAG
+   * (the key) and GESPANN_FLAG_STATE (`on` or `off`), e.g. for a flag read from the environment that
+   * needs a restart. Exits 0 once the copy runs in that state.
+   */
+  switch?: string;
 }
 
 export interface Environment {
@@ -256,10 +262,11 @@ export function parseRecipe(text: string): Recipe {
     cleanup: top.list("cleanup").map((s) => step(s)),
   };
 
-  const f = top.obj("flags")?.fields(["run", "admin"]);
+  const f = top.obj("flags")?.fields(["run", "admin", "switch"]);
   if (f) {
     const admin = f.str("admin");
-    recipe.flags = { run: f.str("run", true), ...(admin ? { admin } : {}) };
+    const sw = f.str("switch");
+    recipe.flags = { run: f.str("run", true), ...(admin ? { admin } : {}), ...(sw ? { switch: sw } : {}) };
   }
   const rp = top.obj("replay")?.fields(["misses"]);
   if (rp) recipe.replay = { misses: rp.str("misses", true) };

@@ -51,6 +51,18 @@ test("prepare brings the copy up, passes values through GESPANN_ENV, finish tear
   assert.ok(existsSync(join(c.work, "result.json")));
 });
 
+test("finish holds the verdict to the feature flags found in the diff", async () => {
+  const c = ctx();
+  const r = parseRecipe(RECIPE);
+  assert.ok((await prepare(c, r)).ok);
+  writeFileSync(join(c.work, "flag-changes.json"), JSON.stringify([{ key: "new-cart", kind: "added", files: ["app.ts"] }]));
+  writeFileSync(join(c.out, "home.png"), Buffer.from("89504e470d0a1a0a0000000d", "hex"));
+  writeFileSync(join(c.out, "verdict.json"), JSON.stringify({ verdict: "PASS", summary: "ok", checks: [{ expect: "e", observed: "o", result: "pass", proof: ["home.png"] }], proof: ["home.png"] }));
+  const f = await finish(c, r, 10_000);
+  assert.equal(f.outcome, "FAIL");
+  assert.ok(f.judged.problems.includes("no entry for the feature flag new-cart found in the diff"));
+});
+
 test("a failing setup step tears down and reports, without env.down for a copy never started", async () => {
   const c = ctx();
   const r = parseRecipe(RECIPE.replace(`echo "PORT=4321" >> "$GESPANN_ENV"; `, "exit 3; "));

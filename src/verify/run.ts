@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { FLAG_CHANGES } from "./flags.ts";
 import { judge, type Judged } from "./verdict.ts";
 import type { Recipe, Step } from "./recipe.ts";
 import type { Viewport } from "./viewports.ts";
@@ -248,7 +249,7 @@ export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): 
       const text = existsSync(a.statusFile) ? readFileSync(a.statusFile, "utf8").trim() : "";
       return { name: a.name, exit: text === "" ? null : Number(text), required: a.required };
     });
-    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)), issueRefs(ctx));
+    judged = judge(existsSync(file) ? readFileSync(file, "utf8") : null, (f) => proofOk(join(ctx.out, f)), issueRefs(ctx), flagKeys(ctx));
   } finally {
     teardownErrors = await teardown(ctx, r);
   }
@@ -270,6 +271,18 @@ function issueRefs(ctx: RunContext): string[] {
   try {
     const list = JSON.parse(readFileSync(file, "utf8")) as { ref?: unknown }[];
     return Array.isArray(list) ? list.map((i) => String(i?.ref ?? "")).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The feature flags found in the PR's diff (`flag-changes.json` in the work dir, written with the tester's prompt). */
+function flagKeys(ctx: RunContext): string[] {
+  const file = join(ctx.work, FLAG_CHANGES);
+  if (!existsSync(file)) return [];
+  try {
+    const list = JSON.parse(readFileSync(file, "utf8")) as { key?: unknown }[];
+    return Array.isArray(list) ? list.map((f) => String(f?.key ?? "")).filter(Boolean) : [];
   } catch {
     return [];
   }

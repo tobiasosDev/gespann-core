@@ -1,4 +1,4 @@
-import { preExisting, type Check, type Goal, type Judged, type VerdictKind } from "../verify/verdict.ts";
+import { preExisting, type Check, type Goal, type Judged, type Verdict, type VerdictKind } from "../verify/verdict.ts";
 
 export interface CommentInput {
   outcome: VerdictKind;
@@ -71,6 +71,23 @@ function goalTable(goals: Goal[]): string[] {
   return ["| Issue | Goal | Result | What the tester saw |", "|---|---|---|---|", ...goals.map((g) => `| ${cell(g.issue, 40)} | ${cell(g.goal, 80)} | ${GOAL[g.result] ?? "❔"} | ${cell(g.observed, 130)} |`)];
 }
 
+/** The state of a flag's checks in one state: passed, failed (the PR's fault), or blocked. */
+function stateMark(checks: Check[], flag: string, state: "off" | "on"): string {
+  const own = checks.filter((x) => x.flag === flag && x.state === state);
+  if (own.some((x) => x.result === "fail" && !preExisting(x))) return "❌";
+  if (own.some((x) => x.result === "blocked")) return "⛔";
+  return own.length ? "✅" : "❔";
+}
+
+/** One line per feature flag the PR touches: off (no user notices the PR) and on (the change works). */
+function flagLines(v: Verdict): string[] {
+  return (v.flags ?? []).map((f) =>
+    f.tested
+      ? `- Feature flag \`${cell(f.flag, 60)}\`: off ${stateMark(v.checks, f.flag, "off")} behaves as before the PR · on ${stateMark(v.checks, f.flag, "on")} the change works`
+      : `- Feature flag \`${cell(f.flag, 60)}\`: not tested, ${cell(f.why ?? "", 160)}`,
+  );
+}
+
 /**
  * The PR comment, short on purpose: outcome and count in the title, the summary, the merge gate,
  * the checks that need a person in the open, and passed checks and screenshots folded away.
@@ -96,6 +113,7 @@ export function renderComment(c: CommentInput): string {
   if (c.gate) lines.push("", c.gate);
   for (const p of c.judged?.problems ?? []) if (v) lines.push("", `⚠️ Verdict rejected: ${cell(p, 200)}`);
   if (v?.goals?.length) lines.push("", ...goalTable(v.goals));
+  if (v?.flags?.length) lines.push("", ...flagLines(v));
   if (open.length) lines.push("", ...table(open));
   if (onBase.length)
     lines.push(

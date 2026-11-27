@@ -1,0 +1,105 @@
+import { spawnSync } from "node:child_process";
+
+/**
+ * Feature flags a PR touches, read from its diff before the tester starts. Only candidates: the
+ * tester confirms each one from the code and tests a confirmed flag off, then on (see prompt.ts).
+ */
+export interface FlagChange {
+  key: string;
+  /** The same flag under other names, e.g. its environment variable `NEW_CHECKOUT_ENABLED` for `new-checkout`. */
+  aliases?: string[];
+  /** added: only on new lines; removed: only on deleted lines; changed: on both. */
+  kind: "added" | "changed" | "removed";
+  files: string[];
+}
+
+/** The candidates of a run, in its work dir: the tester's prompt lists them, the verdict must judge each. */
+export const FLAG_CHANGES = "flag-changes.json";
+
+/** Flag SDK and helper calls whose first argument is the flag's key: PostHog, LaunchDarkly, Unleash, GrowthBook, Statsig, OpenFeature, Flipper, waffle and the usual home-made names. */
+const CALL =
+  /\b(?:isFeatureEnabled|featureEnabled|isFeatureOn|isFlagEnabled|flagEnabled|isFlagOn|hasFeature|getFeatureFlag|getFeatureFlagPayload|getFeatureFlagResult|useFeatureFlag\w*|useFlag|useFeatureIsOn|useFeatureValue|useGate|useFeatureGate|checkGate|getFeatureGate|isOn|isEnabled|variation|boolVariation|stringVariation|variationDetail|getBooleanValue|getBooleanDetails|feature_enabled|is_feature_enabled|flag_is_active|switch_is_active|feature_enabled\?|enabled\?)\s*\(\s*(?:[A-Za-z_][\w.]*\s*,\s*)?["'`:]([A-Za-z][\w.:/-]*)["'`]?/g;
+/** Ruby's `Flipper[:new_checkout]` / `Feature[:x]`. */
+const INDEX = /\b(?:Flipper|Feature|Features|Flags)\s*\[\s*[:"']([A-Za-z][\w.-]*)["']?\s*\]/g;
+/** Environment flags: FEATURE_X, FF_X, ENABLE_X (with a framework's public prefix), X_ENABLED. */
+const ENV = /\b((?:NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)?(?:FEATURE|FF|FLAG|ENABLE)_[A-Z0-9_]*[A-Z0-9]|[A-Z][A-Z0-9_]*_(?:ENABLED|FLAG))\b/g;
+/** In a flag registry file: a quoted key with a separator (`"new-checkout": {`, `key: "new_checkout"`). */
+const REGISTRY = [/["'`]([a-z0-9]+(?:[-_.][a-z0-9]+)+)["'`]\s*:/g, /\b(?:key|flag|name|id)\s*[:=]\s*["'`]([A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)+)["'`]/g];
+const REGISTRY_FILE = /(?:^|\/)[^/]*(?:flag|feature|toggle)[^/]*$/i;
+/** Tests flip flags all the time; docs and lockfiles only mention them. */
+const IGNORED = /(?:^|\/)(?:tests?|__tests__|e2e|spec|fixtures|docs?)\/|\.(?:test|spec)\.\w+$|_test\.\w+$|\.(?:md|mdx|lock|snap)$|(?:^|\/)(?:package-lock\.json|CHANGELOG[^/]*)$/i;
+/** More than this many candidates means the diff renames or generates code wholesale; the first ones still go to the tester. */
+const MAX = 8;
+
+/** Settings of the flag system itself (`FEATURE_FLAGS`, `FEATURE_FLAG_REFRESH_MS`) and values that only look like flags. */
+const NOT_A_FLAG = /FLAGS|_FLAG_|_(?:MS|URL|KEY|TOKEN|SECRET|PATH|TIMEOUT|INTERVAL|TTL|SECONDS|DAYS)$/;
+
+function keysOf(line: string, file: string): string[] {
+  const keys: string[] = [];
+  for (const re of [CALL, INDEX]) for (const m of line.matchAll(re)) if (m[1]) keys.push(m[1]);
+  for (const m of line.matchAll(ENV)) if (m[1] && !NOT_A_FLAG.test(m[1])) keys.push(m[1]);
+  if (REGISTRY_FILE.test(file)) for (const re of REGISTRY) for (const m of line.matchAll(re)) if (m[1]) keys.push(m[1]);
+  return keys;
+}
+
+/** One name for a flag's key and its environment variable: `new-checkout`, `NEXT_PUBLIC_FEATURE_NEW_CHECKOUT` and `NEW_CHECKOUT_ENABLED` are all `NEW_CHECKOUT`. */
+function canonical(key: string): string {
+  return key
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^(?:NEXT_PUBLIC|VITE|REACT_APP|PUBLIC|EXPO_PUBLIC)_/, "")
+    .replace(/^(?:FEATURE|FF|FLAG|ENABLE)_/, "")
+    .replace(/_(?:ENABLED|FLAG)$/, "");
+}
+const isEnv = (key: string) => /^[A-Z0-9_]+$/.test(key);
+
+/** The flag keys on added and deleted lines of a unified diff (`git diff base...head`). */
+export function flagChanges(diff: string): FlagChange[] {
+  const seen = new Map<string, { added: boolean; removed: boolean; files: Set<string> }>();
+  let file = "";
+  // `---`/`+++` name the file only in a file's header: in a hunk they are a deleted `-- comment` or an added `++x`.
+  let header = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      [file, header] = ["", true];
+      continue;
+    }
+    if (header) {
+      if (line.startsWith("--- ")) file = line.slice(4).replace(/^a\//, "");
+      // A deleted file has `+++ /dev/null`: the old name stays.
+      else if (line.startsWith("+++ ") && line !== "+++ /dev/null") file = line.slice(4).replace(/^b\//, "");
+      else if (line.startsWith("@@")) header = false;
+      continue;
+    }
+    const sign = line[0];
+    if ((sign !== "+" && sign !== "-") || !file || file === "/dev/null" || IGNORED.test(file)) continue;
+    for (const key of keysOf(line.slice(1), file)) {
+      const e = seen.get(key) ?? { added: false, removed: false, files: new Set<string>() };
+      if (sign === "+") e.added = true;
+      else e.removed = true;
+      e.files.add(file);
+      seen.set(key, e);
+    }
+  }
+  // A key and its environment variable are one flag, named by the key the code asks for.
+  const groups = new Map<string, { names: string[]; added: boolean; removed: boolean; files: Set<string> }>();
+  for (const [key, e] of seen) {
+    const g = groups.get(canonical(key)) ?? { names: [], added: false, removed: false, files: new Set<string>() };
+    g.names.push(key);
+    g.added ||= e.added;
+    g.removed ||= e.removed;
+    for (const f of e.files) g.files.add(f);
+    groups.set(canonical(key), g);
+  }
+  return [...groups.values()].slice(0, MAX).map((g) => {
+    const key = g.names.find((n) => !isEnv(n)) ?? g.names[0] ?? "";
+    const aliases = g.names.filter((n) => n !== key);
+    return { key, ...(aliases.length ? { aliases } : {}), kind: g.added && g.removed ? "changed" : g.added ? "added" : "removed", files: [...g.files].sort() };
+  });
+}
+
+/** The candidates of the PR checked out in `repo`; none when git cannot read the diff. */
+export function flagChangesIn(repo: string, base: string, head: string): FlagChange[] {
+  const r = spawnSync("git", ["-C", repo, "diff", "--no-color", "--no-ext-diff", "-U0", `${base}...${head}`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
+  return r.status === 0 ? flagChanges(r.stdout) : [];
+}
