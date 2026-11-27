@@ -31,7 +31,7 @@ Both services:
 | Variable | |
 |---|---|
 | `BASE_URL` | public https URL; GitHub sends webhooks and sign-ins here |
-| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins and agent keys and signs the orchestrator's calls to the UI, so keep it stable |
+| `SESSION_SECRET` | at least 32 characters, the same for both; encrypts the stored Codex sign-ins, agent keys and GitHub tokens and signs the orchestrator's calls to the UI, so keep it stable |
 | `DATA_DIR` | default `/data` in the images |
 
 The UI (`gespann serve`):
@@ -229,6 +229,7 @@ Undo: `sudo ufw delete allow from "$GESPANN_IP" to any port 22 proto tcp`, `sudo
 - `routes(app, { user })` mounts routes on the server's Hono app, before the web app. `user(c)` is the signed-in user (`{ id, login }`) or null. API calls under `/api/` need the header `x-gespann: 1`; your own paths guard themselves against cross-site posts.
 - `links` puts links in the sidebar for signed-in users, e.g. `[{ label: "Usage", href: "/usage" }]`.
 - `settings(user)` returns sections for the Settings page, listed under *Account* beside the built-in ones, each with its badge text: `{ id, title, description?, badge?, rows }`. A row is text, a meter (`value` of `max`), a button, or a number field. Buttons and fields POST JSON to a path under `/api/` that your `routes` serve; answer `{ redirect: url }` to send the user on (a checkout, say), `{ error }` to show a message, or anything else to reload the section. `/settings#<id>` opens a section. If `settings` throws, only its sections are missing.
+- `signIn` adds ways to sign in next to GitHub, e.g. Google, Microsoft or your company's SSO through an identity provider. Each method is `{ id, label, authorizeUrl({ redirectUri, state }), identify({ query, redirectUri }) }`: `label` is its button on the sign-in page, `authorizeUrl` says where the browser signs in, and the provider sends it back to `redirectUri` (`<BASE_URL>/auth/with/<id>/callback`, register it there) with `state` unchanged. gespann checks `state`, then `identify` turns the callback's query into `{ subject, email? }`: the person's stable id at the provider (throw when the sign-in failed). gespann reads repositories through GitHub, so the first sign-in of a `subject` ends with "Connect your GitHub account": the GitHub sign-in links the two. With such methods gespann keeps each user's GitHub token, sealed with `SESSION_SECRET`, and later sign-ins refresh it and re-read the repositories without a trip to GitHub; when the token stopped working, the user links GitHub again. `ALLOWED_USERS` still decides by GitHub login.
 The module runs in the UI; the orchestrator asks it through the UI's internal API.
 
 - `admit(job)` runs before a job takes a sandbox. Return a string and the job fails with `not started: <string>` (a PR gets a neutral check with that text); return null to let it start. `job` names the job, its kind, its project and the project's owner.
@@ -244,6 +245,29 @@ export default (env) => ({
   admit: (job) => (overQuota(job.owner.login) ? "the monthly quota is used up" : null),
   jobEnded: (end) => record(end.owner.id, end.seconds),
   jobCap: (owner) => (isSmallTeam(owner.login) ? { jobs: 2, reason: "your quota" } : null),
+});
+```
+
+```js
+// sso.js: sign in through an OpenID Connect provider (Keycloak, Authentik, Okta, …)
+export default (env) => ({
+  name: "sso",
+  signIn: [{
+    id: "sso",
+    label: "Continue with company SSO",
+    authorizeUrl: ({ redirectUri, state }) =>
+      `${env.OIDC_ISSUER}/authorize?` + new URLSearchParams({ client_id: env.OIDC_CLIENT_ID, redirect_uri: redirectUri, response_type: "code", scope: "openid email", state }),
+    identify: async ({ query, redirectUri }) => {
+      const res = await fetch(`${env.OIDC_ISSUER}/token`, {
+        method: "POST",
+        body: new URLSearchParams({ grant_type: "authorization_code", code: query.code ?? "", redirect_uri: redirectUri, client_id: env.OIDC_CLIENT_ID, client_secret: env.OIDC_CLIENT_SECRET }),
+      });
+      if (!res.ok) throw new Error(`token endpoint: ${res.status}`);
+      const { access_token } = await res.json();
+      const me = await (await fetch(`${env.OIDC_ISSUER}/userinfo`, { headers: { Authorization: `Bearer ${access_token}` } })).json();
+      return { subject: me.sub, email: me.email };
+    },
+  }],
 });
 ```
 

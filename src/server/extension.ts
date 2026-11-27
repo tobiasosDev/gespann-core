@@ -47,10 +47,33 @@ export interface SettingsSection {
   rows: SettingsRow[];
 }
 
+/** Who came back from a module's sign-in. */
+export interface SignInIdentity {
+  /** The person's stable id at the provider. Never an email address: those change hands. */
+  subject: string;
+  email?: string | null;
+}
+
+/**
+ * A way to sign in next to GitHub, such as Google, Microsoft or a company's SSO. gespann reads
+ * repositories through the person's GitHub account, so the first sign-in links that account once
+ * (through GitHub's sign-in); later sign-ins go straight in.
+ */
+export interface SignInMethod {
+  /** In the sign-in URL, `/auth/with/<id>`: lowercase letters, digits and dashes. */
+  id: string;
+  /** Text of its button on the sign-in page, e.g. "Continue with Google or SSO". */
+  label: string;
+  /** Where the browser goes to sign in. The provider sends it back to `redirectUri` with `state` unchanged. */
+  authorizeUrl(o: { redirectUri: string; state: string }): string | Promise<string>;
+  /** Who came back to `redirectUri` with this query (`code`, `state`, …). Throws when the sign-in failed. */
+  identify(o: { query: Record<string, string>; redirectUri: string }): Promise<SignInIdentity>;
+}
+
 /**
  * What `SERVER_MODULE=<path>` adds to the server. Every part is optional: pages of its own, links to
- * them in the sidebar, sections on the Settings page, a say in whether a job starts, and a note when a
- * job gave its sandbox back.
+ * them in the sidebar, sections on the Settings page, ways to sign in, a say in whether a job starts,
+ * and a note when a job gave its sandbox back.
  */
 export interface ServerModule {
   /** Name for logs. */
@@ -62,6 +85,8 @@ export interface ServerModule {
   readonly links?: { label: string; href: string }[];
   /** Cards on the Settings page for the signed-in user, above the instance's own. */
   settings?(user: ModuleUser): Promise<SettingsSection[]> | SettingsSection[];
+  /** Ways to sign in next to GitHub, as buttons on the sign-in page. */
+  readonly signIn?: SignInMethod[];
   /** Before a job takes a sandbox. A string is the reason it does not start; it fails with that reason. */
   admit?(job: ModuleJob): Promise<string | null> | string | null;
   /** After a job ended and gave its sandbox back. Errors are logged, never fail the job. */

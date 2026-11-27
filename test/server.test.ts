@@ -60,7 +60,7 @@ test("API: anonymous me, setup hidden without the admin token, auth needed, CSRF
   db.setSetting("github_app", JSON.stringify(app));
   const server = createApp({ config, db, github: () => new Github(app), githubReady: () => true });
   const me = await (await server.request("/api/me")).json();
-  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new", links: [], askEmail: false });
+  assert.deepEqual(me, { user: null, githubReady: true, installUrl: "https://github.com/apps/gespann-test/installations/new", links: [], askEmail: false, signIn: [] });
   assert.equal((await server.request("/setup")).status, 404);
   assert.equal((await server.request("/setup/github/created?state=x&code=y")).status, 409, "an instance with an app never replaces it");
   assert.equal((await server.request("/api/projects", { headers: { "x-gespann": "1" } })).status, 401);
@@ -191,7 +191,7 @@ test("ALLOWED_USERS: only listed GitHub logins sign in; others' sessions and tok
   assert.throws(() => loadConfig({ ALLOWED_USERS: " , " }), /names no GitHub login/, "an empty list never opens the instance");
   const db = new Db(":memory:");
   let who = { id: 2, login: "eve", name: null, avatar_url: "" };
-  const gh = { exchangeCode: async () => "tok", user: async () => who, verifiedEmail: async () => `${who.login}@users.example`, userInstallations: async () => [], userRepos: async () => [], installUrl: () => "https://github.com/apps/x/installations/new" } as unknown as Github;
+  const gh = { exchangeCode: async () => ({ access: "tok", refresh: null }), user: async () => who, verifiedEmail: async () => `${who.login}@users.example`, userInstallations: async () => [], userRepos: async () => [], installUrl: () => "https://github.com/apps/x/installations/new" } as unknown as Github;
   const server = createApp({ config, db, github: () => gh, githubReady: () => true });
   const callback = () => server.request("/auth/github/callback?state=st&code=c", { headers: { Cookie: "gs_oauth=st" } });
 
