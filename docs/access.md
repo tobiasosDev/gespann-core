@@ -29,7 +29,7 @@ Otherwise the variable is unset for every recipe command, even when the sandbox'
 
 ## Storing a key
 
-On the project's **Setup** page, **Outside services** lists every service of the recipe. The owner pastes a key with **Store key** (at least 8 characters). gespann keeps it encrypted with `SESSION_SECRET`, the way it keeps agent keys, and never shows it again (only its last four characters). **Remove key** forgets it. The run page's link "Store a key" leads to the service's row.
+On the project's **Setup** page, **Outside services** lists every service of the recipe. The owner pastes a key with **Store key** (at least 8 characters). gespann keeps it encrypted with `SESSION_SECRET`, the way it keeps agent keys, and never shows it again (only its last four characters, for keys of 16 characters or more). **Remove key** forgets it. The run page's link "Store a key" leads to the service's row.
 
 Use a test account with a small budget. While a run that gets the key starts, the PR's own code runs as the sandbox's user and can read the key, just as it can read the agent's key. That is why gespann tests only branches of the repository itself, never forks.
 
