@@ -198,6 +198,26 @@ export interface Viewport {
   height: number;
 }
 
+/** One outside service of the project (docs/access.md): faked by the copy, real with a stored key. */
+export interface AccessEntry {
+  /** The environment variable that carries the key. */
+  name: string;
+  about: string;
+  /** The code that talks to the service: PRs changing it get the key. */
+  paths: string[];
+  /** False for a key stored for a service the recipe no longer lists. */
+  listed: boolean;
+  key: { hint: string; updated: string } | null;
+}
+
+/** How a run used one outside service: the real one with the project's key, or the fake. */
+export interface AccessUse {
+  name: string;
+  about: string;
+  real: boolean;
+  why: string;
+}
+
 export interface ProjectDetail extends ProjectRow {
   /** Merge gate: a FAIL fails the check, and PRs with the label gespann stay drafts until they pass. */
   gate: number;
@@ -228,6 +248,8 @@ export interface ProjectDetail extends ProjectRow {
   recipe: string | null;
   notes: string | null;
   proof: boolean;
+  /** Outside services the copy fakes, and the keys stored for them. */
+  access: AccessEntry[];
   runs: RunRow[];
   /** PRs with runs that are merged or closed. */
   closed: { pr: number; merged: boolean }[];
@@ -267,7 +289,7 @@ export interface RunDetail extends RunRow {
   /** Queued until the PR's other checks (CI) pass; it holds no sandbox meanwhile. */
   waitingForChecks: boolean;
   project: { id: number; repo: string };
-  verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[] } | null;
+  verdict: { verdict: { verdict: Outcome; summary: string; checks: Check[]; goals?: Goal[]; proof: string[] } | null; problems: string[]; access?: AccessUse[] } | null;
   files: string[];
   token: string;
   progress: Progress | null;

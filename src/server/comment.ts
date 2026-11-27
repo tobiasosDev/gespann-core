@@ -1,4 +1,4 @@
-import { preExisting, type Check, type Goal, type Judged, type Verdict, type VerdictKind } from "../verify/verdict.ts";
+import { preExisting, type AccessUse, type Check, type Goal, type Judged, type Verdict, type VerdictKind } from "../verify/verdict.ts";
 
 export interface CommentInput {
   outcome: VerdictKind;
@@ -88,6 +88,18 @@ function flagLines(v: Verdict): string[] {
   );
 }
 
+/** Which outside services the run faked and which it reached for real (docs/access.md). */
+export function accessLines(access: AccessUse[]): string[] {
+  const fakes = access.filter((a) => !a.real);
+  const lines: string[] = [];
+  if (fakes.length) {
+    const one = fakes.length === 1;
+    lines.push("", `🎭 **Tested against a fake:** ${fakes.map((a) => a.about).join(", ")}. What the app does with ${one ? "this service" : "these services"} was tested, not the real ${one ? "one" : "ones"}; a key on the project's Setup page tests the real one on PRs that change its code.`);
+  }
+  for (const a of access.filter((x) => x.real)) lines.push("", `🔑 **Real ${a.about}** with the project's key: ${a.why}.`);
+  return lines;
+}
+
 /**
  * The PR comment, short on purpose: outcome and count in the title, the summary, the merge gate,
  * the checks that need a person in the open, and passed checks and screenshots folded away.
@@ -114,6 +126,7 @@ export function renderComment(c: CommentInput): string {
   for (const p of c.judged?.problems ?? []) if (v) lines.push("", `⚠️ Verdict rejected: ${cell(p, 200)}`);
   if (v?.goals?.length) lines.push("", ...goalTable(v.goals));
   if (v?.flags?.length) lines.push("", ...flagLines(v));
+  if (v) lines.push(...accessLines(c.judged?.access ?? []));
   if (open.length) lines.push("", ...table(open));
   if (onBase.length)
     lines.push(

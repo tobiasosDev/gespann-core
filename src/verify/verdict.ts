@@ -62,12 +62,27 @@ export interface Verdict {
   proof: string[];
 }
 
+/**
+ * How one outside service of the recipe's `access` list ran: the real one with the project's key, or
+ * the fake. `prepare` writes the list to $GESPANN_WORK/access.json (never a key); `finish` adds it to
+ * the judged result, so the run page, the PR comment and MCP say what was faked.
+ */
+export interface AccessUse {
+  name: string;
+  about: string;
+  real: boolean;
+  /** Why, in a few words: the files the PR changes, or why the fake ran. */
+  why: string;
+}
+
 export interface Judged {
   /** The verdict as written, when it was readable at all. */
   verdict: Verdict | null;
   /** What the run counts: the written verdict, or FAIL when the file is missing or rejected. */
   outcome: VerdictKind;
   problems: string[];
+  /** The recipe's outside services as this run used them; absent when the recipe lists none. */
+  access?: AccessUse[];
 }
 
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;

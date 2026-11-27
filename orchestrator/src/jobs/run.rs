@@ -532,8 +532,33 @@ async fn attempt_tester(cx: &Cx<'_>, p: &Project, run: &Run, b: &Sbx, gid: &str,
     let cancelled = || cx.stopped();
     // Two sizes or more: prepare also starts the mirror, which shows the copy at every size at once.
     let sizes = if viewports.len() > 1 { format!(" --sizes {}", viewports.iter().map(|v| v.id.as_str()).collect::<Vec<_>>().join(",")) } else { String::new() };
-    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}{sizes}", b.repo, b.recipe, run.pr, run.head, run.base));
-    let prep = long(cx, b, &k("prepare"), &prepare, Duration::from_secs(60 * 60), &cancelled).await?;
+    // The project's keys for its outside services (docs/access.md), for prepare alone: it reads and
+    // deletes the file at once and hands a key only to PRs that change that service's code. Written
+    // once: a takeover attaches to the running prepare, which has taken the file already.
+    let keys_file = format!("{dir}/keys.json");
+    let keys_file = &keys_file;
+    // Always written, `{}` without keys: without `--keys` prepare would take keys from the sandbox's own environment.
+    cx.jr
+        .step(&k("keys"), || async move {
+            let mut keys = serde_json::Map::new();
+            for (name, sealed) in db.access_keys(p.id)? {
+                match crate::codex::open(&cx.ctx.cfg.session_secret, &sealed) {
+                    Ok(key) => {
+                        keys.insert(name, Value::String(key));
+                    }
+                    Err(_) => cx.log(&format!("✗ the key for {name} cannot be opened; that service runs as a fake. Store it again on the Setup page.")),
+                }
+            }
+            sb.exec(&b.id, &format!("umask 077 && : > {}", q(keys_file)), 30).await?;
+            sb.write_file(&b.id, keys_file, Value::Object(keys).to_string().as_bytes()).await?;
+            Ok(())
+        })
+        .await?;
+    let prepare = with_env(b, &format!("cd {} && gespann verify prepare --recipe {} --pr {} --head {} --base {} --run {gid} --dir {dir}{sizes} --keys {}", b.repo, b.recipe, run.pr, run.head, run.base, q(keys_file)));
+    let prep = long(cx, b, &k("prepare"), &prepare, Duration::from_secs(60 * 60), &cancelled).await;
+    // prepare deleted it when it started; this covers a prepare that never ran.
+    let _ = sb.exec(&b.id, &format!("rm -f {}", q(keys_file)), 30).await;
+    let prep = prep?;
     let prepared = last_json::<Prepared>(&prep.tail);
     let (url, mirror) = match &prepared {
         Some(Prepared { ok: true, url: Some(url), mirror, .. }) => (url.clone(), mirror.clone()),

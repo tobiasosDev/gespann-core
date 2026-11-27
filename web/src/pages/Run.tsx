@@ -165,6 +165,31 @@ export function Run({ id }: { id: number }) {
         </Card>
       )}
       {r.error && <Log text={r.error} className="mb-4 border-bad/40 text-bad" />}
+      {r.verdict?.access?.length ? (
+        <Card className="mb-4 max-w-3xl px-4 py-3 text-body">
+          {r.verdict.access.some((a) => !a.real) && (
+            <p>
+              <span className="font-medium">Tested against a fake: </span>
+              {r.verdict.access
+                .filter((a) => !a.real)
+                .map((a) => a.about)
+                .join(", ")}
+              . What the app does with the service was tested, not the real service.{" "}
+              <Link to={`/projects/${r.project.id}/setup?access=${r.verdict.access.find((a) => !a.real)?.name ?? ""}`} className="text-info hover:underline">
+                Store a key
+              </Link>{" "}
+              to test the real one on PRs that change its code.
+            </p>
+          )}
+          {r.verdict.access
+            .filter((a) => a.real)
+            .map((a) => (
+              <p key={a.name}>
+                <span className="font-medium">Real {a.about}</span> with the project's key: {a.why}.
+              </p>
+            ))}
+        </Card>
+      ) : null}
       {r.verdict?.problems.length ? (
         <Card className="mb-4 border-bad/40">
           <CardHeader title="Verdict rejected" description="The tester's verdict broke the rules, so the run counts as FAIL." />

@@ -1,6 +1,7 @@
 import { Check, Circle, ExternalLink, Loader2, Play, Sparkles, Wrench, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ago, api, type ProjectDetail } from "../api.ts";
+import { AccessCard } from "../components/Access.tsx";
 import { PrRuns, RunsPanel } from "../components/PrRuns.tsx";
 import { ScreenSizes } from "../components/ScreenSizes.tsx";
 import { ShotList } from "../components/Shots.tsx";
@@ -340,6 +341,8 @@ export function Project({ id, tab, onChange }: { id: number; tab: "runs" | "setu
           </p>
         </Step>
       </Card>
+
+      <AccessCard projectId={p.id} entries={p.access} own={p.own} focus={new URLSearchParams(location.search).get("access")} onChange={reload} />
 
       {p.jobs.some((j) => j.kind !== "run") && (
         <details className="mt-6">

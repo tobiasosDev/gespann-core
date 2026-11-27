@@ -222,7 +222,17 @@ create table if not exists alert_streaks (
 create table if not exists identities (
   provider text not null, subject text not null, user_id integer not null references users(id),
   email text, created text not null, primary key (provider, subject));
+create table if not exists project_access (
+  project_id integer not null references projects(id), name text not null,
+  sealed text not null, hint text not null, updated text not null, primary key (project_id, name));
 `;
+
+/** A key stored for one of a project's outside services: never the key, only its last characters. */
+export interface StoredAccess {
+  name: string;
+  hint: string;
+  updated: string;
+}
 
 /**
  * Access to the MCP endpoint: a personal token, or an agent's OAuth sign-in (`client` set),
@@ -489,6 +499,21 @@ export class Db {
   /** A job of the project ended outside these categories: their streaks start over. */
   endStreaks(projectId: number, categories: string[]): void {
     for (const c of categories) this.run("delete from alert_streaks where project_id = ? and category = ?", projectId, c);
+  }
+
+  /** The keys stored for a project's outside services (docs/access.md), without the keys. */
+  accessKeys(projectId: number): StoredAccess[] {
+    return this.all<StoredAccess>("select name, hint, updated from project_access where project_id = ? order by name", projectId);
+  }
+
+  /** Stores a sealed key for one outside service; replaces the one before. */
+  setAccessKey(projectId: number, name: string, sealed: string, hint: string): void {
+    this.run("insert into project_access (project_id, name, sealed, hint, updated) values (?, ?, ?, ?, ?) on conflict(project_id, name) do update set sealed = excluded.sealed, hint = excluded.hint, updated = excluded.updated", projectId, name, sealed, hint, now());
+  }
+
+  /** Forgets one key; true when there was one. */
+  deleteAccessKey(projectId: number, name: string): boolean {
+    return this.run("delete from project_access where project_id = ? and name = ?", projectId, name) > 0;
   }
 
   /** Marks the streak mailed; false when another call already did. */

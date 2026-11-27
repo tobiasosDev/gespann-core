@@ -1,10 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { matchesAny } from "../glob.ts";
 import { FLAG_CHANGES } from "./flags.ts";
-import { judge, type Judged } from "./verdict.ts";
-import type { Recipe, Step } from "./recipe.ts";
+import { judge, type AccessUse, type Judged } from "./verdict.ts";
+import type { Access, Recipe, Step } from "./recipe.ts";
 import type { Viewport } from "./viewports.ts";
 
 /**
@@ -58,6 +59,89 @@ function log(ctx: RunContext, line: string): void {
   appendFileSync(logFile(ctx), `${new Date().toISOString()} ${line}\n`);
 }
 
+export const ACCESS_FILE = "access.json";
+
+/** The recipe's outside services, for this process. */
+let services: Access[] = [];
+/** Keys this prepare hands to the recipe's commands, by variable; they never reach a file. */
+let keyEnv: Record<string, string> = {};
+
+/** Command output with every key handed out replaced, before it reaches a log the tester or a user reads. */
+function scrub(text: string): string {
+  let out = text;
+  for (const v of Object.values(keyEnv)) if (v.length >= 8) out = out.split(v).join("[key]");
+  return out;
+}
+
+/**
+ * The keys stored for this run. From `--keys`, a JSON object `{NAME: key}` the orchestrator writes just
+ * before: read and deleted at once, so nothing the tester runs later finds it. Without the file (a CI
+ * runner), the process environment holds them.
+ */
+export function takeKeys(file: string | undefined, names: string[], environ: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const keys: Record<string, string> = {};
+  if (file === undefined) {
+    for (const n of names) if (environ[n]) keys[n] = environ[n] as string;
+    return keys;
+  }
+  let raw: unknown = {};
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    // no file: nothing stored
+  } finally {
+    rmSync(file, { force: true });
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const n of names) {
+      const v = (raw as Record<string, unknown>)[n];
+      if (typeof v === "string" && v) keys[n] = v;
+    }
+  }
+  return keys;
+}
+
+/** Files the PR changes (`base...head`); null when git cannot tell. */
+export function changedFiles(root: string, base: string, head: string): string[] | null {
+  // NUL-separated: git would quote unusual names line by line.
+  const r = spawnSync("git", ["-C", root, "diff", "--name-only", "--no-renames", "-z", `${base}...${head}`], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
+  return r.status === 0 ? r.stdout.split("\0").filter(Boolean) : null;
+}
+
+/** Which services run for real: a key is stored and the PR changes a file of that service's code. */
+export function accessUses(access: Access[], keys: Record<string, string>, changed: string[] | null): AccessUse[] {
+  return access.map((a) => {
+    const use = { name: a.name, about: a.about };
+    if (!keys[a.name]) return { ...use, real: false, why: "no key stored" };
+    if (changed === null) return { ...use, real: false, why: "the PR's changed files could not be read" };
+    const hits = changed.filter((f) => matchesAny(f, a.paths));
+    if (!hits.length) return { ...use, real: false, why: "the PR does not change its code" };
+    const shown = hits.slice(0, 3).join(", ");
+    return { ...use, real: true, why: `the PR changes ${shown}${hits.length > 3 ? ` and ${hits.length - 3} more` : ""}` };
+  });
+}
+
+/**
+ * Sets what this process's commands see of the outside services: the keys `prepare` decided to hand out
+ * (`real` in access.json) and no variable for the others. A later process (finish, a flag switch) has
+ * no orchestrator file any more; it finds keys only in its own environment, as a CI runner sets them.
+ */
+function useAccess(ctx: RunContext, r: Recipe, keys: Record<string, string>): void {
+  services = r.access;
+  const real = new Set(readAccess(ctx.work).filter((a) => a.real).map((a) => a.name));
+  keyEnv = Object.fromEntries(Object.entries(keys).filter(([n]) => real.has(n)));
+}
+
+/** The services as the run ran them, from $GESPANN_WORK/access.json; empty before prepare or without any. */
+export function readAccess(work: string): AccessUse[] {
+  try {
+    const list = JSON.parse(readFileSync(join(work, ACCESS_FILE), "utf8")) as unknown;
+    return Array.isArray(list) ? (list as AccessUse[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** `KEY=value` lines the steps appended to $GESPANN_ENV; later lines win. */
 export function readEnvFile(file: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -74,6 +158,8 @@ export function expand(text: string, env: Record<string, string | undefined>): s
 }
 
 function env(ctx: RunContext): NodeJS.ProcessEnv {
+  // A service without a key handed out sees no variable, whatever the machine's environment holds: it runs the fake.
+  const unset = Object.fromEntries(services.map((a) => [a.name, undefined]));
   return {
     ...process.env,
     GESPANN_PR: ctx.pr,
@@ -85,17 +171,21 @@ function env(ctx: RunContext): NodeJS.ProcessEnv {
     GESPANN_ENV: envFile(ctx),
     GESPANN_PROJECT: dirname(resolve(ctx.recipeFile)),
     ...readEnvFile(envFile(ctx)),
+    // Last: a step's $GESPANN_ENV line cannot hand out a key gespann withheld, or replace the stored one.
+    ...unset,
+    ...keyEnv,
   };
 }
 
 function runStep(ctx: RunContext, step: Step, timeoutMs: number): { ok: boolean; stdout: string } {
   log(ctx, `▶ ${step.name}`);
   const r = spawnSync("bash", ["-c", step.run], { cwd: ctx.root, env: env(ctx), encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
-  if (r.stdout) appendFileSync(logFile(ctx), r.stdout);
-  if (r.stderr) appendFileSync(logFile(ctx), r.stderr);
+  if (r.stdout) appendFileSync(logFile(ctx), scrub(r.stdout));
+  if (r.stderr) appendFileSync(logFile(ctx), scrub(r.stderr));
   const ok = r.status === 0;
   log(ctx, `${ok ? "✓" : "✗"} ${step.name}${ok ? "" : ` (exit ${r.status ?? r.signal ?? r.error?.message})`}`);
-  return { ok, stdout: r.stdout ?? "" };
+  // Scrubbed too: `flags.run`'s output becomes the flag sheet the tester reads.
+  return { ok, stdout: scrub(r.stdout ?? "") };
 }
 
 /** Starts a long-running command in its own process group so teardown can stop all of it. */
@@ -164,11 +254,17 @@ async function mirrorUp(ctx: RunContext, state: State, url: string, viewports: V
   return undefined;
 }
 
-export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] = []): Promise<Prepared> {
+export async function prepare(ctx: RunContext, r: Recipe, viewports: Viewport[] = [], keysFile?: string): Promise<Prepared> {
   mkdirSync(ctx.work, { recursive: true });
   mkdirSync(ctx.out, { recursive: true });
   // `gespann verify flag` runs recipe commands for this run later, from the work dir alone.
   writeFileSync(join(ctx.work, "context.json"), `${JSON.stringify(ctx)}\n`);
+  const names = r.access.map((a) => a.name);
+  const keys = takeKeys(keysFile, names);
+  const uses = accessUses(r.access, keys, r.access.length && Object.keys(keys).length ? changedFiles(ctx.root, ctx.base, ctx.head) : []);
+  writeFileSync(join(ctx.work, ACCESS_FILE), `${JSON.stringify(uses, null, 2)}\n`);
+  for (const u of uses) log(ctx, `${u.real ? "real" : "fake"} ${u.about} (${u.name}): ${u.why}`);
+  useAccess(ctx, r, keys);
   const deadline = Date.now() + r.timeout * 60_000;
   const left = () => Math.max(1000, deadline - Date.now());
   const state: State = { services: [], alongside: [] };
@@ -239,6 +335,7 @@ async function teardown(ctx: RunContext, r: Recipe): Promise<string[]> {
 }
 
 export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): Promise<Finished> {
+  useAccess(ctx, r, takeKeys(undefined, r.access.map((a) => a.name)));
   const s = load(ctx);
   const until = Date.now() + waitMs;
   while (s.alongside.some((a) => !existsSync(a.statusFile)) && Date.now() < until) await sleep(2000);
@@ -261,6 +358,8 @@ export async function finish(ctx: RunContext, r: Recipe, waitMs = 10 * 60_000): 
     outcome = "FAIL";
     judged.problems.push(...failedRequired.map((a) => `alongside check "${a.name}" ${a.exit === null ? "did not finish" : `exited ${a.exit}`}`));
   }
+  const access = readAccess(ctx.work);
+  if (access.length) judged.access = access;
   const result: Finished = { judged, alongside, outcome, teardownErrors };
   writeFileSync(join(ctx.work, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   return result;
@@ -291,9 +390,18 @@ export function contextOf(work: string): RunContext {
  */
 export function switchFlag(ctx: RunContext, r: Recipe, key: string, state: "on" | "off"): { ok: boolean; output: string } {
   if (!r.flags?.switch) return { ok: false, output: "the recipe has no flags.switch" };
+  useAccess(ctx, r, takeKeys(undefined, r.access.map((a) => a.name)));
+  // The orchestrator's keys went with prepare: a switch that restarts the app restarts it on the fake.
+  // The copy came up real; the result says once that what follows a switch may not have been.
+  const NOTE = "; a feature-flag switch ran without the key, so checks after it may have used the fake";
+  const uses = readAccess(ctx.work);
+  if (uses.some((u) => u.real && !keyEnv[u.name] && !u.why.endsWith(NOTE))) {
+    const noted = uses.map((u) => (u.real && !keyEnv[u.name] && !u.why.endsWith(NOTE) ? { ...u, why: `${u.why}${NOTE}` } : u));
+    writeFileSync(join(ctx.work, ACCESS_FILE), `${JSON.stringify(noted, null, 2)}\n`);
+  }
   log(ctx, `▶ flag ${key} ${state}`);
   const res = spawnSync("bash", ["-c", r.flags.switch], { cwd: ctx.root, env: { ...env(ctx), GESPANN_FLAG: key, GESPANN_FLAG_STATE: state }, encoding: "utf8", timeout: 10 * 60_000, maxBuffer: 64 * 1024 * 1024 });
-  const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  const output = scrub(`${res.stdout ?? ""}${res.stderr ?? ""}`);
   if (output) appendFileSync(logFile(ctx), output);
   const ok = res.status === 0;
   log(ctx, `${ok ? "✓" : "✗"} flag ${key} ${state}${ok ? "" : ` (exit ${res.status ?? res.signal ?? res.error?.message})`}`);
