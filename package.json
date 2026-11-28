@@ -2,7 +2,7 @@
   "name": "gespann",
   "version": "0.3.0",
   "description": "Acceptance testing for coding agents: an independent agent tests each PR in a production-near environment and reports a verdict back to Claude Code and Codex.",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "bin": {
     "gespann": "dist/bin.js"
