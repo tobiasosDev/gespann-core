@@ -18,7 +18,7 @@ Acceptance testing for pull requests. For every PR, gespann starts a production-
   ```
 - How pilots count results: [docs/measure.md](docs/measure.md).
 
-Everything is open source under Apache-2.0.
+All of gespann's source is public under the Functional Source License (FSL-1.1-ALv2): use, change and self-host it freely, but don't offer it as a competing service. Each version becomes Apache-2.0 two years after its release. Versions up to v0.2.0 remain Apache-2.0.
 
 ## CLI
 
@@ -59,10 +59,10 @@ The UI (TypeScript) serves the web app, MCP and the GitHub webhook; the orchestr
 
 ## Run your own instance
 
-gespann is open source, so you can run it yourself: [docs/self-host.md](docs/self-host.md). You need a public HTTPS URL, your own GitHub App, a sandbox host with Docker or SSH access, and for UI checks a desktop with Chrome and `ffmpeg` on that host. You keep it updated and running.
+The source is public, so you can run gespann yourself: [docs/self-host.md](docs/self-host.md). You need a public HTTPS URL, your own GitHub App, a sandbox host with Docker or SSH access, and for UI checks a desktop with Chrome and `ffmpeg` on that host. You keep it updated and running.
 
 We support the hosted service only. Self-hosted instances get no help with setup or operation; bug reports are welcome when they also happen on [app.gespann.app](https://app.gespann.app).
 
 ## License
 
-Apache-2.0
+[FSL-1.1-ALv2](LICENSE) (Functional Source License, Apache-2.0 future license). Versions up to v0.2.0: Apache-2.0.
